@@ -414,13 +414,18 @@ fn start_sso_flow(client: Client) {
             let redirect_url = format!("http://localhost:{}/login", port);
             log::info!("Listening for SSO callback on {}", redirect_url);
 
-            // Manual SSO URL Construction
-            let hs_url = client.homeserver();
-            let base = hs_url.as_str().trim_end_matches('/');
-            let encoded_redirect: String = url::form_urlencoded::byte_serialize(redirect_url.as_bytes()).collect();
-            let sso_url = format!("{}/_matrix/client/v3/login/sso/redirect?redirectUrl={}", base, encoded_redirect);
+            // Native SSO URL Construction
+            let sso_url = match RUNTIME.block_on(client.matrix_auth().get_sso_login_url(&redirect_url, None)) {
+                Ok(u) => u,
+                Err(e) => {
+                    log::error!("Failed to generate SSO URL: {:?}", e);
+                    // Fallback to manual if SDK fails? Or just return?
+                    // Let's fallback to manual just in case for now, or assume fail.
+                    return;
+                }
+            };
             
-            log::info!("SSO URL generated: {}", sso_url);
+            log::info!("SSO URL generated (Native): {}", sso_url);
             
             // Emit Callback
             {

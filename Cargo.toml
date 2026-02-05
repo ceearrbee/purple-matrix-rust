@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-matrix-sdk = { version = "0.16.0", default-features = false, features = ["markdown", "native-tls", "sqlite", "e2e-encryption", "automatic-room-key-forwarding"] }
+matrix-sdk = { version = "0.16.0", default-features = false, features = ["markdown", "native-tls", "sqlite", "e2e-encryption", "automatic-room-key-forwarding", "sso-login"] }
 matrix-sdk-base = "0.16.0"
 tokio = { version = "1", features = ["full"] }
 libc = "0.2"

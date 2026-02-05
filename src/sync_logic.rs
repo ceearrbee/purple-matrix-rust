@@ -36,12 +36,37 @@ pub async fn start_sync_loop(client: Client) {
         }
 
         let group = crate::grouping::get_room_group_name(&room).await;
-        let avatar_url = room.avatar_url().map(|u| u.to_string()).unwrap_or_default();
+        
+        // Download Room Avatar
+        let mut avatar_path_str = String::new();
+        if let Some(url) = room.avatar_url() {
+            use matrix_sdk::media::{MediaFormat, MediaRequestParameters};
+            use matrix_sdk::ruma::events::room::MediaSource;
+            
+            let safe_filename = format!("room_avatar_{}", room.room_id().as_str().replace(":", "_").replace("!", ""));
+            let path = std::path::PathBuf::from(format!("/tmp/matrix_avatars/{}", safe_filename));
+            
+            if !path.exists() {
+                 let _ = std::fs::create_dir_all("/tmp/matrix_avatars");
+                 log::info!("Downloading room avatar for {}...", name);
+                 let request = MediaRequestParameters { source: MediaSource::Plain(url.clone()), format: MediaFormat::File };
+                 if let Ok(bytes) = room.client().media().get_media_content(&request, true).await {
+                      if let Ok(mut file) = std::fs::File::create(&path) {
+                           use std::io::Write;
+                           if file.write_all(&bytes).is_ok() {
+                               avatar_path_str = path.to_string_lossy().to_string();
+                           }
+                      }
+                 }
+            } else {
+                 avatar_path_str = path.to_string_lossy().to_string();
+            }
+        }
 
-        log::info!("Populating initial room: {} ({}) in group {}", room_id, name, group);
+        log::info!("Populating initial room: {} ({}) in group {}. Icon: {}", room_id, name, group, avatar_path_str);
 
         if let (Ok(c_room_id), Ok(c_name), Ok(c_group), Ok(c_avatar)) =
-           (CString::new(room_id), CString::new(name), CString::new(group), CString::new(avatar_url))
+           (CString::new(room_id), CString::new(name), CString::new(group), CString::new(avatar_path_str))
         {
             let guard = ROOM_JOINED_CALLBACK.lock().unwrap();
             if let Some(cb) = *guard {

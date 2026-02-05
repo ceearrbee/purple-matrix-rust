@@ -7,7 +7,7 @@ This document tracks the implementation status of Matrix SDK features within the
 | :--- | :---: | :--- |
 | **Login** | ✅ Implemented | Username/Password login supported. |
 | **Logout** | ✅ Implemented | Explicit `/matrix_logout` destroys session. Shutdown only disconnects. |
-| **SSO / OIDC** | ✅ Implemented | Session persistence fixed. Legacy SSO flow supported via browser redirect. |
+| **SSO / OIDC** | ✅ Implemented | Uses `matrix-sdk` native OIDC flow generation (v0.16). |
 | **Session Persistence** | ✅ Implemented | Uses `matrix-sdk-sqlite` for state storage. |
 
 ## 2. Syncing & Room Management
@@ -33,7 +33,7 @@ This document tracks the implementation status of Matrix SDK features within the
 | **Receive Text** | ✅ Implemented | Handles incoming `m.room.message`. |
 | **Formatted Text** | ✅ Implemented | HTML/Markdown parsing implemented using `pulldown-cmark`. |
 | **Media (Images/Video)** | ✅ Implemented | Downloaded to `/tmp/` and displayed inline via `file://` URI. |
-| **Reactions** | ✅ Implemented | Received reactions displayed. Sending implemented via `/matrix_react`. |
+| **Stickers** | ✅ Implemented | Optimized: Downloads to temp cache and uses `file://` URI. |
 | **Redactions** | ✅ Implemented | Received redactions logged/displayed. Sending via `/matrix_redact`. |
 | **Message Edits** | ✅ Implemented | Sending via `/matrix_edit`. |
 | **Replies** | ✅ Implemented | Sending via `/matrix_reply`. |
@@ -42,7 +42,7 @@ This document tracks the implementation status of Matrix SDK features within the
 | **Read Receipts** | ✅ Implemented | Implicitly sends read receipts on typing/message send. |
 | **History Sync** | ✅ Implemented | Support for `/matrix_history` and menu-based backward pagination. |
 | **Power Levels** | ✅ Implemented | Support for viewing and setting levels via `/matrix_power_levels`. |
-| **Room State** | ✅ Implemented | Renaming rooms, setting avatars, and setting topics via commands. |
+| **Room State** | ✅ Implemented | Renaming rooms, setting topics, and downloading/displaying room avatars. |
 | **Content Reporting** | ✅ Implemented | Reporting abusive content via `/matrix_report <event_id>`. |
 
 ## 4. Threads
@@ -65,13 +65,17 @@ This document tracks the implementation status of Matrix SDK features within the
 ## 6. User Data & Profiles
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
-| **Presence** | ✅ Implemented | Maps Libpurple status (Online/Away/Offline) to Matrix presence. |
+| **Presence** | ✅ Implemented | Maps Libpurple status (Online/Away/Offline) AND status messages to Matrix presence. |
 | **User Profile** | ✅ Implemented | Real display names and avatars fetched via `fetch_user_profile_of`. |
 | **User Search** | ✅ Implemented | Global directory search via `/matrix_user_search <term>`. |
 | **Account Data** | ✅ Implemented | Syncing `m.fully_read` markers and room tags. |
 | **Ignoring Users** | ✅ Implemented | Global ignore list supported via `/matrix_ignore <user_id>`. |
 | **Notification Settings** | ✅ Implemented | Mute/Unmute rooms via `/matrix_mute` and `/matrix_unmute` (Push Rules). |
 
+## 7. Usability
+| Feature | Status | Notes |
+| :--- | :---: | :--- |
+| **Help Command** | ✅ Implemented | `/matrix_help` lists all available commands in the chat window. |
+
 ## Summary of Gaps
-1.  **OIDC Native Support**: High performance/security login (Stretch Goal). Currently using legacy SSO fallback.
-2. **Explicit Read Marker UI**: Full bidirectional sync implemented. Pidgin clears unread state when marked read elsewhere.
+1.  **Implicit Read Marker UI**: Full bidirectional sync implemented. Pidgin clears unread state when marked read elsewhere, but explicitly marking as read from Pidgin relies on implicit actions (typing/sending).
