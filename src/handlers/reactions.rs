@@ -38,11 +38,33 @@ pub async fn handle_sticker(event: SyncStickerEvent, room: Room) {
         use base64::Engine as _;
         
         let request = MediaRequestParameters { source: content.source.clone().into(), format: MediaFormat::File };
-        let body = if let Ok(bytes) = room.client().media().get_media_content(&request, true).await {
-             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-             // Default mime for stickers usually png/webp
-             let mime = "image/png"; 
-             format!("<img src=\"data:{};base64,{}\" alt=\"[Sticker: {}]\">", mime, b64, content.body)
+        
+        // Generate a safe filename for the sticker
+        let sticker_id = original_event.event_id.as_str().replace(":", "_").replace("$", ""); // Event ID is unique
+        let path = std::path::PathBuf::from(format!("/tmp/matrix_stickers/{}.png", sticker_id)); // Assume PNG or try to deduce?
+        // Stickers usually don't have extension in URL, but PNG/WebP is common.
+        
+        let mut sticker_uri = String::new();
+        let mut downloaded = false;
+        
+        if path.exists() {
+             sticker_uri = format!("file://{}", path.to_string_lossy());
+             downloaded = true;
+        } else {
+             let _ = std::fs::create_dir_all("/tmp/matrix_stickers");
+             if let Ok(bytes) = room.client().media().get_media_content(&request, true).await {
+                  if let Ok(mut file) = std::fs::File::create(&path) {
+                       use std::io::Write;
+                       if file.write_all(&bytes).is_ok() {
+                           sticker_uri = format!("file://{}", path.to_string_lossy());
+                           downloaded = true;
+                       }
+                  }
+             }
+        }
+
+        let body = if downloaded {
+             format!("<img src=\"{}\" alt=\"[Sticker: {}]\">", sticker_uri, content.body)
         } else {
              format!("[Sticker: {}]", content.body)
         };

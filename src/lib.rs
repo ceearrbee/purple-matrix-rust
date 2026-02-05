@@ -136,8 +136,15 @@ pub mod grouping;
 // ... (functions moved to auth.rs) ...
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_set_status(status: i32) {
-    log::info!("Setting status to: {}", status);
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_status(status: i32, msg: *const c_char) {
+    let msg_str = if !msg.is_null() {
+        unsafe { CStr::from_ptr(msg).to_string_lossy().into_owned() }
+    } else {
+        String::new()
+    };
+    
+    log::info!("Setting status to: {} ('{}')", status, msg_str);
 
     let client_guard = GLOBAL_CLIENT.lock().unwrap();
     if let Some(client) = &*client_guard {
@@ -152,21 +159,26 @@ pub extern "C" fn purple_matrix_rust_set_status(status: i32) {
                 _ => PresenceState::Online,
             };
 
-            // Using the higher level client.presence().set() if available, 
-            // or constructing the request manually if needed.
-            // Matrix SDK Client struct usually has a .presence() method or we use .send().
-            // Looking at recent SDKs, client.send(Request::new(presence, None)) is common
-            // or client.account().set_presence(...)
+            // Using client.matrix_auth().account() or similar is often for profile.
+            // For presence, we often use `client.send()`.
+            // Ruma PresenceRequest (set_presence) usually takes user_id and presence state + status_msg.
+            // Let's check Ruma docs... actually `set_presence::v3::Request` takes `presence` and `status_msg`.
+            // Wait, standard SDK helper? `client.account().set_presence` might exist or we build the request.
             
-            // Let's try the most standard way for the version we likely have:
+            // Assuming `matrix_sdk::ruma::api::client::presence::set_presence::v3::Request`
+            use matrix_sdk::ruma::api::client::presence::set_presence::v3::Request as PresenceRequest;
+            
             if let Some(user_id) = client.user_id() {
-                let request = PresenceRequest::new(user_id.to_owned(), presence);
-                
-                if let Err(e) = client.send(request).await {
-                     log::error!("Failed to set presence: {:?}", e);
-                } else {
-                     log::info!("Presence set successfully");
-                }
+                 let mut request = PresenceRequest::new(user_id.to_owned(), presence);
+                 if !msg_str.is_empty() {
+                     request.status_msg = Some(msg_str);
+                 }
+                 
+                 if let Err(e) = client.send(request).await {
+                      log::error!("Failed to set presence: {:?}", e);
+                 } else {
+                      log::info!("Presence set successfully");
+                 }
             } else {
                 log::error!("Cannot set presence: client user_id is missing");
             }

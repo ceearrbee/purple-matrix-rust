@@ -67,7 +67,6 @@ typedef enum {
   MATRIX_STATUS_UNAVAILABLE = 2,
 } MatrixStatus;
 
-extern void purple_matrix_rust_set_status(MatrixStatus status);
 extern void purple_matrix_rust_join_room(const char *room_id);
 extern void purple_matrix_rust_leave_room(const char *room_id);
 extern void purple_matrix_rust_invite_user(const char *room_id,
@@ -180,8 +179,11 @@ static GList *matrix_status_types(PurpleAccount *account) {
   return types;
 }
 
+extern void purple_matrix_rust_set_status(MatrixStatus status, const char *msg);
+
 static void matrix_set_status(PurpleAccount *account, PurpleStatus *status) {
   const char *id = purple_status_get_id(status);
+  const char *message = purple_status_get_attr_string(status, "message");
   MatrixStatus mat_status = MATRIX_STATUS_ONLINE;
 
   if (!strcmp(id, "available")) {
@@ -192,7 +194,7 @@ static void matrix_set_status(PurpleAccount *account, PurpleStatus *status) {
     mat_status = MATRIX_STATUS_OFFLINE;
   }
 
-  purple_matrix_rust_set_status(mat_status);
+  purple_matrix_rust_set_status(mat_status, message);
 }
 
 // Structs to marshal data to main thread
@@ -563,18 +565,32 @@ static gboolean process_room_cb(gpointer data) {
           g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
       g_hash_table_insert(components, g_strdup("room_id"),
                           g_strdup(d->room_id));
-      if (d->avatar_url) {
-        g_hash_table_insert(components, g_strdup("avatar_url"),
+      if (d->avatar_url && strlen(d->avatar_url) > 0) {
+        g_hash_table_insert(components, g_strdup("avatar_path"),
                             g_strdup(d->avatar_url));
       }
 
       chat = purple_chat_new(account, d->room_id, components);
       purple_blist_add_chat(chat, group, NULL);
+
+      // Try to set the icon on the node (Pidgin/Adium often use this)
+      if (d->avatar_url && strlen(d->avatar_url) > 0) {
+        purple_blist_node_set_string((PurpleBlistNode *)chat, "buddy_icon",
+                                     d->avatar_url);
+        purple_blist_node_set_string((PurpleBlistNode *)chat, "icon_path",
+                                     d->avatar_url);
+      }
     } else {
-      if (d->avatar_url) {
+      if (d->avatar_url && strlen(d->avatar_url) > 0) {
         GHashTable *components = purple_chat_get_components(chat);
-        g_hash_table_replace(components, g_strdup("avatar_url"),
+        g_hash_table_replace(components, g_strdup("avatar_path"),
                              g_strdup(d->avatar_url));
+
+        // Update Node Icon
+        purple_blist_node_set_string((PurpleBlistNode *)chat, "buddy_icon",
+                                     d->avatar_url);
+        purple_blist_node_set_string((PurpleBlistNode *)chat, "icon_path",
+                                     d->avatar_url);
       }
       // Build move logic: check if it's in the right group
       // But for now, just alias it. Moving is complex (remove/add).
@@ -1094,6 +1110,44 @@ static PurpleCmdRet cmd_logout(PurpleConversation *conv, const gchar *cmd,
   // Optionally close connection?
   // purple_account_disconnect(purple_conversation_get_account(conv));
 
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_help(PurpleConversation *conv, const gchar *cmd,
+                             gchar **args, gchar **error, void *data) {
+  GString *msg = g_string_new("Available Matrix Commands:<br>");
+  g_string_append(msg, "<b>/join &lt;room_id&gt;</b>: Join a room<br>");
+  g_string_append(msg, "<b>/invite &lt;user_id&gt;</b>: Invite a user<br>");
+  g_string_append(msg, "<b>/kick &lt;user_id&gt;</b>: Kick a user<br>");
+  g_string_append(msg, "<b>/ban &lt;user_id&gt;</b>: Ban a user<br>");
+  g_string_append(msg, "<b>/nick &lt;name&gt;</b>: Set your display name<br>");
+  g_string_append(msg, "<b>/avatar &lt;path&gt;</b>: Set your avatar<br>");
+  g_string_append(msg,
+                  "<b>/matrix_create_room &lt;name&gt;</b>: Create a room<br>");
+  g_string_append(msg, "<b>/matrix_leave [reason]</b>: Leave current room<br>");
+  g_string_append(msg,
+                  "<b>/matrix_public_rooms [search]</b>: Search directory<br>");
+  g_string_append(msg,
+                  "<b>/matrix_user_search &lt;term&gt;</b>: Search users<br>");
+  g_string_append(
+      msg,
+      "<b>/matrix_react &lt;emoji&gt; [event_id]</b>: React to message<br>");
+  g_string_append(
+      msg, "<b>/matrix_redact &lt;event_id&gt; [reason]</b>: Redact event<br>");
+  g_string_append(
+      msg, "<b>/matrix_reply &lt;msg&gt;</b>: Reply to last message<br>");
+  g_string_append(msg,
+                  "<b>/matrix_edit &lt;msg&gt;</b>: Edit last message<br>");
+  g_string_append(msg,
+                  "<b>/matrix_thread &lt;msg&gt;</b>: Reply in thread<br>");
+  g_string_append(msg, "<b>/matrix_set_name &lt;name&gt;</b>: Rename room<br>");
+  g_string_append(msg, "<b>/matrix_set_topic &lt;topic&gt;</b>: Set topic<br>");
+  g_string_append(msg, "<b>/matrix_mute / _unmute</b>: Mute/Unmute room<br>");
+  g_string_append(msg, "<b>/matrix_logout</b>: Log out session<br>");
+
+  purple_conversation_write(conv, "Matrix Help", msg->str,
+                            PURPLE_MESSAGE_SYSTEM, time(NULL));
+  g_string_free(msg, TRUE);
   return PURPLE_CMD_RET_OK;
 }
 
@@ -2460,6 +2514,11 @@ static void init_plugin(PurplePlugin *plugin) {
                       "prpl-matrix-rust", cmd_debug_thread,
                       "matrix_debug_thread: Simulate a thread for debugging",
                       NULL);
+
+  purple_cmd_register("matrix_help", "", PURPLE_CMD_P_PLUGIN,
+                      PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT,
+                      "prpl-matrix-rust", cmd_help,
+                      "matrix_help: List all available Matrix commands", NULL);
 }
 
 extern void purple_matrix_rust_init_verification_cbs(
