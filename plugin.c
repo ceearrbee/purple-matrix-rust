@@ -136,6 +136,9 @@ extern void purple_matrix_rust_unban_user(const char *room_id,
                                           const char *reason);
 extern void purple_matrix_rust_set_room_avatar(const char *room_id,
                                                const char *filename);
+extern void purple_matrix_rust_set_room_mute_state(const char *room_id,
+                                                   bool muted);
+extern void purple_matrix_rust_destroy_session(void);
 
 // Global Plugin Data
 static PurplePlugin *my_plugin = NULL;
@@ -1060,6 +1063,37 @@ static PurpleCmdRet cmd_unban(PurpleConversation *conv, const gchar *cmd,
 
   const char *room_id = purple_conversation_get_name(conv);
   purple_matrix_rust_unban_user(room_id, args[0], args[1]);
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_mute(PurpleConversation *conv, const gchar *cmd,
+                             gchar **args, gchar **error, void *data) {
+  const char *room_id = purple_conversation_get_name(conv);
+  purple_matrix_rust_set_room_mute_state(room_id, true);
+  purple_conversation_write(conv, "System", "Muting room...",
+                            PURPLE_MESSAGE_SYSTEM, time(NULL));
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_unmute(PurpleConversation *conv, const gchar *cmd,
+                               gchar **args, gchar **error, void *data) {
+  const char *room_id = purple_conversation_get_name(conv);
+  purple_matrix_rust_set_room_mute_state(room_id, false);
+  purple_conversation_write(conv, "System", "Unmuting room...",
+                            PURPLE_MESSAGE_SYSTEM, time(NULL));
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_logout(PurpleConversation *conv, const gchar *cmd,
+                               gchar **args, gchar **error, void *data) {
+  purple_matrix_rust_destroy_session();
+  purple_conversation_write(conv, "System",
+                            "Logging out explicitly... Session invalidated.",
+                            PURPLE_MESSAGE_SYSTEM, time(NULL));
+
+  // Optionally close connection?
+  // purple_account_disconnect(purple_conversation_get_account(conv));
+
   return PURPLE_CMD_RET_OK;
 }
 
@@ -2405,6 +2439,21 @@ static void init_plugin(PurplePlugin *plugin) {
       PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust",
       cmd_set_room_avatar,
       "matrix_set_avatar <path_to_image>: Set the room avatar/icon", NULL);
+
+  purple_cmd_register("matrix_mute", "", PURPLE_CMD_P_PLUGIN,
+                      PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT,
+                      "prpl-matrix-rust", cmd_mute,
+                      "matrix_mute: Mute notifications for this room", NULL);
+
+  purple_cmd_register(
+      "matrix_unmute", "", PURPLE_CMD_P_PLUGIN,
+      PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_unmute,
+      "matrix_unmute: Unmute notifications for this room", NULL);
+
+  purple_cmd_register(
+      "matrix_logout", "", PURPLE_CMD_P_PLUGIN,
+      PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_logout,
+      "matrix_logout: Explicitly invalidate session and logout", NULL);
 
   purple_cmd_register("matrix_debug_thread", "", PURPLE_CMD_P_PLUGIN,
                       PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT,

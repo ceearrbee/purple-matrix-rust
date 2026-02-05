@@ -1734,3 +1734,37 @@ pub extern "C" fn purple_matrix_rust_set_room_avatar(room_id: *const c_char, fil
         });
     }
 }
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_room_mute_state(room_id: *const c_char, muted: bool) {
+    if room_id.is_null() { return; }
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+
+    let client_guard = GLOBAL_CLIENT.lock().unwrap();
+    if let Some(client) = &*client_guard {
+        let client = client.clone();
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::RoomId;
+            
+            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                let settings = client.notification_settings().await;
+                
+                // Muted = MentionsAndKeywordsOnly
+                // Unmuted = AllMessages
+                let mode = if muted {
+                    matrix_sdk::notification_settings::RoomNotificationMode::MentionsAndKeywordsOnly
+                } else {
+                    matrix_sdk::notification_settings::RoomNotificationMode::AllMessages
+                };
+
+                log::info!("Setting notification mode for {} to {:?} (Muted: {})", room_id_str, mode, muted);
+
+                if let Err(e) = settings.set_room_notification_mode(rid, mode).await {
+                     log::error!("Failed to set room notification mode: {:?}", e);
+                } else {
+                     log::info!("Room notification mode updated successfully.");
+                }
+            }
+        });
+    }
+}
