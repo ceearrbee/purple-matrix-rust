@@ -451,18 +451,43 @@ fn start_sso_flow(client: Client) {
 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_logout() {
-    log::info!("Logging out and clearing global client...");
+    log::info!("Disconnecting (Shutdown)...");
+    let mut guard = GLOBAL_CLIENT.lock().unwrap();
+    
+    // Just drop the client to stop the sync loop.
+    // Do NOT call client.logout() as that invalidates the token.
+    if let Some(_client) = guard.take() {
+         log::info!("Dropping global client instance for disconnect.");
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_destroy_session() {
+    log::info!("Explicit Logout Requested. Invalidating session...");
     let mut guard = GLOBAL_CLIENT.lock().unwrap();
     
     if let Some(client) = guard.take() {
         RUNTIME.spawn(async move {
+            // 1. Invalidate on server
             if let Err(e) = client.logout().await {
                 log::error!("Failed to logout from homeserver: {:?}", e);
             } else {
                 log::info!("Session invalidated on homeserver.");
             }
-            drop(client);
-            log::info!("Client dropped safely within Tokio context.");
+            
+            // 2. Remove Session File
+            let path_opt = {
+                 let guard = DATA_PATH.lock().unwrap();
+                 guard.clone()
+            };
+            if let Some(mut path) = path_opt {
+                 path.push("session.json");
+                 if path.exists() {
+                     let _ = std::fs::remove_file(path);
+                     log::info!("session.json deleted.");
+                 }
+            }
         });
     }
 }
+// End of file anchor

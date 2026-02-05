@@ -6,8 +6,8 @@ This document tracks the implementation status of Matrix SDK features within the
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
 | **Login** | ✅ Implemented | Username/Password login supported. |
-| **Logout** | ✅ Implemented | Calls `client.logout()` to invalidate session on server. |
-| **SSO / OIDC** | ❌ Missing | Only password auth is currently implemented. |
+| **Logout** | ✅ Implemented | Explicit `/matrix_logout` destroys session. Shutdown only disconnects. |
+| **SSO / OIDC** | ✅ Implemented | Session persistence fixed. Legacy SSO flow supported via browser redirect. |
 | **Session Persistence** | ✅ Implemented | Uses `matrix-sdk-sqlite` for state storage. |
 
 ## 2. Syncing & Room Management
@@ -70,6 +70,7 @@ This document tracks the implementation status of Matrix SDK features within the
 | **User Search** | ✅ Implemented | Global directory search via `/matrix_user_search <term>`. |
 | **Account Data** | ✅ Implemented | Syncing `m.fully_read` markers and room tags. |
 | **Ignoring Users** | ✅ Implemented | Global ignore list supported via `/matrix_ignore <user_id>`. |
+| **Notification Settings** | ✅ Implemented | Mute/Unmute rooms via `/matrix_mute` and `/matrix_unmute` (Push Rules). |
 
 ## Summary of Gaps
 1.  **OIDC Native Support**: High performance/security login (Stretch Goal). Currently using legacy SSO fallback.
