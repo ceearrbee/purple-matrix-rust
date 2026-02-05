@@ -21,17 +21,8 @@ pub extern "C" fn purple_matrix_rust_finish_sso(token: *const c_char) {
              log::info!("Finishing SSO login with token...");
              match client.matrix_auth().login_token(&token_str).initial_device_display_name("Pidgin (Rust)").await {
                  Ok(_) => {
-                     log::info!("SSO Login Successful! Starting Sync...");
-                     
-                     // Notify connected callback
-                     {
-                         let guard = CONNECTED_CALLBACK.lock().unwrap();
-                         if let Some(cb) = *guard {
-                              cb();
-                         }
-                     }
-
-                     sync_logic::start_sync_loop(client).await;
+                     log::info!("SSO Login Successful! Persisting session...");
+                     finish_login_success(client).await;
                  },
                  Err(e) => {
                      let err_msg = format!("SSO Login Failed: {:?}", e);
@@ -326,8 +317,23 @@ async fn perform_login(username: String, password: String, homeserver: String, d
             }
         }
     } else {
-        log::info!("Password empty, attempting SSO flow...");
-        start_sso_flow(client);
+        log::info!("Password empty, checking login discovery...");
+        
+        let client_clone = client.clone();
+        RUNTIME.spawn(async move {
+            match client_clone.matrix_auth().get_login_types().await {
+                Ok(types) => {
+                    log::info!("Supported login types: {:?}", types);
+                    // Check for SSO/OIDC
+                    // types is a Ruma Response which contains a list of LoginType
+                    // (Actually in 0.16.0 it might be a bit different)
+                },
+                Err(e) => {
+                    log::warn!("Failed to query login types: {:?}. Assuming SSO.", e);
+                }
+            }
+            start_sso_flow(client_clone);
+        });
     }
 }
 
@@ -450,6 +456,11 @@ pub extern "C" fn purple_matrix_rust_logout() {
     
     if let Some(client) = guard.take() {
         RUNTIME.spawn(async move {
+            if let Err(e) = client.logout().await {
+                log::error!("Failed to logout from homeserver: {:?}", e);
+            } else {
+                log::info!("Session invalidated on homeserver.");
+            }
             drop(client);
             log::info!("Client dropped safely within Tokio context.");
         });
