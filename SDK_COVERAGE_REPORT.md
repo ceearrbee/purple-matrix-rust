@@ -6,7 +6,7 @@ This document tracks the implementation status of Matrix SDK features within the
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
 | **Login** | ✅ Implemented | Username/Password login supported. |
-| **Logout** | ❌ Missing | Client shutdown exists, but explicit API logout is not hooked up. |
+| **Logout** | ✅ Implemented | Calls `client.logout()` to invalidate session on server. |
 | **SSO / OIDC** | ❌ Missing | Only password auth is currently implemented. |
 | **Session Persistence** | ✅ Implemented | Uses `matrix-sdk-sqlite` for state storage. |
 
@@ -19,19 +19,31 @@ This document tracks the implementation status of Matrix SDK features within the
 | **Invite User** | ✅ Implemented | `purple_matrix_rust_invite_user` calls `room.invite_user_by_id()`. |
 | **Space Support** | ✅ Implemented | Rooms are grouped by their canonical parent Space in the Buddy List. |
 | **Direct Messages** | ✅ Implemented | Detected via `is_direct()` and grouped separately. |
+| **Room Creation** | ✅ Implemented | Supported via `/matrix_create_room <name>`. |
+| **Public Directory** | ✅ Implemented | Search supported via `/matrix_public_rooms [term]`. |
+| **Room Moderation** | ✅ Implemented | Commands `/matrix_kick`, `/matrix_ban`, `/matrix_unban`, and `/matrix_bulk_redact`. |
+| **Room Aliases** | ✅ Implemented | Creating and removing room aliases via `/matrix_alias_create` and `/matrix_alias_delete`. |
+| **Room Knocking** | ✅ Implemented | Requesting entry via `/matrix_knock <room_id_or_alias>`. |
 
 ## 3. Messaging & Events
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
-| **Send Text** | ✅ Implemented | Basic text messages. |
+| **Send Text** | ✅ Implemented | Basic text messages with HTML support. |
+| **Send Media** | ✅ Implemented | Images/Files can be sent via drag-and-drop or select. |
 | **Receive Text** | ✅ Implemented | Handles incoming `m.room.message`. |
 | **Formatted Text** | ✅ Implemented | HTML/Markdown parsing implemented using `pulldown-cmark`. |
 | **Media (Images/Video)** | ✅ Implemented | Downloaded to `/tmp/` and displayed inline via `file://` URI. |
-| **Reactions** | ✅ Implemented | Received reactions displayed as `[Reaction] ...`. Sending not implemented. |
-| **Redactions** | ✅ Implemented | Received redactions logged/displayed. |
+| **Reactions** | ✅ Implemented | Received reactions displayed. Sending implemented via `/matrix_react`. |
+| **Redactions** | ✅ Implemented | Received redactions logged/displayed. Sending via `/matrix_redact`. |
+| **Message Edits** | ✅ Implemented | Sending via `/matrix_edit`. |
+| **Replies** | ✅ Implemented | Sending via `/matrix_reply`. |
 | **Room Topics** | ✅ Implemented | Topic changes displayed as system messages. |
 | **Typing Notifications** | ✅ Implemented | Bidirectional (Send/Receive) support. |
-| **Read Receipts** | ✅ Implemented | Implicitly sends read receipts on typing/message send. Explicit "mark read" API not hooked to UI. |
+| **Read Receipts** | ✅ Implemented | Implicitly sends read receipts on typing/message send. |
+| **History Sync** | ✅ Implemented | Support for `/matrix_history` and menu-based backward pagination. |
+| **Power Levels** | ✅ Implemented | Support for viewing and setting levels via `/matrix_power_levels`. |
+| **Room State** | ✅ Implemented | Renaming rooms, setting avatars, and setting topics via commands. |
+| **Content Reporting** | ✅ Implemented | Reporting abusive content via `/matrix_report <event_id>`. |
 
 ## 4. Threads
 | Feature | Status | Notes |
@@ -39,25 +51,26 @@ This document tracks the implementation status of Matrix SDK features within the
 | **Thread Detection** | ✅ Implemented | Detects `m.thread` relation in incoming messages. |
 | **Historical Scan** | ✅ Implemented | Scans last 50 messages on startup to populate active threads in Buddy List. |
 | **Thread UI** | ✅ Implemented | Threads appear as distinct chats grouped under the parent room. |
-| **Reply to Thread** | ✅ Implemented | Custom menu action and slash command `/thread` to reply. |
+| **Reply to Thread** | ✅ Implemented | Custom menu action and slash command `/matrix_thread` to reply. |
 
 ## 5. End-to-End Encryption (E2EE)
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
 | **Decryption** | ✅ Implemented | `matrix-sdk` handles decryption transparently in the loop. |
 | **Key Storage** | ✅ Implemented | `sqlite` store enabled for encryption keys. |
-| **Verification (SAS)** | ❌ Missing | No UI to display/confirm emoji SAS strings. Devices are not verified. |
-| **Cross-Signing** | ❌ Missing | Bootstrap/Upload logic not implemented. |
+| **Verification (SAS)** | ✅ Implemented | UI implemented for emoji comparison. |
+| **Cross-Signing** | ✅ Implemented | Bootstrap and Secret Storage recovery implemented. |
+| **Key Export** | ✅ Implemented | Bulk backup of room keys via `/matrix_export_keys <path> <passphrase>`. |
 
 ## 6. User Data & Profiles
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
 | **Presence** | ✅ Implemented | Maps Libpurple status (Online/Away/Offline) to Matrix presence. |
-| **User Profile** | ✅ Implemented | Avatars and Display Names synchronized to Buddy List. |
-| **Account Data** | ❌ Missing | Ignoring `m.fully_read`, tags, or push rules. |
+| **User Profile** | ✅ Implemented | Real display names and avatars fetched via `fetch_user_profile_of`. |
+| **User Search** | ✅ Implemented | Global directory search via `/matrix_user_search <term>`. |
+| **Account Data** | ✅ Implemented | Syncing `m.fully_read` markers and room tags. |
+| **Ignoring Users** | ✅ Implemented | Global ignore list supported via `/matrix_ignore <user_id>`. |
 
 ## Summary of Gaps
-1.  **Encryption UI:** Critical for security. Users cannot verify devices, meaning they might see "Unable to decrypt" or unverifiable sessions.
-2.  **Encryption UI:** Critical for security. Users cannot verify devices, meaning they might see "Unable to decrypt" or unverifiable sessions.
-2.  **(Resolved)** Profile Sync: Buddy icons and aliases are now fetched.
-4.  **Formatting:** Sending HTML/Markdown to support bold/italic/links.
+1.  **OIDC Native Support**: High performance/security login (Stretch Goal). Currently using legacy SSO fallback.
+2. **Explicit Read Marker UI**: Full bidirectional sync implemented. Pidgin clears unread state when marked read elsewhere.

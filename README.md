@@ -9,10 +9,10 @@ This plugin is a rewrite of the original `purple-matrix` plugin. It leverages th
 ### 1. Client & Authentication
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
-| **Login** | ✅ | Username/Password login supported. |
-| **Logout** | ❌ | Client shutdown exists, but explicit API logout is not hooked up. |
-| **SSO / OIDC** | ❌ | Only password auth is currently implemented. |
-| **Session Persistence** | ✅ | Uses `matrix-sdk-sqlite` for state storage. |
+| **Login** | ✅ | Username/Password and legacy SSO fallback supported. |
+| **Logout** | ✅ | Explicit API logout hooked to client shutdown. |
+| **SSO / OIDC** | ✅ | Session token persistence implemented. Use password field for token manually or trigger SSO flow. |
+| **Session Persistence** | ✅ | Uses `matrix-sdk-sqlite` for state storage and `session.json` for token persistence. |
 
 ### 2. Syncing & Room Management
 | Feature | Status | Notes |
@@ -23,19 +23,24 @@ This plugin is a rewrite of the original `purple-matrix` plugin. It leverages th
 | **Invite User** | ✅ | `purple_matrix_rust_invite_user` calls `room.invite_user_by_id()`. |
 | **Space Support** | ✅ | Rooms are grouped by their canonical parent Space in the Buddy List. |
 | **Direct Messages** | ✅ | Detected via `is_direct()` and grouped separately. |
+| **Room Creation** | ✅ | Via `/matrix_create_room`. |
+| **Public Search** | ✅ | Via `/matrix_public_rooms`. |
+| **Room Moderation** | ✅ | Kick, Ban, Unban, Redact, Knock supported. |
+| **Room State** | ✅ | Rename, Topic, Avatar, Aliases supported. |
 
 ### 3. Messaging & Events
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
-| **Send Text** | ✅ | Basic text messages. |
-| **Receive Text** | ✅ | Handles incoming `m.room.message`. |
+| **Send Text** | ✅ | Basic text messages with HTML support. |
+| **Receive Text** | ✅ | Handles incoming `m.room.message` with proper local/remote echo handling. |
 | **Formatted Text** | ✅ | HTML/Markdown supported via `pulldown-cmark`. |
 | **Media (Images/Video)** | ✅ | Downloaded to `/tmp/`, displayed inline. |
-| **Reactions** | ✅ | Received reactions displayed as `[Reaction] ...`. Sending not implemented. |
-| **Redactions** | ✅ | Received redactions logged/displayed. |
+| **Reactions** | ✅ | Receiving and Sending (`/matrix_react`) supported. |
+| **Redactions** | ✅ | Receiving and Sending (`/matrix_redact`) supported. |
 | **Room Topics** | ✅ | Topic changes displayed as system messages. |
 | **Typing Notifications** | ✅ | Bidirectional (Send/Receive) support. |
-| **Read Receipts** | ✅ | Implicitly sends read receipts on typing/message send. Explicit "mark read" API not hooked to UI. |
+| **Read Receipts** | ✅ | Cross-device sync enabled. |
+| **History Fetching** | ✅ | On-demand history via `/history`. |
 
 ### 4. Threads
 | Feature | Status | Notes |
@@ -50,15 +55,35 @@ This plugin is a rewrite of the original `purple-matrix` plugin. It leverages th
 | :--- | :---: | :--- |
 | **Decryption** | ✅ | `matrix-sdk` handles decryption transparently in the loop. |
 | **Key Storage** | ✅ | `sqlite` store enabled for encryption keys. |
-| **Verification (SAS)** | ❌ | No UI to display/confirm emoji SAS strings. Devices are not verified. |
-| **Cross-Signing** | ❌ | Bootstrap/Upload logic not implemented. |
+| **Verification (SAS)** | ✅ | Full UI flow for emoji verification. |
+| **Cross-Signing** | ✅ | Bootstrap (`/reset_cross_signing`) and Recovery (`/recover_keys`) supported. |
+| **Key Export** | ✅ | Direct key export for backups via `/matrix_export_keys`. |
 
-## 6. User Data & Profiles
+### 6. User Data & Profiles
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
 | **Presence** | ✅ | Maps Libpurple status (Online/Away/Offline) to Matrix presence. |
 | **User Profile** | ✅ | Avatars and Display Names synchronized. |
-| **Account Data** | ❌ | Ignoring `m.fully_read`, tags, or push rules. |
+| **Account Data** | ✅ | Syncing `m.fully_read`, tags, and ignored users. |
+| **User Search** | ✅ | Global user directory search via `/matrix_user_search`. |
+
+## Changelog
+
+### Version 0.2.0 (Moderation & Stability Update) - 2026-02-04
+*   **New Moderation Features**:
+    *   Added `/matrix_unban <user_id> [reason]`.
+    *   Added `/matrix_set_avatar <path_to_image>`.
+    *   Added `/matrix_knock <room_id_or_alias> [reason]`.
+    *   Added `/matrix_bulk_redact <count> [reason]`.
+*   **Stability & Bug Fixes**:
+    *   **Fixed Message Sync**: Resolved a critical bug where messages from other authenticated devices were suppressed by local echo logic.
+    *   **Fixed SSO Persistence**: Session tokens are now correctly saved to disk after SSO login, preventing re-auth loops.
+    *   **Fixed HTML Support**: Proper parsing for HTML messages in all contexts.
+    *   **Fixed SAS Verification**: Threading issues resolved for emoji verification flow.
+*   **Enhancements**:
+    *   Added On-Demand history fetching.
+    *   Added Cross-device read marker synchronization.
+    *   Added Key Export and Recovery utilities.
 
 ## 🛠 Building & Installation
 

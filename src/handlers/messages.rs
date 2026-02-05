@@ -13,12 +13,13 @@ pub async fn handle_room_message(event: SyncRoomMessageEvent, room: Room) {
         // Suppress own messages (Local Echo Handles Display)
         if let Some(me) = room.client().user_id() {
              if ev.sender == me {
-                 // log::debug!("Ignoring own message event: {}", ev.event_id);
-                 // return; 
-                 // Actually, we usually want to verify delivery. But Pidgin echoes locally.
-                 // If we return here, we won't get the "server ack" echo.
-                 // But Pidgin doesn't deduplicate well. Let's return.
-                 return;
+                 // Only suppress if it looks like a local echo (has transaction ID)
+                 // Messages from other sessions usually won't have a transaction ID in the sync response.
+                 if ev.unsigned.transaction_id.is_some() {
+                     log::debug!("Ignoring own message (local echo) event: {}", ev.event_id);
+                     return;
+                 }
+                 log::info!("Processing own message from another session: {}", ev.event_id);
              }
         }
 

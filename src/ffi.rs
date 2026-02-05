@@ -16,6 +16,7 @@ pub type ConnectedCallback = extern "C" fn();
 pub type LoginFailedCallback = extern "C" fn(*const c_char);
 pub type VerificationRequestCallback = extern "C" fn(*const c_char, *const c_char);
 pub type VerificationEmojiCallback = extern "C" fn(*const c_char, *const c_char, *const c_char);
+pub type ReadMarkerCallback = extern "C" fn(*const c_char, *const c_char);
 
 // Global callbacks
 pub static MSG_CALLBACK: Lazy<Mutex<Option<MsgCallback>>> = Lazy::new(|| Mutex::new(None));
@@ -31,6 +32,7 @@ pub static CHAT_USER_CALLBACK: Lazy<Mutex<Option<ChatUserCallback>>> = Lazy::new
 pub static SSO_CALLBACK: Mutex<Option<SsoCallback>> = Mutex::new(None);
 pub static CONNECTED_CALLBACK: Mutex<Option<ConnectedCallback>> = Mutex::new(None);
 pub static LOGIN_FAILED_CALLBACK: Mutex<Option<LoginFailedCallback>> = Mutex::new(None);
+pub static READ_MARKER_CALLBACK: Mutex<Option<ReadMarkerCallback>> = Mutex::new(None);
 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_set_msg_callback(cb: MsgCallback) {
@@ -116,5 +118,10 @@ pub static SHOW_USER_INFO_CALLBACK: Lazy<Mutex<Option<ShowUserInfoCallback>>> = 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_set_show_user_info_callback(cb: ShowUserInfoCallback) {
     let mut guard = SHOW_USER_INFO_CALLBACK.lock().unwrap();
+    *guard = Some(cb);
+}
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_read_marker_callback(cb: ReadMarkerCallback) {
+    let mut guard = READ_MARKER_CALLBACK.lock().unwrap();
     *guard = Some(cb);
 }

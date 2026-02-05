@@ -12,7 +12,7 @@ use matrix_sdk::{
     Client, 
 };
 use std::ffi::CString;
-use crate::handlers::{messages, presence, typing, reactions, room_state};
+use crate::handlers::{messages, presence, typing, reactions, room_state, account_data};
 
 pub async fn start_sync_loop(client: Client) {
     let client_for_sync = client.clone();
@@ -158,6 +158,7 @@ pub async fn start_sync_loop(client: Client) {
     client_for_sync.add_event_handler(room_state::handle_room_topic);
     client_for_sync.add_event_handler(room_state::handle_room_member);
     client_for_sync.add_event_handler(room_state::handle_stripped_member);
+    client_for_sync.add_event_handler(account_data::handle_account_data);
 
     // Verification
     client_for_sync.add_event_handler(
@@ -184,6 +185,12 @@ pub async fn fetch_room_history_logic(client: Client, room_id: String) {
              let mut options = matrix_sdk::room::MessagesOptions::backward();
              options.limit = 50u16.into();
              
+             // Check for pagination token
+             if let Some(token) = crate::PAGINATION_TOKENS.lock().unwrap().get(&room_id) {
+                 log::info!("Continuing history fetch from token: {}", token);
+                 options.from = Some(token.clone());
+             }
+             
              // Notify Start
              {
                   let c_sender = CString::new("System").unwrap_or_default();
@@ -200,6 +207,11 @@ pub async fn fetch_room_history_logic(client: Client, room_id: String) {
              }
 
              if let Ok(messages) = room.messages(options).await {
+                 // Update pagination token
+                 if let Some(end) = &messages.end {
+                     crate::PAGINATION_TOKENS.lock().unwrap().insert(room_id.clone(), end.clone());
+                 }
+
                  for timeline_event in messages.chunk.iter().rev() {
                      if let Ok(event) = timeline_event.raw().deserialize() {
                          if let AnySyncTimelineEvent::MessageLike(matrix_sdk::ruma::events::AnySyncMessageLikeEvent::RoomMessage(msg_event)) = event {
