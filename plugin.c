@@ -2541,6 +2541,165 @@ static void menu_action_thread_reply_cb(PurpleBlistNode *node, gpointer data) {
       virtual_id);
 }
 
+static void room_settings_cb(void *user_data, PurpleRequestFields *fields) {
+    char *room_id = (char *)user_data;
+    const char *name = purple_request_fields_get_string(fields, "name");
+    const char *topic = purple_request_fields_get_string(fields, "topic");
+
+    if (name && *name) {
+        purple_matrix_rust_set_room_name(room_id, name);
+    }
+    if (topic) { // topic can be empty string to clear
+        purple_matrix_rust_set_room_topic(room_id, topic);
+    }
+    g_free(room_id);
+}
+
+static void menu_action_room_settings_cb(PurpleBlistNode *node, gpointer data) {
+    PurpleChat *chat = (PurpleChat *)node;
+    GHashTable *components = purple_chat_get_components(chat);
+    const char *room_id = g_hash_table_lookup(components, "room_id");
+    const char *topic = g_hash_table_lookup(components, "topic");
+    // Name is the alias or blist name
+    const char *name = purple_chat_get_name(chat);
+    if (chat->alias) name = chat->alias;
+
+    if (!room_id) return;
+
+    PurpleRequestFields *fields = purple_request_fields_new();
+    PurpleRequestFieldGroup *group = purple_request_field_group_new(NULL);
+    purple_request_fields_add_group(fields, group);
+
+    PurpleRequestField *field;
+    
+    // Room ID (Read-onlyish - display only)
+    field = purple_request_field_string_new("room_id_display", "Room ID", room_id, FALSE);
+    // purple_request_field_string_set_editable(field, FALSE); // Not available in all libpurple versions easily?
+    // Actually, simply ignoring it in callback is enough, but UI wise it looks editable.
+    // We can use a label for it if we want, but string is fine.
+    purple_request_field_group_add_field(group, field);
+
+    field = purple_request_field_string_new("name", "Name", name, FALSE);
+    purple_request_field_group_add_field(group, field);
+
+    field = purple_request_field_string_new("topic", "Topic", topic, TRUE); // Multiline for topic
+    purple_request_field_group_add_field(group, field);
+
+    purple_request_fields(purple_chat_get_account(chat), "Room Settings", "Edit Room Settings", NULL, fields,
+        "Save", G_CALLBACK(room_settings_cb), "Cancel", NULL,
+        purple_chat_get_account(chat), NULL, NULL, g_strdup(room_id));
+}
+
+static void react_input_cb(void *user_data, const char *emoji) {
+    char *room_id = (char *)user_data; // We need room_id AND event_id. 
+    // Wait, context menu needs conversation to get last event id.
+    // If called from blist, we might not have active conversation/last event.
+    // We can only react to the *last received message in the active conversation* corresponding to this chat.
+    
+    PurpleAccount *account = find_matrix_account(); // Should lookup from room_id ownership really
+    PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_CHAT, room_id, account);
+    
+    if (conv) {
+        const char *last_id = purple_conversation_get_data(conv, "last_event_id");
+        if (last_id && emoji && *emoji) {
+            purple_matrix_rust_send_reaction(room_id, last_id, emoji);
+        }
+    }
+    g_free(room_id);
+}
+
+static void menu_action_react_quick_cb(PurpleBlistNode *node, gpointer data) {
+    char *emoji = (char *)data; // "👍", etc.
+    PurpleChat *chat = (PurpleChat *)node;
+    GHashTable *components = purple_chat_get_components(chat);
+    const char *room_id = g_hash_table_lookup(components, "room_id");
+    
+    if (room_id) {
+        PurpleAccount *account = purple_chat_get_account(chat);
+        PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_CHAT, room_id, account);
+        if (conv) {
+             const char *last_id = purple_conversation_get_data(conv, "last_event_id");
+             if (last_id) {
+                 purple_matrix_rust_send_reaction(room_id, last_id, emoji);
+             } else {
+                 purple_notify_error(NULL, "Error", "No message to react to.", NULL);
+             }
+        } else {
+             purple_notify_error(NULL, "Error", "Open the chat window to react.", NULL);
+        }
+    }
+}
+
+static void menu_action_react_custom_cb(PurpleBlistNode *node, gpointer data) {
+    PurpleChat *chat = (PurpleChat *)node;
+    GHashTable *components = purple_chat_get_components(chat);
+    const char *room_id = g_hash_table_lookup(components, "room_id");
+    
+    if (room_id) {
+        PurpleAccount *account = purple_chat_get_account(chat);
+        purple_request_input(account, "React", "Enter Emoji", "Enter the emoji or text to react with:",
+            NULL, FALSE, FALSE, NULL, 
+            "React", G_CALLBACK(react_input_cb), "Cancel", NULL,
+            account, NULL, NULL, g_strdup(room_id));
+    }
+}
+
+static void reply_input_cb(void *user_data, const char *msg) {
+    char *room_id = (char *)user_data;
+    PurpleAccount *account = find_matrix_account(); 
+    PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_CHAT, room_id, account);
+    
+    if (conv && msg && *msg) {
+        const char *last_id = purple_conversation_get_data(conv, "last_event_id");
+        if (last_id) {
+            purple_matrix_rust_send_reply(room_id, last_id, msg);
+        }
+    }
+    g_free(room_id);
+}
+
+static void menu_action_reply_cb(PurpleBlistNode *node, gpointer data) {
+    PurpleChat *chat = (PurpleChat *)node;
+    GHashTable *components = purple_chat_get_components(chat);
+    const char *room_id = g_hash_table_lookup(components, "room_id");
+    
+    if (room_id) {
+        PurpleAccount *account = purple_chat_get_account(chat);
+        purple_request_input(account, "Reply", "Reply to Last Message", "Enter your reply:",
+            NULL, TRUE, FALSE, NULL, 
+            "Send", G_CALLBACK(reply_input_cb), "Cancel", NULL,
+            account, NULL, NULL, g_strdup(room_id));
+    }
+}
+
+static void edit_input_cb(void *user_data, const char *msg) {
+    char *room_id = (char *)user_data;
+    PurpleAccount *account = find_matrix_account(); 
+    PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_CHAT, room_id, account);
+    
+    if (conv && msg && *msg) {
+        const char *last_id = purple_conversation_get_data(conv, "last_event_id");
+        if (last_id) {
+            purple_matrix_rust_send_edit(room_id, last_id, msg);
+        }
+    }
+    g_free(room_id);
+}
+
+static void menu_action_edit_cb(PurpleBlistNode *node, gpointer data) {
+    PurpleChat *chat = (PurpleChat *)node;
+    GHashTable *components = purple_chat_get_components(chat);
+    const char *room_id = g_hash_table_lookup(components, "room_id");
+    
+    if (room_id) {
+        PurpleAccount *account = purple_chat_get_account(chat);
+        purple_request_input(account, "Edit", "Edit Last Message", "Enter the new message content:",
+            NULL, TRUE, FALSE, NULL, 
+            "Update", G_CALLBACK(edit_input_cb), "Cancel", NULL,
+            account, NULL, NULL, g_strdup(room_id));
+    }
+}
+
 static void menu_action_mark_read_cb(PurpleBlistNode *node, gpointer data) {
   PurpleChat *chat = (PurpleChat *)node;
   GHashTable *components = purple_chat_get_components(chat);
@@ -2719,6 +2878,10 @@ static GList *blist_node_menu_cb(PurpleBlistNode *node) {
         0) {
 
       // --- General & View ---
+      PurpleMenuAction *act_settings = purple_menu_action_new(
+          "Room Settings...", PURPLE_CALLBACK(menu_action_room_settings_cb), NULL, NULL);
+      list = g_list_append(list, act_settings);
+
       PurpleMenuAction *act_read = purple_menu_action_new(
           "Mark as Read", PURPLE_CALLBACK(menu_action_mark_read_cb), NULL,
           NULL);
@@ -2735,10 +2898,27 @@ static GList *blist_node_menu_cb(PurpleBlistNode *node) {
       list = g_list_append(list, act_e2ee);
 
       // --- Interaction ---
+      PurpleMenuAction *act_reply = purple_menu_action_new(
+          "Reply (Last Msg)...",
+          PURPLE_CALLBACK(menu_action_reply_cb), NULL, NULL);
+      list = g_list_append(list, act_reply);
+
       PurpleMenuAction *act_thread = purple_menu_action_new(
           "Reply to Thread (Last Msg)...",
           PURPLE_CALLBACK(menu_action_thread_reply_cb), NULL, NULL);
       list = g_list_append(list, act_thread);
+
+      PurpleMenuAction *act_edit = purple_menu_action_new(
+          "Edit Last Msg...", PURPLE_CALLBACK(menu_action_edit_cb), NULL, NULL);
+      list = g_list_append(list, act_edit);
+
+      // --- Reactions ---
+      list = g_list_append(list, purple_menu_action_new("React: 👍", PURPLE_CALLBACK(menu_action_react_quick_cb), "👍", NULL));
+      list = g_list_append(list, purple_menu_action_new("React: 👎", PURPLE_CALLBACK(menu_action_react_quick_cb), "👎", NULL));
+      list = g_list_append(list, purple_menu_action_new("React: ❤️", PURPLE_CALLBACK(menu_action_react_quick_cb), "❤️", NULL));
+      list = g_list_append(list, purple_menu_action_new("React: 😂", PURPLE_CALLBACK(menu_action_react_quick_cb), "😂", NULL));
+      list = g_list_append(list, purple_menu_action_new("React: 🎉", PURPLE_CALLBACK(menu_action_react_quick_cb), "🎉", NULL));
+      list = g_list_append(list, purple_menu_action_new("React: Custom...", PURPLE_CALLBACK(menu_action_react_custom_cb), NULL, NULL));
 
       PurpleMenuAction *act_poll = purple_menu_action_new(
           "Create Poll...", PURPLE_CALLBACK(menu_action_create_poll_cb),
