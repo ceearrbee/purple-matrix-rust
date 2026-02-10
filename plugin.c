@@ -61,7 +61,8 @@ extern void purple_matrix_rust_send_typing(const char *room_id,
                                            gboolean is_typing);
 typedef void (*RoomJoinedCallback)(const char *room_id, const char *name,
                                    const char *group_name,
-                                   const char *avatar_url);
+                                   const char *avatar_url,
+                                   const char *topic, gboolean encrypted);
 extern void purple_matrix_rust_set_room_joined_callback(RoomJoinedCallback cb);
 typedef void (*ReadMarkerCallback)(const char *room_id, const char *event_id);
 extern void purple_matrix_rust_set_read_marker_callback(ReadMarkerCallback cb);
@@ -551,6 +552,8 @@ typedef struct {
   char *name;
   char *group_name;
   char *avatar_url;
+  char *topic;
+  gboolean encrypted;
 } MatrixRoomData;
 
 static PurpleChat *find_chat_manual(PurpleAccount *account,
@@ -617,6 +620,11 @@ static gboolean process_room_cb(gpointer data) {
         g_hash_table_insert(components, g_strdup("avatar_path"),
                             g_strdup(d->avatar_url));
       }
+      if (d->topic && strlen(d->topic) > 0) {
+        g_hash_table_insert(components, g_strdup("topic"), g_strdup(d->topic));
+      }
+      g_hash_table_insert(components, g_strdup("encrypted"),
+                          g_strdup(d->encrypted ? "1" : "0"));
 
       chat = purple_chat_new(account, d->room_id, components);
       purple_blist_add_chat(chat, group, NULL);
@@ -629,8 +637,8 @@ static gboolean process_room_cb(gpointer data) {
                                      d->avatar_url);
       }
     } else {
+      GHashTable *components = purple_chat_get_components(chat);
       if (d->avatar_url && strlen(d->avatar_url) > 0) {
-        GHashTable *components = purple_chat_get_components(chat);
         g_hash_table_replace(components, g_strdup("avatar_path"),
                              g_strdup(d->avatar_url));
 
@@ -640,6 +648,11 @@ static gboolean process_room_cb(gpointer data) {
         purple_blist_node_set_string((PurpleBlistNode *)chat, "icon_path",
                                      d->avatar_url);
       }
+      if (d->topic && strlen(d->topic) > 0) {
+        g_hash_table_replace(components, g_strdup("topic"), g_strdup(d->topic));
+      }
+      g_hash_table_replace(components, g_strdup("encrypted"),
+                           g_strdup(d->encrypted ? "1" : "0"));
       // Build move logic: check if it's in the right group
       // But for now, just alias it. Moving is complex (remove/add).
       // Let's at least rename it.
@@ -654,6 +667,8 @@ static gboolean process_room_cb(gpointer data) {
   g_free(d->name);
   g_free(d->group_name);
   g_free(d->avatar_url);
+  if (d->topic)
+    g_free(d->topic);
   g_free(d);
   return FALSE;
 }
@@ -661,12 +676,14 @@ static gboolean process_room_cb(gpointer data) {
 // Updated signature to take group_name and avatar_url
 typedef void (*RoomJoinedCallback)(const char *room_id, const char *name,
                                    const char *group_name,
-                                   const char *avatar_url);
+                                   const char *avatar_url,
+                                   const char *topic, gboolean encrypted);
 extern void purple_matrix_rust_set_room_joined_callback(RoomJoinedCallback cb);
 
 static void room_joined_callback(const char *room_id, const char *name,
                                  const char *group_name,
-                                 const char *avatar_url) {
+                                 const char *avatar_url,
+                                 const char *topic, gboolean encrypted) {
   MatrixRoomData *d = g_new0(MatrixRoomData, 1);
   d->room_id = g_strdup(room_id);
   d->name = g_strdup(name);
@@ -676,6 +693,10 @@ static void room_joined_callback(const char *room_id, const char *name,
   if (avatar_url) {
     d->avatar_url = g_strdup(avatar_url);
   }
+  if (topic) {
+    d->topic = g_strdup(topic);
+  }
+  d->encrypted = encrypted;
   g_idle_add(process_room_cb, d);
 }
 
@@ -996,6 +1017,94 @@ static void matrix_close(PurpleConnection *gc) {
 static const char *matrix_list_icon(PurpleAccount *account,
                                     PurpleBuddy *buddy) {
   return "matrix"; // Must return a valid string, not NULL, to avoid GTK crashes
+}
+
+// Emblems for Chats
+static const char *matrix_chat_list_emblem(PurpleChat *chat) {
+  GHashTable *components = purple_chat_get_components(chat);
+  const char *enc = g_hash_table_lookup(components, "encrypted");
+  if (enc && strcmp(enc, "1") == 0) {
+    return "secure"; // Standard libpurple emblem name for encrypted
+  }
+  return NULL;
+}
+
+// Status text for Chats (shown in blist)
+static char *matrix_chat_status_text(PurpleChat *chat) {
+  GHashTable *components = purple_chat_get_components(chat);
+  const char *topic = g_hash_table_lookup(components, "topic");
+  if (topic && strlen(topic) > 0) {
+    // Strip HTML for blist display
+    return purple_markup_strip_html(topic);
+  }
+  return NULL;
+}
+
+// Tooltip for Chats
+static void matrix_chat_tooltip_text(PurpleChat *chat,
+                                     PurpleNotifyUserInfo *user_info,
+                                     gboolean full) {
+  GHashTable *components = purple_chat_get_components(chat);
+  const char *room_id = g_hash_table_lookup(components, "room_id");
+  const char *topic = g_hash_table_lookup(components, "topic");
+  const char *enc = g_hash_table_lookup(components, "encrypted");
+
+  if (room_id) {
+    purple_notify_user_info_add_pair(user_info, "Room ID", room_id);
+  }
+
+  if (enc && strcmp(enc, "1") == 0) {
+    purple_notify_user_info_add_pair(user_info, "Security",
+                                     "End-to-End Encrypted");
+  } else {
+    purple_notify_user_info_add_pair(user_info, "Security",
+                                     "Unencrypted / Public");
+  }
+
+  if (topic && strlen(topic) > 0) {
+    char *clean_topic = purple_markup_strip_html(topic);
+    purple_notify_user_info_add_pair(user_info, "Topic", clean_topic);
+    g_free(clean_topic);
+  }
+}
+
+static const char *matrix_list_emblem(PurpleBuddy *buddy) {
+  if (PURPLE_BLIST_NODE_IS_CHAT((PurpleBlistNode *)buddy)) {
+    return matrix_chat_list_emblem((PurpleChat *)buddy);
+  }
+  return NULL;
+}
+
+static char *matrix_status_text(PurpleBuddy *buddy) {
+  if (PURPLE_BLIST_NODE_IS_CHAT((PurpleBlistNode *)buddy)) {
+    return matrix_chat_status_text((PurpleChat *)buddy);
+  }
+  // For buddies, show status message.
+  PurpleStatus *status =
+      purple_presence_get_active_status(purple_buddy_get_presence(buddy));
+  const char *msg = purple_status_get_attr_string(status, "message");
+  if (msg)
+    return g_strdup(msg);
+  return NULL;
+}
+
+static void matrix_tooltip_text(PurpleBuddy *buddy,
+                                PurpleNotifyUserInfo *user_info,
+                                gboolean full) {
+  if (PURPLE_BLIST_NODE_IS_CHAT((PurpleBlistNode *)buddy)) {
+    matrix_chat_tooltip_text((PurpleChat *)buddy, user_info, full);
+    return;
+  }
+  const char *name = purple_buddy_get_name(buddy);
+
+  purple_notify_user_info_add_pair(user_info, "Matrix ID", name);
+
+  PurpleStatus *status =
+      purple_presence_get_active_status(purple_buddy_get_presence(buddy));
+  const char *msg = purple_status_get_attr_string(status, "message");
+  if (msg) {
+    purple_notify_user_info_add_pair(user_info, "Status Message", msg);
+  }
 }
 
 static GList *matrix_chat_info(PurpleConnection *gc) {
@@ -1931,9 +2040,9 @@ static PurplePluginProtocolInfo prpl_info = {
             .scale_rules = PURPLE_ICON_SCALE_SEND | PURPLE_ICON_SCALE_DISPLAY,
         },
     .list_icon = matrix_list_icon,
-    .list_emblem = NULL,  // matrix_list_emblem,
-    .status_text = NULL,  // matrix_status_text,
-    .tooltip_text = NULL, // matrix_tooltip_text,
+    .list_emblem = matrix_list_emblem,
+    .status_text = matrix_status_text,
+    .tooltip_text = matrix_tooltip_text,
     .status_types = matrix_status_types,
     .blist_node_menu = blist_node_menu_cb,
     .chat_info = matrix_chat_info,
@@ -1987,7 +2096,7 @@ static PurplePluginProtocolInfo prpl_info = {
     .add_buddy_with_invite = NULL,
     .add_buddies_with_invite = NULL,
     .get_cb_real_name = NULL,
-    .get_cb_info = NULL,
+    .get_cb_info = (void *)matrix_chat_tooltip_text, // Use for rich chat info
     .get_cb_away = NULL,
     .set_buddy_icon = matrix_set_buddy_icon,
     .struct_size = sizeof(PurplePluginProtocolInfo)};

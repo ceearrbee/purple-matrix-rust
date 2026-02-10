@@ -44,6 +44,8 @@ pub async fn handle_room_member(event: SyncRoomMemberEvent, room: Room, client: 
                     log::info!("User joined room: {} ({}) - Emitting Callback", room_id, name);
 
                     let group = crate::grouping::get_room_group_name(&room).await;
+                    let topic = room.topic().unwrap_or_default();
+                    let is_encrypted = room.is_encrypted().await.unwrap_or(false);
                     let mut avatar_path_str = String::new();
                     if let Some(url) = room.avatar_url() {
                         if let Some(path) = crate::media_helper::download_avatar(&client, &url, room_id).await {
@@ -51,12 +53,12 @@ pub async fn handle_room_member(event: SyncRoomMemberEvent, room: Room, client: 
                         }
                     }
 
-                    if let (Ok(c_room_id), Ok(c_name), Ok(c_group), Ok(c_avatar)) =
-                        (CString::new(room_id), CString::new(name), CString::new(group), CString::new(avatar_path_str))
+                    if let (Ok(c_room_id), Ok(c_name), Ok(c_group), Ok(c_avatar), Ok(c_topic)) =
+                        (CString::new(room_id), CString::new(name), CString::new(group), CString::new(avatar_path_str), CString::new(topic))
                     {
                         let guard = ROOM_JOINED_CALLBACK.lock().unwrap();
                         if let Some(cb) = *guard {
-                            cb(c_room_id.as_ptr(), c_name.as_ptr(), c_group.as_ptr(), c_avatar.as_ptr());
+                            cb(c_room_id.as_ptr(), c_name.as_ptr(), c_group.as_ptr(), c_avatar.as_ptr(), c_topic.as_ptr(), is_encrypted);
                         }
                     }
                  },

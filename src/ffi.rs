@@ -5,7 +5,7 @@ use once_cell::sync::Lazy;
 // C-compatible callback signatures
 pub type MsgCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char, *const c_char, u64);
 pub type TypingCallback = extern "C" fn(*const c_char, *const c_char, bool);
-pub type RoomJoinedCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char);
+pub type RoomJoinedCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char, *const c_char, bool);
 pub type InviteCallback = extern "C" fn(*const c_char, *const c_char);
 pub type UpdateBuddyCallback = extern "C" fn(*const c_char, *const c_char, *const c_char);
 pub type PresenceCallback = extern "C" fn(*const c_char, bool);

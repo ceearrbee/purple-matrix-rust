@@ -36,6 +36,8 @@ pub async fn start_sync_loop(client: Client) {
         }
 
         let group = crate::grouping::get_room_group_name(&room).await;
+        let topic = room.topic().unwrap_or_default();
+        let is_encrypted = room.is_encrypted().await.unwrap_or(false);
         
         // Download Room Avatar
         let mut avatar_path_str = String::new();
@@ -45,14 +47,14 @@ pub async fn start_sync_loop(client: Client) {
             }
         }
 
-        log::info!("Populating initial room: {} ({}) in group {}. Icon: {}", room_id, name, group, avatar_path_str);
+        log::info!("Populating initial room: {} ({}) in group {}. Icon: {}, Encrypted: {}", room_id, name, group, avatar_path_str, is_encrypted);
 
-        if let (Ok(c_room_id), Ok(c_name), Ok(c_group), Ok(c_avatar)) =
-           (CString::new(room_id), CString::new(name), CString::new(group), CString::new(avatar_path_str))
+        if let (Ok(c_room_id), Ok(c_name), Ok(c_group), Ok(c_avatar), Ok(c_topic)) =
+           (CString::new(room_id), CString::new(name), CString::new(group), CString::new(avatar_path_str), CString::new(topic))
         {
             let guard = ROOM_JOINED_CALLBACK.lock().unwrap();
             if let Some(cb) = *guard {
-                cb(c_room_id.as_ptr(), c_name.as_ptr(), c_group.as_ptr(), c_avatar.as_ptr());
+                cb(c_room_id.as_ptr(), c_name.as_ptr(), c_group.as_ptr(), c_avatar.as_ptr(), c_topic.as_ptr(), is_encrypted);
             }
         }
     }
@@ -242,7 +244,12 @@ pub async fn fetch_room_history_logic(client: Client, room_id: String) {
                                         Some(thread.event_id.as_str())
                                    } else { None };
                                    
-                                   let body = crate::handlers::messages::render_room_message(ev, &room).await;
+                                   let mut body = crate::handlers::messages::render_room_message(ev, &room).await;
+                                   
+                                   if thread_id.is_some() {
+                                       body = format!("&nbsp;&nbsp;🧵 {}", body);
+                                   }
+
                                    let final_body = format!("[History] {}", body);
                                    
                                    let c_sender = CString::new(sender).unwrap_or_default();
