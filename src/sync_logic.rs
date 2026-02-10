@@ -40,26 +40,8 @@ pub async fn start_sync_loop(client: Client) {
         // Download Room Avatar
         let mut avatar_path_str = String::new();
         if let Some(url) = room.avatar_url() {
-            use matrix_sdk::media::{MediaFormat, MediaRequestParameters};
-            use matrix_sdk::ruma::events::room::MediaSource;
-            
-            let safe_filename = format!("room_avatar_{}", room.room_id().as_str().replace(":", "_").replace("!", ""));
-            let path = std::path::PathBuf::from(format!("/tmp/matrix_avatars/{}", safe_filename));
-            
-            if !path.exists() {
-                 let _ = std::fs::create_dir_all("/tmp/matrix_avatars");
-                 log::info!("Downloading room avatar for {}...", name);
-                 let request = MediaRequestParameters { source: MediaSource::Plain(url.clone()), format: MediaFormat::File };
-                 if let Ok(bytes) = room.client().media().get_media_content(&request, true).await {
-                      if let Ok(mut file) = std::fs::File::create(&path) {
-                           use std::io::Write;
-                           if file.write_all(&bytes).is_ok() {
-                               avatar_path_str = path.to_string_lossy().to_string();
-                           }
-                      }
-                 }
-            } else {
-                 avatar_path_str = path.to_string_lossy().to_string();
+            if let Some(path) = crate::media_helper::download_avatar(client_for_sync.clone().client(), &url, room_id).await {
+                avatar_path_str = path;
             }
         }
 

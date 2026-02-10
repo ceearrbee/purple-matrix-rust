@@ -14,6 +14,7 @@ pub mod ffi;
 pub mod handlers;
 pub mod verification_logic;
 pub mod sync_logic;
+pub mod media_helper;
 
 use crate::ffi::*;
 
@@ -591,8 +592,8 @@ pub extern "C" fn purple_matrix_rust_join_room(room_id: *const c_char) {
 
             // Parse ID for Thread Support: "room_id|thread_root_id"
             let (room_id_str, thread_root_id_opt) = match id_str.split_once('|') {
-                Some((r, t)) => (r, Some(t)),
-                None => (id_str.as_str(), None),
+                Some((r, t)) if !t.is_empty() => (r, Some(t)),
+                _ => (id_str.as_str(), None),
             };
             
             if let Some(tid) = thread_root_id_opt {
@@ -601,10 +602,16 @@ pub extern "C" fn purple_matrix_rust_join_room(room_id: *const c_char) {
 
             if let Ok(room_id_ruma) = <&RoomId>::try_from(room_id_str) {
                 if let Some(room) = client.get_room(room_id_ruma) {
-                    if let Err(e) = room.join().await {
-                        log::error!("Failed to join room {}: {:?}", id_str, e);
+                    use matrix_sdk_base::RoomMemberships;
+                    let state = room.state();
+                    if state == matrix_sdk::room::RoomState::Joined {
+                        log::info!("Already joined room {}, skipping join call", id_str);
                     } else {
-                        log::info!("Successfully joined room {}", id_str);
+                        if let Err(e) = room.join().await {
+                            log::error!("Failed to join room {}: {:?}", id_str, e);
+                        } else {
+                            log::info!("Successfully joined room {}", id_str);
+                        }
                     }
                 } else {
                      // Try joining by ID if not in list (e.g. public room)
@@ -696,8 +703,8 @@ pub extern "C" fn purple_matrix_rust_send_message(room_id: *const c_char, text: 
 
             // Parse ID for Thread Support: "room_id|thread_root_id"
             let (room_id_str, thread_root_id_opt) = match id_str.split_once('|') {
-                Some((r, t)) => (r, Some(t)),
-                None => (id_str.as_str(), None),
+                Some((r, t)) if !t.is_empty() => (r, Some(t)),
+                _ => (id_str.as_str(), None),
             };
 
             if let Ok(room_id_ruma) = <&RoomId>::try_from(room_id_str) {

@@ -43,9 +43,9 @@ pub async fn handle_room_message(event: SyncRoomMessageEvent, room: Room) {
         }
 
         // Apply Thread Styling
-        if let Some(Relation::Thread(thread)) = ev.content.relates_to.clone() {
-            // Indent threaded messages in the main chat
-            final_body = format!("&nbsp;&nbsp;&nbsp;[Thread: {}] {}", &thread.event_id.as_str()[..8], final_body);
+        if let Some(Relation::Thread(_)) = ev.content.relates_to.clone() {
+            // Indent threaded messages in the main chat with a simple icon
+            final_body = format!("&nbsp;&nbsp;🧵 {}", final_body);
         } else if let Some(Relation::Replacement(_)) = ev.content.relates_to {
             final_body = format!("[Edited] {}", final_body);
         }

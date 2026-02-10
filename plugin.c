@@ -10,6 +10,7 @@
 #include <libpurple/conversation.h>
 #include <libpurple/core.h>
 #include <libpurple/debug.h>
+#include <libpurple/imgstore.h>
 #include <libpurple/notify.h>
 #include <libpurple/plugin.h>
 #include <libpurple/prpl.h>
@@ -20,12 +21,16 @@
 #include <libpurple/util.h>
 #include <libpurple/version.h>
 #include <stdbool.h>
+#include <unistd.h>
 
 // Forward Declarations
 // static void matrix_invite_cb(const char *room_id, const char *inviter);
 extern void purple_matrix_rust_init_logging(void);
 extern void purple_matrix_rust_init_invite_cb(void (*cb)(const char *,
                                                          const char *));
+
+extern void purple_matrix_rust_send_file(const char *room_id,
+                                         const char *filename);
 
 #define _(x) ((const char *)x)
 
@@ -158,6 +163,35 @@ extern void purple_matrix_rust_set_room_mute_state(const char *room_id,
                                                    bool muted);
 extern void purple_matrix_rust_destroy_session(void);
 
+// Helper to extract and send images from libpurple's imgstore
+static void check_and_send_pasted_images(PurpleConnection *gc, const char *who,
+                                         const char *message) {
+  const char *p = message;
+  while ((p = strstr(p, "<img id=\""))) {
+    p += 9;
+    int id = atoi(p);
+    if (id > 0) {
+      PurpleStoredImage *img = purple_imgstore_find_by_id(id);
+      if (img) {
+        // Save to temp file
+        char *filename =
+            g_build_filename(g_get_tmp_dir(), "matrix_pasted_XXXXXX", NULL);
+        int fd = g_mkstemp(filename);
+        if (fd != -1) {
+          if (write(fd, purple_imgstore_get_data(img),
+                    purple_imgstore_get_size(img)) > 0) {
+            close(fd);
+            purple_matrix_rust_send_file(who, filename);
+          } else {
+            close(fd);
+          }
+        }
+        g_free(filename);
+      }
+    }
+  }
+}
+
 // Global Plugin Data
 static PurplePlugin *my_plugin = NULL;
 static GHashTable *room_id_map = NULL; // Maps room_id (string) -> chat_id (int)
@@ -248,20 +282,13 @@ static PurpleAccount *find_matrix_account(void) {
 
 static char *matrix_get_chat_name(GHashTable *components) {
   if (!components) {
-    purple_debug_warning("purple-matrix-rust",
-                         "matrix_get_chat_name: components is NULL\n");
     return NULL;
   }
   const char *room_id = g_hash_table_lookup(components, "room_id");
-  if (room_id) {
-    // purple_debug_info("purple-matrix-rust", "matrix_get_chat_name: %s\n",
-    // room_id);
-    return g_strdup(room_id);
+  if (!room_id) {
+    return NULL;
   }
-  purple_debug_warning(
-      "purple-matrix-rust",
-      "matrix_get_chat_name: room_id not found in components\n");
-  return NULL;
+  return g_strdup(room_id);
 }
 
 // Idle callback for Message (Runs on Main Thread)
@@ -305,9 +332,10 @@ static gboolean process_msg_cb(gpointer data) {
 
   // Decide target room ID (Main room or Virtual Thread Room)
   char *target_id = g_strdup(d->room_id);
+  gboolean separate_threads = purple_account_get_bool(account, "separate_threads", FALSE);
 
   // If we have a thread ID, check if we should route to a virtual room
-  if (d->thread_root_id) {
+  if (d->thread_root_id && strlen(d->thread_root_id) > 0 && separate_threads) {
     // Construct Virtual ID: room_id|thread_id
     char *virtual_id = g_strdup_printf("%s|%s", d->room_id, d->thread_root_id);
     g_free(target_id);
@@ -343,7 +371,7 @@ static gboolean process_msg_cb(gpointer data) {
   // We want to display history, but maybe mark it?
   // Current logic was DROPPING it. We will now allow it to proceed.
 
-  if (is_history && d->thread_root_id) {
+  if (is_history && d->thread_root_id && separate_threads) {
     // Still ensure threaded history is in BL for structure
     const char *clean_msg = d->message + 10;
     ensure_thread_in_blist(account, target_id, clean_msg, d->room_id);
@@ -362,7 +390,7 @@ static gboolean process_msg_cb(gpointer data) {
     }
 
     // Ensure it is in the buddy list (grouped properly)
-    if (d->thread_root_id) {
+    if (d->thread_root_id && separate_threads) {
       purple_debug_info(
           "purple-matrix-rust",
           "process_msg_cb calling ensure_thread_in_blist for %s\n", target_id);
@@ -376,7 +404,7 @@ static gboolean process_msg_cb(gpointer data) {
 
       if (conv) {
         // Set title if it's a thread
-        if (d->thread_root_id) {
+        if (d->thread_root_id && separate_threads) {
           purple_conversation_set_title(conv, d->message);
         }
       }
@@ -396,7 +424,7 @@ static gboolean process_msg_cb(gpointer data) {
 
     // Crosspost to Main Room if it's a thread
     // Crosspost to Main Room if it's a thread
-    if (d->thread_root_id) {
+    if (d->thread_root_id && separate_threads) {
       int main_id = get_chat_id(d->room_id);
       if (purple_find_chat(gc, main_id)) {
         char *main_msg = g_strdup_printf("[Thread] %s", d->message);
@@ -412,9 +440,8 @@ static gboolean process_msg_cb(gpointer data) {
     // thread)
     char *final_msg = NULL;
     if (d->event_id && !d->thread_root_id) {
-      // Use a text hint for replies since we can't do clickable links easily
-      // Format: [🧵 Reply: /reply <event_id>] <message>
-      char *hint = g_strdup_printf("[🧵 Reply: /reply %s] ", d->event_id);
+      // Use a shorter text hint for replies
+      char *hint = g_strdup_printf("[🧵/reply %s] ", d->event_id);
       final_msg = g_strconcat(hint, d->message, NULL);
       g_free(hint);
     } else {
@@ -657,6 +684,9 @@ static int matrix_chat_send(PurpleConnection *gc, int id, const char *message,
     return -1;
 
   const char *room_id = purple_conversation_get_name(conv);
+  
+  check_and_send_pasted_images(gc, room_id, message);
+
   // Local Echo: Display message immediately to user
   purple_conv_chat_write(PURPLE_CONV_CHAT(conv), "me", message,
                          PURPLE_MESSAGE_SEND, time(NULL));
@@ -976,6 +1006,12 @@ static GList *matrix_chat_info(PurpleConnection *gc) {
   pce->required = TRUE;
   m = g_list_append(m, pce);
 
+  pce = g_new0(struct proto_chat_entry, 1);
+  pce->label = _("Avatar Path");
+  pce->identifier = "avatar_path";
+  pce->required = FALSE;
+  m = g_list_append(m, pce);
+
   return m;
 }
 
@@ -1030,6 +1066,8 @@ static int matrix_send_im(PurpleConnection *gc, const char *who,
   // Logic for sending a DM.
   // In Matrix, a DM is just a room with that person.
 
+  check_and_send_pasted_images(gc, who, message);
+
   if (who[0] == '!') {
     // It's a room ID. Just send message.
     purple_matrix_rust_send_message(who, message);
@@ -1071,27 +1109,9 @@ static void matrix_join_chat(PurpleConnection *gc, GHashTable *data) {
     // Add ourselves to the user list so the UI knows we are there
     conv = purple_find_chat(gc, chat_id);
     if (conv) {
-      // Try to set the title from the buddy list alias
       PurpleChat *blist_chat = purple_blist_find_chat(account, room_id);
-      if (blist_chat) {
-        // purple_chat_get_name returns the alias if set, or the name?
-        // Actually purple_chat_get_name -> returns chat->alias if set?
-        // No, purple_chat_get_name likely returns the name (ID).
-        // We want purple_chat_get_name(chat) returns the display name?
-        // Let's check headers or assume standard libpurple property:
-        // chat->alias. libpurple: const char *alias = blist_chat->alias; But
-        // valid accessors are better. purple_blist_alias_chat sets chat->alias.
-        // There isn't a simple public accessor for alias unless likely
-        // `chat->alias` is public since it's a struct. Let's check if we can
-        // access `blist_chat->alias`.
-
-        if (blist_chat->alias) {
+      if (blist_chat && blist_chat->alias) {
           purple_conversation_set_title(conv, blist_chat->alias);
-          purple_conversation_set_name(
-              conv, blist_chat->alias); // This might change the ID reference?
-                                        // No, internal name vs display name.
-                                        // Ideally just set_title.
-        }
       }
 
       const char *username = purple_account_get_username(account);
@@ -1111,15 +1131,12 @@ static void matrix_join_chat(PurpleConnection *gc, GHashTable *data) {
   }
 }
 
-extern void purple_matrix_rust_send_file(const char *room_id,
-                                         const char *filename);
-
 static void matrix_send_file(PurpleConnection *gc, const char *who,
                              const char *filename) {
   // If file is NULL, Libpurple might be asking IS it supported, or expecting
   // Xfer. Actually send_file(gc, who, file) is called when user drags file.
 
-  if (!filename)
+  if (!filename || !who)
     return;
   purple_debug_info("purple-matrix-rust", "Sending file %s to %s\n", filename,
                     who);
@@ -2122,13 +2139,7 @@ static gboolean process_buddy_update_cb(gpointer data) {
         if (g_file_get_contents(d->icon_path, &contents, &length, NULL)) {
           purple_buddy_icons_set_for_user(account, d->user_id, contents, length,
                                           NULL);
-          // purple_buddy_icons_set_for_user takes ownership of 'contents', so
-          // we do NOT free it.
-
-          // Also set on buddy struct directly if needed?
-          // purple_buddy_set_icon(buddy, purple_buddy_icon_new(account,
-          // d->user_id, ...)) purple_buddy_icons_set_for_user does the heavy
-          // lifting of creating the icon and associating it.
+          g_free(contents);
         }
       }
     }
@@ -2225,6 +2236,12 @@ static void ensure_thread_in_blist(PurpleAccount *account,
   char *nice_alias = NULL;
   if (alias) {
     char *truncated = g_strndup(alias, 50); // Keep it short
+    char *end_ptr = NULL;
+    if (!g_utf8_validate(truncated, -1, (const gchar **)&end_ptr)) {
+      if (end_ptr) {
+        *end_ptr = '\0';
+      }
+    }
     if (strlen(alias) > 50) {
       char *tmp = g_strdup_printf("%s...", truncated);
       g_free(truncated);
@@ -2690,7 +2707,6 @@ static PurpleCmdRet cmd_debug_thread(PurpleConversation *conv, const gchar *cmd,
   ensure_thread_in_blist(account, virtual_id, "Debug Thread Message", room_id);
 
   g_free(virtual_id);
-  g_free(virtual_id);
   return PURPLE_CMD_RET_OK;
 }
 
@@ -2748,6 +2764,11 @@ static void init_plugin(PurplePlugin *plugin) {
   printf("[Plugin] init_plugin called!\n");
   option = purple_account_option_string_new("Homeserver URL", "server",
                                             "https://matrix.org");
+  prpl_info.protocol_options =
+      g_list_append(prpl_info.protocol_options, option);
+
+  option = purple_account_option_bool_new("Separate Thread Tabs",
+                                          "separate_threads", FALSE);
   prpl_info.protocol_options =
       g_list_append(prpl_info.protocol_options, option);
 
