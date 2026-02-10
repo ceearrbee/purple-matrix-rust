@@ -115,7 +115,7 @@ extern void purple_matrix_rust_redact_event(const char *room_id,
                                             const char *reason);
 
 extern void purple_matrix_rust_fetch_more_history(const char *room_id);
-extern void purple_matrix_rust_create_room(const char *name);
+extern void purple_matrix_rust_create_room(const char *name, const char *topic, bool is_public);
 extern void purple_matrix_rust_search_public_rooms(const char *search_term,
                                                    const char *output_room_id);
 extern void purple_matrix_rust_search_users(const char *search_term,
@@ -747,7 +747,11 @@ static void matrix_get_info(PurpleConnection *gc, const char *who) {
 
 static void matrix_set_chat_topic(PurpleConnection *gc, int id,
                                   const char *topic) {
-  // Stub
+    PurpleConversation *conv = purple_find_chat(gc, id);
+    if (conv) {
+        const char *room_id = purple_conversation_get_name(conv);
+        purple_matrix_rust_set_room_topic(room_id, topic);
+    }
 }
 
 static PurpleRoomlist *active_roomlist = NULL;
@@ -1439,7 +1443,7 @@ static PurpleCmdRet cmd_create_room(PurpleConversation *conv, const gchar *cmd,
     *error = g_strdup("Usage: /create_room <name>");
     return PURPLE_CMD_RET_FAILED;
   }
-  purple_matrix_rust_create_room(args[0]);
+  purple_matrix_rust_create_room(args[0], NULL, false);
   return PURPLE_CMD_RET_OK;
 }
 
@@ -1791,6 +1795,78 @@ static void action_recover_keys_cb(PurplePluginAction *action) {
                        NULL, NULL);
 }
 
+static void create_room_cb(void *user_data, PurpleRequestFields *fields) {
+    const char *name = purple_request_fields_get_string(fields, "name");
+    const char *topic = purple_request_fields_get_string(fields, "topic");
+    int preset = purple_request_fields_get_choice(fields, "preset");
+    bool is_public = (preset == 1);
+
+    if (name && *name) {
+        purple_matrix_rust_create_room(name, topic, is_public);
+    }
+}
+
+static void action_create_room_cb(PurplePluginAction *action) {
+    PurpleConnection *gc = (PurpleConnection *)action->context;
+    PurpleRequestFields *fields = purple_request_fields_new();
+    PurpleRequestFieldGroup *group = purple_request_field_group_new(NULL);
+    purple_request_fields_add_group(fields, group);
+
+    PurpleRequestField *field;
+    field = purple_request_field_string_new("name", "Room Name", NULL, FALSE);
+    purple_request_field_set_required(field, TRUE);
+    purple_request_field_group_add_field(group, field);
+
+    field = purple_request_field_string_new("topic", "Topic", NULL, TRUE);
+    purple_request_field_group_add_field(group, field);
+
+    field = purple_request_field_choice_new("preset", "Visibility", 0);
+    purple_request_field_choice_add(field, "Private");
+    purple_request_field_choice_add(field, "Public");
+    purple_request_field_group_add_field(group, field);
+
+    purple_request_fields(gc, "Create Room", "Create a new Matrix Room", NULL, fields,
+        "Create", G_CALLBACK(create_room_cb), "Cancel", NULL,
+        purple_connection_get_account(gc), NULL, NULL, NULL);
+}
+
+static void search_user_cb(void *user_data, const char *term) {
+    if (term && *term) {
+        // Output to a generic console room if global
+        purple_matrix_rust_search_users(term, "Matrix Console");
+    }
+}
+
+static void action_search_user_cb(PurplePluginAction *action) {
+    PurpleConnection *gc = (PurpleConnection *)action->context;
+    purple_request_input(gc, "User Search", "Search for a user",
+        "Enter a name or Matrix ID to search the directory.", NULL, FALSE, FALSE, NULL,
+        "Search", G_CALLBACK(search_user_cb), "Cancel", NULL,
+        purple_connection_get_account(gc), NULL, NULL, NULL);
+}
+
+static void knock_room_input_cb(void *user_data, PurpleRequestFields *fields) {
+    const char *id = purple_request_fields_get_string(fields, "id");
+    const char *reason = purple_request_fields_get_string(fields, "reason");
+    if (id && *id) {
+        purple_matrix_rust_knock(id, reason);
+    }
+}
+
+static void action_knock_room_cb(PurplePluginAction *action) {
+    PurpleConnection *gc = (PurpleConnection *)action->context;
+    PurpleRequestFields *fields = purple_request_fields_new();
+    PurpleRequestFieldGroup *group = purple_request_field_group_new(NULL);
+    purple_request_fields_add_group(fields, group);
+    
+    purple_request_field_group_add_field(group, purple_request_field_string_new("id", "Room ID or Alias", NULL, FALSE));
+    purple_request_field_group_add_field(group, purple_request_field_string_new("reason", "Reason", NULL, FALSE));
+    
+    purple_request_fields(gc, "Knock on Room", "Request entry to a room", NULL, fields,
+        "Knock", G_CALLBACK(knock_room_input_cb), "Cancel", NULL,
+        purple_connection_get_account(gc), NULL, NULL, NULL);
+}
+
 static GList *matrix_actions(PurplePlugin *plugin, gpointer context) {
   GList *l = NULL;
   PurplePluginAction *act = NULL;
@@ -1800,6 +1876,15 @@ static GList *matrix_actions(PurplePlugin *plugin, gpointer context) {
 
   act =
       purple_plugin_action_new("Recover Keys (4S)...", action_recover_keys_cb);
+  l = g_list_append(l, act);
+
+  act = purple_plugin_action_new("Create Room...", action_create_room_cb);
+  l = g_list_append(l, act);
+
+  act = purple_plugin_action_new("Search Users...", action_search_user_cb);
+  l = g_list_append(l, act);
+
+  act = purple_plugin_action_new("Knock on Room...", action_knock_room_cb);
   l = g_list_append(l, act);
 
   act = purple_plugin_action_new("Bootstrap Cross-Signing (Reset)",
@@ -2363,6 +2448,137 @@ static void menu_action_verify_buddy_cb(PurpleBlistNode *node, gpointer data) {
   }
 }
 
+static void menu_action_tag_fav_cb(PurpleBlistNode *node, gpointer data) {
+    PurpleChat *chat = (PurpleChat *)node;
+    GHashTable *components = purple_chat_get_components(chat);
+    const char *room_id = g_hash_table_lookup(components, "room_id");
+    purple_matrix_rust_set_room_tag(room_id, "favorite");
+}
+
+static void menu_action_tag_low_cb(PurpleBlistNode *node, gpointer data) {
+    PurpleChat *chat = (PurpleChat *)node;
+    GHashTable *components = purple_chat_get_components(chat);
+    const char *room_id = g_hash_table_lookup(components, "room_id");
+    purple_matrix_rust_set_room_tag(room_id, "lowpriority");
+}
+
+static void menu_action_untag_cb(PurpleBlistNode *node, gpointer data) {
+    PurpleChat *chat = (PurpleChat *)node;
+    GHashTable *components = purple_chat_get_components(chat);
+    const char *room_id = g_hash_table_lookup(components, "room_id");
+    purple_matrix_rust_set_room_tag(room_id, "none");
+}
+
+static void kick_user_input_cb(void *user_data, PurpleRequestFields *fields) {
+    char *room_id = (char *)user_data;
+    const char *who = purple_request_fields_get_string(fields, "who");
+    const char *reason = purple_request_fields_get_string(fields, "reason");
+    if (who && *who) {
+        purple_matrix_rust_kick_user(room_id, who, reason);
+    }
+    g_free(room_id);
+}
+
+static void menu_action_kick_user_cb(PurpleBlistNode *node, gpointer data) {
+    PurpleChat *chat = (PurpleChat *)node;
+    const char *room_id = g_hash_table_lookup(purple_chat_get_components(chat), "room_id");
+    
+    PurpleRequestFields *fields = purple_request_fields_new();
+    PurpleRequestFieldGroup *group = purple_request_field_group_new(NULL);
+    purple_request_fields_add_group(fields, group);
+    
+    purple_request_field_group_add_field(group, purple_request_field_string_new("who", "User ID", NULL, FALSE));
+    purple_request_field_group_add_field(group, purple_request_field_string_new("reason", "Reason", NULL, FALSE));
+    
+    purple_request_fields(NULL, "Kick User", "Kick user from room", NULL, fields,
+        "Kick", G_CALLBACK(kick_user_input_cb), "Cancel", NULL,
+        purple_chat_get_account(chat), NULL, NULL, g_strdup(room_id));
+}
+
+static void ban_user_input_cb(void *user_data, PurpleRequestFields *fields) {
+    char *room_id = (char *)user_data;
+    const char *who = purple_request_fields_get_string(fields, "who");
+    const char *reason = purple_request_fields_get_string(fields, "reason");
+    if (who && *who) {
+        purple_matrix_rust_ban_user(room_id, who, reason);
+    }
+    g_free(room_id);
+}
+
+static void menu_action_ban_user_cb(PurpleBlistNode *node, gpointer data) {
+    PurpleChat *chat = (PurpleChat *)node;
+    const char *room_id = g_hash_table_lookup(purple_chat_get_components(chat), "room_id");
+    
+    PurpleRequestFields *fields = purple_request_fields_new();
+    PurpleRequestFieldGroup *group = purple_request_field_group_new(NULL);
+    purple_request_fields_add_group(fields, group);
+    
+    purple_request_field_group_add_field(group, purple_request_field_string_new("who", "User ID", NULL, FALSE));
+    purple_request_field_group_add_field(group, purple_request_field_string_new("reason", "Reason", NULL, FALSE));
+    
+    purple_request_fields(NULL, "Ban User", "Ban user from room", NULL, fields,
+        "Ban", G_CALLBACK(ban_user_input_cb), "Cancel", NULL,
+        purple_chat_get_account(chat), NULL, NULL, g_strdup(room_id));
+}
+
+static void create_poll_cb(void *user_data, PurpleRequestFields *fields) {
+    char *room_id = (char *)user_data;
+    const char *q = purple_request_fields_get_string(fields, "question");
+    const char *opt1 = purple_request_fields_get_string(fields, "opt1");
+    const char *opt2 = purple_request_fields_get_string(fields, "opt2");
+    
+    if (q && *q && opt1 && *opt1 && opt2 && *opt2) {
+        GString *opts = g_string_new(opt1);
+        g_string_append_printf(opts, "|%s", opt2);
+        
+        const char *opt3 = purple_request_fields_get_string(fields, "opt3");
+        if (opt3 && *opt3) g_string_append_printf(opts, "|%s", opt3);
+        const char *opt4 = purple_request_fields_get_string(fields, "opt4");
+        if (opt4 && *opt4) g_string_append_printf(opts, "|%s", opt4);
+
+        purple_matrix_rust_poll_create(room_id, q, opts->str);
+        g_string_free(opts, TRUE);
+    }
+    g_free(room_id);
+}
+
+static void menu_action_create_poll_cb(PurpleBlistNode *node, gpointer data) {
+    PurpleChat *chat = (PurpleChat *)node;
+    GHashTable *components = purple_chat_get_components(chat);
+    const char *room_id = g_hash_table_lookup(components, "room_id");
+    if (!room_id) return;
+
+    PurpleAccount *account = purple_chat_get_account(chat);
+    PurpleConnection *gc = purple_account_get_connection(account);
+
+    PurpleRequestFields *fields = purple_request_fields_new();
+    PurpleRequestFieldGroup *group = purple_request_field_group_new(NULL);
+    purple_request_fields_add_group(fields, group);
+
+    PurpleRequestField *field;
+    field = purple_request_field_string_new("question", "Question", NULL, FALSE);
+    purple_request_field_set_required(field, TRUE);
+    purple_request_field_group_add_field(group, field);
+
+    field = purple_request_field_string_new("opt1", "Option 1", NULL, FALSE);
+    purple_request_field_set_required(field, TRUE);
+    purple_request_field_group_add_field(group, field);
+
+    field = purple_request_field_string_new("opt2", "Option 2", NULL, FALSE);
+    purple_request_field_set_required(field, TRUE);
+    purple_request_field_group_add_field(group, field);
+
+    field = purple_request_field_string_new("opt3", "Option 3", NULL, FALSE);
+    purple_request_field_group_add_field(group, field);
+
+    field = purple_request_field_string_new("opt4", "Option 4", NULL, FALSE);
+    purple_request_field_group_add_field(group, field);
+
+    purple_request_fields(gc, "Create Poll", "Create a new Poll", NULL, fields,
+        "Create", G_CALLBACK(create_poll_cb), "Cancel", NULL,
+        account, NULL, NULL, g_strdup(room_id));
+}
+
 static GList *blist_node_menu_cb(PurpleBlistNode *node) {
   GList *list = NULL;
 
@@ -2403,6 +2619,34 @@ static GList *blist_node_menu_cb(PurpleBlistNode *node) {
           "Fetch More History", PURPLE_CALLBACK(menu_action_fetch_history_cb),
           NULL, NULL);
       list = g_list_append(list, act_history);
+
+      // Create Poll
+      PurpleMenuAction *act_poll = purple_menu_action_new(
+          "Create Poll...", PURPLE_CALLBACK(menu_action_create_poll_cb),
+          NULL, NULL);
+      list = g_list_append(list, act_poll);
+
+      // Tagging
+      PurpleMenuAction *act_fav = purple_menu_action_new(
+          "Tag: Favorite", PURPLE_CALLBACK(menu_action_tag_fav_cb), NULL, NULL);
+      list = g_list_append(list, act_fav);
+
+      PurpleMenuAction *act_low = purple_menu_action_new(
+          "Tag: Low Priority", PURPLE_CALLBACK(menu_action_tag_low_cb), NULL, NULL);
+      list = g_list_append(list, act_low);
+
+      PurpleMenuAction *act_untag = purple_menu_action_new(
+          "Untag", PURPLE_CALLBACK(menu_action_untag_cb), NULL, NULL);
+      list = g_list_append(list, act_untag);
+
+      // Moderation
+      PurpleMenuAction *act_kick = purple_menu_action_new(
+          "Kick User...", PURPLE_CALLBACK(menu_action_kick_user_cb), NULL, NULL);
+      list = g_list_append(list, act_kick);
+
+      PurpleMenuAction *act_ban = purple_menu_action_new(
+          "Ban User...", PURPLE_CALLBACK(menu_action_ban_user_cb), NULL, NULL);
+      list = g_list_append(list, act_ban);
 
       // List Threads
       /*

@@ -28,10 +28,10 @@ The plugin covers the vast majority of Matrix client features, mapping them to L
 | **Invite User** | ✅ | `purple_matrix_rust_invite_user` calls `room.invite_user_by_id()`. |
 | **Space Support** | ✅ | Rooms are grouped by their canonical parent Space in the Buddy List. |
 | **Direct Messages** | ✅ | Detected via `is_direct()` and grouped separately. |
-| **Room Creation** | ✅ | Via `/matrix_create_room`. |
+| **Room Creation** | ✅ | Via "Create Room" menu or `/matrix_create_room`. |
 | **Public Search** | ✅ | Via `/matrix_public_rooms` and Pidgin's **Room List** window. |
 | **Room Moderation** | ✅ | Kick, Ban, Unban, Redact, Knock supported. |
-| **Room State** | ✅ | Rename, Topic, Avatar, Aliases supported. |
+| **Room State** | ✅ | Rename, Topic, Avatar supported. Topic via standard UI. |
 
 ### 3. Messaging & Events
 | Feature | Status | Notes |
@@ -42,13 +42,13 @@ The plugin covers the vast majority of Matrix client features, mapping them to L
 | **Media (Images/Video)** | ✅ | Downloaded to `/tmp/`, displayed inline. |
 | **Stickers** | ✅ | Receiving supported. Sending via `/matrix_sticker`. |
 | **Reactions** | ✅ | Receiving and Sending (`/matrix_react`) supported. |
-| **Redactions** | ✅ | Receiving and Sending (`/matrix_redact`) supported. |
+| **Redactions** | ✅ | Receiving and Sending (`/matrix_redact` or Context Menu) supported. |
 | **Room Topics** | ✅ | Topic changes displayed as system messages. |
 | **Typing Notifications** | ✅ | Bidirectional (Send/Receive) support. |
-| **Read Receipts** | ✅ | Cross-device sync enabled. |
+| **Read Receipts** | ✅ | Cross-device sync enabled. Context Menu "Mark as Read". |
 | **Location Sharing** | ✅ | Sending and receiving locations. |
-| **Polls** | ✅ | Basic rendering of incoming polls. |
-| **History Fetching** | ✅ | On-demand history via `/history`. |
+| **Polls** | ✅ | Create via Context Menu. Vote via slash command. |
+| **History Fetching** | ✅ | On-demand history via Context Menu or `/history`. |
 
 ### 4. Threads
 | Feature | Status | Notes |
@@ -56,15 +56,15 @@ The plugin covers the vast majority of Matrix client features, mapping them to L
 | **Thread Detection** | ✅ | Detects `m.thread` relation in incoming messages. |
 | **Historical Scan** | ✅ | Scans last 50 messages on startup to populate active threads in Buddy List. |
 | **Thread UI** | ✅ | Threads appear as distinct chats grouped under the parent room. |
-| **Reply to Thread** | ✅ | Custom menu action and slash command `/thread` to reply. |
+| **Reply to Thread** | ✅ | "Start Thread" Context Menu and slash command `/matrix_thread`. |
 
 ### 5. End-to-End Encryption (E2EE)
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
 | **Decryption** | ✅ | `matrix-sdk` handles decryption transparently in the loop. |
 | **Key Storage** | ✅ | `sqlite` store enabled for encryption keys. |
-| **Verification (SAS)** | ✅ | Full UI flow for emoji verification. |
-| **Cross-Signing** | ✅ | Bootstrap (`/reset_cross_signing`) and Recovery (`/recover_keys`) supported. |
+| **Verification (SAS)** | ✅ | UI implemented for emoji comparison (Buddy Menu -> Verify). |
+| **Cross-Signing** | ✅ | Bootstrap and Secret Storage recovery implemented (Account Actions). |
 | **Key Export** | ✅ | Direct key export for backups via `/matrix_export_keys`. |
 
 ### 6. User Data & Profiles
@@ -77,7 +77,7 @@ The plugin covers the vast majority of Matrix client features, mapping them to L
 | **Change Password** | ✅ | Supported via Pidgin "Change Password" menu. |
 | **Deactivation** | ✅ | Supported via Pidgin "Unregister" (Delete Account on Server) action. |
 | **Account Data** | ✅ | Syncing `m.fully_read`, tags, and ignored users. |
-| **User Search** | ✅ | Global user directory search via `/matrix_user_search`. |
+| **User Search** | ✅ | Via "Search Users" Account Action or `/matrix_user_search`. |
 
 ## ⚠️ Known Limitations
 

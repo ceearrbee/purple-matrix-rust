@@ -1389,22 +1389,32 @@ pub extern "C" fn purple_matrix_rust_send_edit(room_id: *const c_char, event_id:
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_create_room(name: *const c_char) {
-    if name.is_null() { return; }
-    let name_str = unsafe { CStr::from_ptr(name).to_string_lossy().into_owned() };
-    log::info!("Creating room with name: {}", name_str);
+pub extern "C" fn purple_matrix_rust_create_room(name: *const c_char, topic: *const c_char, is_public: bool) {
+    let name_str = if name.is_null() { None } else { Some(unsafe { CStr::from_ptr(name).to_string_lossy().into_owned() }) };
+    let topic_str = if topic.is_null() { None } else { Some(unsafe { CStr::from_ptr(topic).to_string_lossy().into_owned() }) };
+    
+    log::info!("Creating room: Name={:?}, Topic={:?}, Public={}", name_str, topic_str, is_public);
 
     let client_guard = GLOBAL_CLIENT.lock().unwrap();
     if let Some(client) = &*client_guard {
         let client = client.clone();
         RUNTIME.spawn(async move {
             use matrix_sdk::ruma::api::client::room::create_room::v3::Request as CreateRoomRequest;
+            use matrix_sdk::ruma::api::client::room::create_room::v3::RoomPreset;
+            
             let mut request = CreateRoomRequest::default();
-            request.name = Some(name_str.clone());
+            request.name = name_str;
+            request.topic = topic_str;
+            
+            if is_public {
+                request.preset = Some(RoomPreset::PublicChat);
+            } else {
+                request.preset = Some(RoomPreset::PrivateChat);
+            }
             
             match client.create_room(request).await {
-                Ok(room) => log::info!("Room {} created successfully: {}", name_str, room.room_id()),
-                Err(e) => log::error!("Failed to create room {}: {:?}", name_str, e),
+                Ok(room) => log::info!("Room created successfully: {}", room.room_id()),
+                Err(e) => log::error!("Failed to create room: {:?}", e),
             }
         });
     }
