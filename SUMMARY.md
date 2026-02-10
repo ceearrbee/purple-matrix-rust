@@ -14,6 +14,9 @@
 *   **Account Management:** Password Change, Deactivation, Buddy Management, Idle Status, Stickers.
 *   **Room Directory:** Native "Room List" window integration.
 
+## Stability Fixes
+*   **Crash on Shutdown:** Fixed a critical panic ("no reactor running") during logout/shutdown by ensuring the Matrix Client is dropped within the Tokio runtime context.
+
 ## Testing
 *   **Rust Tests:** Added unit tests in `src/lib.rs` verifying HTML rendering.
 *   **C Logic Tests:** Created `tests/test_logic.c`.
@@ -24,6 +27,7 @@
 *   **VoIP:** Not supported.
 
 ## Files Modified
-*   `plugin.c`: Added extensive UI logic (`purple_request_fields`), menu callbacks (`blist_node_menu`), and account actions.
+*   `src/auth.rs`: Fixed `logout` to use `RUNTIME.block_on` for dropping the client.
+*   `plugin.c`: Added extensive UI logic (`purple_request_fields`), menu callbacks (`blist_node_menu`), and account actions. Fixed compilation errors.
 *   `src/lib.rs`: Updated `create_room` to support visibility.
 *   `README.md`: Updated to reflect full UI support.

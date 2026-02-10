@@ -460,9 +460,13 @@ pub extern "C" fn purple_matrix_rust_logout() {
     let mut guard = GLOBAL_CLIENT.lock().unwrap();
     
     // Just drop the client to stop the sync loop.
-    // Do NOT call client.logout() as that invalidates the token.
-    if let Some(_client) = guard.take() {
+    if let Some(client) = guard.take() {
          log::info!("Dropping global client instance for disconnect.");
+         // Ensure client is dropped within the Tokio runtime context to prevent
+         // "there is no reactor running" panics from internal components (e.g. deadpool).
+         RUNTIME.block_on(async move {
+             drop(client);
+         });
     }
 }
 
