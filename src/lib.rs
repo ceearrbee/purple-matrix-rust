@@ -1052,6 +1052,22 @@ pub fn get_display_html(content: &matrix_sdk::ruma::events::room::message::RoomM
 
 // Deprecated old helper
 #[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use crate::auth::purple_matrix_rust_logout;
+
+    #[test]
+    fn test_logout_safety() {
+        let _ = &*RUNTIME;
+        {
+            let mut guard = GLOBAL_CLIENT.lock().unwrap();
+            *guard = None; 
+        }
+        purple_matrix_rust_logout();
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;

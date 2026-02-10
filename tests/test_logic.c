@@ -2,50 +2,37 @@
 #include <string.h>
 #include <glib.h>
 
-// Mock Libpurple structs and functions for testing logic
-typedef struct _PurpleAccount PurpleAccount;
-typedef struct _PurpleConversation PurpleConversation;
-typedef struct _PurpleBlistNode PurpleBlistNode;
-typedef struct _PurpleChat PurpleChat;
-typedef struct _PurpleGroup PurpleGroup;
+// Attempt to use real headers if we are in an environment that has them
+#ifdef HAVE_LIBPURPLE
+#include <libpurple/request.h>
+#else
+// Mock essential structs
+typedef struct _PurpleRequestField PurpleRequestField;
+// Mock function signature to match strict compilation check
+void purple_request_field_choice_add(PurpleRequestField *field, const char *label);
+#endif
 
-struct _PurpleChat {
-    PurpleAccount *account;
-    GHashTable *components;
-    char *alias;
-    PurpleGroup *group;
-};
-
-struct _PurpleGroup {
-    char *name;
-};
-
-// Global mocks
-static GHashTable *chats;
-static GHashTable *groups;
-
-void purple_debug_info(const char *category, const char *format, ...) {
-    va_list args;
-    va_start(args, format);
-    printf("[INFO] %s: ", category);
-    vprintf(format, args);
-    va_end(args);
+// Mock implementation
+#ifndef HAVE_LIBPURPLE
+void purple_request_field_choice_add(PurpleRequestField *field, const char *label) {
+    printf("[Mock] Added choice: %s\n", label);
 }
-
-void purple_debug_warning(const char *category, const char *format, ...) {
-    va_list args;
-    va_start(args, format);
-    printf("[WARN] %s: ", category);
-    vprintf(format, args);
-    va_end(args);
-}
-
-// Mock implementation of ensure_thread_in_blist logic (copied/adapted from plugin.c for testing)
-// In a real scenario, we might link against the object file, but here we just test the logic concept.
+#endif
 
 int main() {
     printf("Running C Logic Tests...\n");
-    // Placeholder for actual C tests
+    
+    // Test the API usage that previously failed
+    #ifndef HAVE_LIBPURPLE
+    PurpleRequestField *mock_field = (PurpleRequestField*)0x1234;
+    #else
+    PurpleRequestField *mock_field = purple_request_field_choice_new("test", "Test", 0);
+    #endif
+
+    // This call should match the signature expected by the compiler/makefile
+    purple_request_field_choice_add(mock_field, "Private");
+    purple_request_field_choice_add(mock_field, "Public");
+    
     printf("Tests passed.\n");
     return 0;
 }
