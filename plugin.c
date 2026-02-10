@@ -1262,40 +1262,46 @@ static PurpleCmdRet cmd_logout(PurpleConversation *conv, const gchar *cmd,
 
 static PurpleCmdRet cmd_help(PurpleConversation *conv, const gchar *cmd,
                              gchar **args, gchar **error, void *data) {
-  GString *msg = g_string_new("Available Matrix Commands:<br>");
-  g_string_append(msg, "<b>/join &lt;room_id&gt;</b>: Join a room<br>");
-  g_string_append(msg, "<b>/invite &lt;user_id&gt;</b>: Invite a user<br>");
-  g_string_append(msg, "<b>/kick &lt;user_id&gt;</b>: Kick a user<br>");
-  g_string_append(msg, "<b>/ban &lt;user_id&gt;</b>: Ban a user<br>");
-  g_string_append(msg, "<b>/nick &lt;name&gt;</b>: Set your display name<br>");
-  g_string_append(msg, "<b>/avatar &lt;path&gt;</b>: Set your avatar<br>");
-  g_string_append(msg,
-                  "<b>/matrix_create_room &lt;name&gt;</b>: Create a room<br>");
-  g_string_append(msg, "<b>/matrix_leave [reason]</b>: Leave current room<br>");
-  g_string_append(msg,
-                  "<b>/matrix_public_rooms [search]</b>: Search directory<br>");
-  g_string_append(msg,
-                  "<b>/matrix_user_search &lt;term&gt;</b>: Search users<br>");
-  g_string_append(
-      msg,
-      "<b>/matrix_react &lt;emoji&gt; [event_id]</b>: React to message<br>");
-  g_string_append(
-      msg, "<b>/matrix_redact &lt;event_id&gt; [reason]</b>: Redact event<br>");
-  g_string_append(
-      msg, "<b>/matrix_reply &lt;msg&gt;</b>: Reply to last message<br>");
-  g_string_append(msg,
-                  "<b>/matrix_edit &lt;msg&gt;</b>: Edit last message<br>");
-  g_string_append(msg,
-                  "<b>/matrix_thread &lt;msg&gt;</b>: Reply in thread<br>");
-  g_string_append(msg, "<b>/matrix_set_name &lt;name&gt;</b>: Rename room<br>");
-  g_string_append(msg, "<b>/matrix_set_topic &lt;topic&gt;</b>: Set topic<br>");
-  g_string_append(msg, "<b>/matrix_location &lt;desc&gt; &lt;geo_uri&gt;</b>: Send location<br>");
-  g_string_append(msg, "<b>/matrix_poll_create &lt;q&gt; &lt;opts&gt;</b>: Create poll<br>");
-  g_string_append(msg, "<b>/matrix_poll_vote &lt;idx&gt;</b>: Vote on poll<br>");
-  g_string_append(msg, "<b>/matrix_poll_end</b>: End poll<br>");
-  g_string_append(msg, "<b>/matrix_sticker &lt;url&gt;</b>: Send sticker<br>");
-  g_string_append(msg, "<b>/matrix_mute / _unmute</b>: Mute/Unmute room<br>");
-  g_string_append(msg, "<b>/matrix_logout</b>: Log out session<br>");
+  GString *msg = g_string_new("");
+  g_string_append(msg, "<font size='4'><b>Matrix Commands</b></font><br>");
+
+  g_string_append(msg, "<br><b>General</b><br>");
+  g_string_append(msg, "&bull; <b>/join &lt;room_id&gt;</b>: Join a room<br>");
+  g_string_append(msg, "&bull; <b>/invite &lt;user_id&gt;</b>: Invite a user<br>");
+  g_string_append(msg, "&bull; <b>/nick &lt;name&gt;</b>: Set display name<br>");
+  g_string_append(msg, "&bull; <b>/avatar &lt;path&gt;</b>: Set avatar<br>");
+  g_string_append(msg, "&bull; <b>/matrix_create_room &lt;name&gt;</b>: Create a room<br>");
+  g_string_append(msg, "&bull; <b>/matrix_leave [reason]</b>: Leave room<br>");
+  g_string_append(msg, "&bull; <b>/matrix_public_rooms [term]</b>: Search directory<br>");
+  g_string_append(msg, "&bull; <b>/matrix_user_search &lt;term&gt;</b>: Search users<br>");
+
+  g_string_append(msg, "<br><b>Messages &amp; Interaction</b><br>");
+  g_string_append(msg, "&bull; <b>/matrix_reply &lt;msg&gt;</b>: Reply to last message<br>");
+  g_string_append(msg, "&bull; <b>/matrix_thread &lt;msg&gt;</b>: Reply in thread<br>");
+  g_string_append(msg, "&bull; <b>/matrix_edit &lt;msg&gt;</b>: Edit last message<br>");
+  g_string_append(msg, "&bull; <b>/matrix_react &lt;emoji&gt;</b>: React to message<br>");
+  g_string_append(msg, "&bull; <b>/matrix_redact [reason]</b>: Redact last message<br>");
+  g_string_append(msg, "&bull; <b>/matrix_sticker &lt;url&gt;</b>: Send sticker<br>");
+  g_string_append(msg, "&bull; <b>/matrix_location &lt;desc&gt; &lt;geo&gt;</b>: Send location<br>");
+
+  g_string_append(msg, "<br><b>Polls</b><br>");
+  g_string_append(msg, "&bull; <b>/matrix_poll_create &lt;q&gt; &lt;opts&gt;</b>: Create poll<br>");
+  g_string_append(msg, "&bull; <b>/matrix_poll_vote &lt;idx&gt;</b>: Vote on poll<br>");
+  g_string_append(msg, "&bull; <b>/matrix_poll_end</b>: End poll<br>");
+
+  g_string_append(msg, "<br><b>Moderation &amp; Admin</b><br>");
+  g_string_append(msg, "&bull; <b>/kick &lt;user&gt; [reason]</b>: Kick user<br>");
+  g_string_append(msg, "&bull; <b>/ban &lt;user&gt; [reason]</b>: Ban user<br>");
+  g_string_append(msg, "&bull; <b>/matrix_unban &lt;user&gt;</b>: Unban user<br>");
+  g_string_append(msg, "&bull; <b>/matrix_set_name &lt;name&gt;</b>: Set room name<br>");
+  g_string_append(msg, "&bull; <b>/matrix_set_topic &lt;topic&gt;</b>: Set room topic<br>");
+  g_string_append(msg, "&bull; <b>/matrix_tag &lt;tag&gt;</b>: Set room tag<br>");
+  g_string_append(msg, "&bull; <b>/matrix_alias_create/delete</b>: Manage aliases<br>");
+
+  g_string_append(msg, "<br><b>Security</b><br>");
+  g_string_append(msg, "&bull; <b>/matrix_verify &lt;user&gt;</b>: Verify user<br>");
+  g_string_append(msg, "&bull; <b>/matrix_e2ee_status</b>: Check E2EE status<br>");
+  g_string_append(msg, "&bull; <b>/matrix_export_keys</b>: Export keys<br>");
 
   purple_conversation_write(conv, "Matrix Help", msg->str,
                             PURPLE_MESSAGE_SYSTEM, time(NULL));
@@ -2603,43 +2609,39 @@ static GList *blist_node_menu_cb(PurpleBlistNode *node) {
     if (strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") ==
         0) {
 
-      // Mark Read
+      // --- General & View ---
       PurpleMenuAction *act_read = purple_menu_action_new(
           "Mark as Read", PURPLE_CALLBACK(menu_action_mark_read_cb), NULL,
           NULL);
       list = g_list_append(list, act_read);
 
-      // Redact Last Msg
-      PurpleMenuAction *act_redact = purple_menu_action_new(
-          "Redact Last Msg", PURPLE_CALLBACK(menu_action_redact_last_cb), NULL,
-          NULL);
-      list = g_list_append(list, act_redact);
-
-      // E2EE Status
-      PurpleMenuAction *act_e2ee = purple_menu_action_new(
-          "E2EE Status", PURPLE_CALLBACK(menu_action_e2ee_status_cb), NULL,
-          NULL);
-      list = g_list_append(list, act_e2ee);
-
-      // Start Thread
-      PurpleMenuAction *act_thread = purple_menu_action_new(
-          "Start Thread (Last Msg)...",
-          PURPLE_CALLBACK(menu_action_thread_reply_cb), NULL, NULL);
-      list = g_list_append(list, act_thread);
-
-      // Fetch History
       PurpleMenuAction *act_history = purple_menu_action_new(
           "Fetch More History", PURPLE_CALLBACK(menu_action_fetch_history_cb),
           NULL, NULL);
       list = g_list_append(list, act_history);
 
-      // Create Poll
+      PurpleMenuAction *act_e2ee = purple_menu_action_new(
+          "Encryption Status (E2EE)", PURPLE_CALLBACK(menu_action_e2ee_status_cb), NULL,
+          NULL);
+      list = g_list_append(list, act_e2ee);
+
+      // --- Interaction ---
+      PurpleMenuAction *act_thread = purple_menu_action_new(
+          "Reply to Thread (Last Msg)...",
+          PURPLE_CALLBACK(menu_action_thread_reply_cb), NULL, NULL);
+      list = g_list_append(list, act_thread);
+
       PurpleMenuAction *act_poll = purple_menu_action_new(
           "Create Poll...", PURPLE_CALLBACK(menu_action_create_poll_cb),
           NULL, NULL);
       list = g_list_append(list, act_poll);
 
-      // Tagging
+      PurpleMenuAction *act_redact = purple_menu_action_new(
+          "Redact Last Msg", PURPLE_CALLBACK(menu_action_redact_last_cb), NULL,
+          NULL);
+      list = g_list_append(list, act_redact);
+
+      // --- Organization (Tags) ---
       PurpleMenuAction *act_fav = purple_menu_action_new(
           "Tag: Favorite", PURPLE_CALLBACK(menu_action_tag_fav_cb), NULL, NULL);
       list = g_list_append(list, act_fav);
@@ -2649,29 +2651,17 @@ static GList *blist_node_menu_cb(PurpleBlistNode *node) {
       list = g_list_append(list, act_low);
 
       PurpleMenuAction *act_untag = purple_menu_action_new(
-          "Untag", PURPLE_CALLBACK(menu_action_untag_cb), NULL, NULL);
+          "Tag: None (Untag)", PURPLE_CALLBACK(menu_action_untag_cb), NULL, NULL);
       list = g_list_append(list, act_untag);
 
-      // Moderation
+      // --- Moderation ---
       PurpleMenuAction *act_kick = purple_menu_action_new(
-          "Kick User...", PURPLE_CALLBACK(menu_action_kick_user_cb), NULL, NULL);
+          "Mod: Kick User...", PURPLE_CALLBACK(menu_action_kick_user_cb), NULL, NULL);
       list = g_list_append(list, act_kick);
 
       PurpleMenuAction *act_ban = purple_menu_action_new(
-          "Ban User...", PURPLE_CALLBACK(menu_action_ban_user_cb), NULL, NULL);
+          "Mod: Ban User...", PURPLE_CALLBACK(menu_action_ban_user_cb), NULL, NULL);
       list = g_list_append(list, act_ban);
-
-      // List Threads
-      /*
-         Implementing List Threads fully requires defining the callback wrapper
-         above. Since I can't easily insert the wrapper *before* this function
-         without rewriting the whole file or careful placement, and I am
-         replacing this block...
-
-         I will skip adding "List Threads" for now to keep the change safe and
-         atomic, as the "Start Thread" is the requested UI element for
-         controlling. The "🧵 Threads" group is the primary listing UI.
-      */
     }
   } else if (PURPLE_BLIST_NODE_IS_BUDDY(node)) {
     PurpleBuddy *buddy = (PurpleBuddy *)node;
