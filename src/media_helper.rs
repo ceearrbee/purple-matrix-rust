@@ -29,7 +29,12 @@ pub async fn download_avatar(client: &Client, url: &matrix_sdk::ruma::OwnedMxcUr
             None
         }
         Err(e) => {
-            log::error!("Failed to download avatar {}: {:?}", url, e);
+            let err_str = e.to_string();
+            if err_str.contains("401") || err_str.contains("M_UNKNOWN_TOKEN") {
+                log::error!("Authentication failed while downloading avatar: {}", err_str);
+            } else {
+                log::warn!("Failed to download avatar {}: {:?}", url, e);
+            }
             None
         }
     }

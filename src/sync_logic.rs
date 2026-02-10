@@ -179,6 +179,18 @@ pub async fn start_sync_loop(client: Client) {
     let sync_settings = SyncSettings::default();
     if let Err(e) = client_for_sync.sync(sync_settings).await {
          log::error!("Sync loop terminated with error: {:?}", e);
+         
+         // Notify C side about the failure if it's an auth error
+         let error_str = e.to_string();
+         if error_str.contains("M_UNKNOWN_TOKEN") || error_str.contains("401") {
+             let msg = "Matrix session expired or token invalidated. Please re-login.";
+             if let Ok(c_msg) = CString::new(msg) {
+                 let guard = crate::ffi::LOGIN_FAILED_CALLBACK.lock().unwrap();
+                 if let Some(cb) = *guard {
+                     cb(c_msg.as_ptr());
+                 }
+             }
+         }
     }
 }
 
