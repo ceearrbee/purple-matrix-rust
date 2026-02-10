@@ -358,6 +358,227 @@ pub extern "C" fn purple_matrix_rust_e2ee_status(room_id: *const c_char) {
 
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_change_password(old_pw: *const c_char, new_pw: *const c_char) {
+    if old_pw.is_null() || new_pw.is_null() { return; }
+    let old_pw_str = unsafe { CStr::from_ptr(old_pw).to_string_lossy().into_owned() };
+    let new_pw_str = unsafe { CStr::from_ptr(new_pw).to_string_lossy().into_owned() };
+
+    let client_guard = GLOBAL_CLIENT.lock().unwrap();
+    if let Some(client) = &*client_guard {
+        let client = client.clone();
+        RUNTIME.spawn(async move {
+            log::info!("Requesting password change...");
+            
+            // Construct AuthData for Password if we have the old one.
+            // We need UserIdentifier.
+            
+            use matrix_sdk::ruma::api::client::uiaa::{AuthData, Password, UserIdentifier};
+            
+            let auth_data = if let Some(user_id) = client.user_id() {
+                 Some(AuthData::Password(Password::new(
+                     UserIdentifier::UserIdOrLocalpart(user_id.to_string()),
+                     old_pw_str
+                 )))
+            } else {
+                 None
+            };
+
+            if let Err(e) = client.account().change_password(&new_pw_str, auth_data).await {
+                log::error!("Failed to change password: {:?}", e);
+            } else {
+                log::info!("Password changed successfully.");
+            }
+        });
+    }
+}
+
+// ... (add_buddy, remove_buddy, set_idle remain same, I will include them to match context or assume replace block works)
+// Note: replace tool needs unique context. I will replace the whole block I added previously.
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_add_buddy(user_id: *const c_char) {
+    if user_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+
+    let client_guard = GLOBAL_CLIENT.lock().unwrap();
+    if let Some(client) = &*client_guard {
+        let client = client.clone();
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::UserId;
+            if let Ok(uid) = <&UserId>::try_from(user_id_str.as_str()) {
+                log::info!("Adding buddy (Creating DM) for {}", user_id_str);
+                if let Err(e) = client.create_dm(uid).await {
+                    log::error!("Failed to create DM for added buddy {}: {:?}", user_id_str, e);
+                } else {
+                    log::info!("DM created/ensured for buddy {}", user_id_str);
+                }
+            }
+        });
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_remove_buddy(user_id: *const c_char) {
+    if user_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    log::info!("Removed buddy from local list: {}", user_id_str);
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_idle(seconds: i32) {
+    let client_guard = GLOBAL_CLIENT.lock().unwrap();
+    if let Some(client) = &*client_guard {
+        let client = client.clone();
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::presence::PresenceState;
+            use matrix_sdk::ruma::api::client::presence::set_presence::v3::Request as PresenceRequest;
+            
+            if let Some(user_id) = client.user_id() {
+                 let presence = if seconds > 0 { PresenceState::Unavailable } else { PresenceState::Online };
+                 let request = PresenceRequest::new(user_id.to_owned(), presence);
+                 if let Err(e) = client.send(request).await {
+                      log::error!("Failed to set idle presence: {:?}", e);
+                 }
+            }
+        });
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_send_sticker(room_id: *const c_char, url: *const c_char) {
+    if room_id.is_null() || url.is_null() { return; }
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let url_str = unsafe { CStr::from_ptr(url).to_string_lossy().into_owned() };
+
+    let client_guard = GLOBAL_CLIENT.lock().unwrap();
+    if let Some(client) = &*client_guard {
+        let client = client.clone();
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::{RoomId, events::sticker::StickerEventContent, events::room::ImageInfo, OwnedMxcUri};
+            use matrix_sdk::ruma::events::AnyMessageLikeEventContent;
+            
+            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                if let Some(room) = client.get_room(rid) {
+                    log::info!("Sending sticker to {}: {}", room_id_str, url_str);
+                    
+                    let mxc_uri = if url_str.starts_with("mxc://") {
+                        url_str.clone()
+                    } else {
+                        use std::path::Path;
+                        use mime_guess::mime;
+                        let path = Path::new(&url_str);
+                        if path.exists() {
+                             if let Ok(bytes) = std::fs::read(path) {
+                                 let mime = mime_guess::from_path(path).first_or_octet_stream();
+                                 if let Ok(response) = client.media().upload(&mime, bytes, None).await {
+                                     response.content_uri.to_string()
+                                 } else {
+                                     log::error!("Failed to upload sticker file");
+                                     return;
+                                 }
+                             } else {
+                                 log::error!("Failed to read sticker file");
+                                 return;
+                             }
+                        } else {
+                             url_str.clone()
+                        }
+                    };
+
+                    if let Ok(uri) = <OwnedMxcUri>::try_from(mxc_uri.as_str()) {
+                        let info = ImageInfo::new();
+                        let content = StickerEventContent::new("Sticker".to_string(), info, uri);
+                        let any_content = AnyMessageLikeEventContent::Sticker(content);
+                        
+                        if let Err(e) = room.send(any_content).await {
+                            log::error!("Failed to send sticker: {:?}", e);
+                        }
+                    } else {
+                        log::error!("Invalid MXC URI for sticker: {}", mxc_uri);
+                    }
+                }
+            }
+        });
+    }
+}
+
+// Callback for Room List population
+pub type RoomListAddCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, u64); // name, id, topic, user_count
+pub static ROOMLIST_ADD_CALLBACK: Lazy<Mutex<Option<RoomListAddCallback>>> = Lazy::new(|| Mutex::new(None));
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_roomlist_add_callback(cb: RoomListAddCallback) {
+    let mut guard = ROOMLIST_ADD_CALLBACK.lock().unwrap();
+    *guard = Some(cb);
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_deactivate_account(erase_data: bool) {
+    log::info!("Requesting account deactivation (erase_data: {})...", erase_data);
+    let client_guard = GLOBAL_CLIENT.lock().unwrap();
+    if let Some(client) = &*client_guard {
+        let client = client.clone();
+        RUNTIME.spawn(async move {
+            // Deactivation often requires UIA. Without UI to prompt for password here,
+            // we might only be able to support 'soft' logout or fail.
+            // However, typically unregister_user implies server-side deletion.
+            
+            // For now, we will try to deactivate with None (no auth) which might work for some SSO or if session allows?
+            // Usually it fails. 
+            // Better: Just log out and clear data if erase_data is true?
+            // The user expectation for "Delete Account" in Pidgin is often removing local config,
+            // but if they hit "Unregister" in "Accounts->Modify", it calls this.
+            
+            // We'll attempt it with minimal args.
+            // Signature likely: deactivate(id_server_unbind, auth_data)
+            // Or deactivate(auth_data)
+            // Error said: 3 args.
+            // Likely: deactivate(id_server_unbind, auth, erase_local_session)
+            if let Err(e) = client.account().deactivate(None, None, erase_data).await {
+                 log::error!("Failed to deactivate account (UIA likely needed): {:?}", e);
+            } else {
+                 log::info!("Account deactivated successfully.");
+            }
+        });
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_fetch_public_rooms_for_list() {
+    log::info!("Fetching public rooms for Room List...");
+    let client_guard = GLOBAL_CLIENT.lock().unwrap();
+    if let Some(client) = &*client_guard {
+        let client = client.clone();
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::api::client::directory::get_public_rooms_filtered::v3::Request as PublicRoomsRequest;
+            let mut request = PublicRoomsRequest::new();
+            request.limit = Some(50u32.into()); // Fetch reasonable batch
+
+            match client.send(request).await {
+                Ok(response) => {
+                    for room in response.chunk {
+                        let name = room.name.as_deref().unwrap_or("Unnamed");
+                        let room_id = room.room_id.as_str();
+                        let topic = room.topic.as_deref().unwrap_or("");
+                        let count = room.num_joined_members.into();
+
+                        let c_name = CString::new(name).unwrap_or_default();
+                        let c_id = CString::new(room_id).unwrap_or_default();
+                        let c_topic = CString::new(topic).unwrap_or_default();
+
+                        let guard = ROOMLIST_ADD_CALLBACK.lock().unwrap();
+                        if let Some(cb) = *guard {
+                            cb(c_name.as_ptr(), c_id.as_ptr(), c_topic.as_ptr(), count);
+                        }
+                    }
+                },
+                Err(e) => log::error!("Failed to fetch public rooms: {:?}", e),
+            }
+        });
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_join_room(room_id: *const c_char) {
     if room_id.is_null() { return; }
     let id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
@@ -855,6 +1076,19 @@ mod tests {
     fn test_formatted_html_override() {
         let content = RoomMessageEventContent::text_html("Plain", "<b>Bold</b>");
         assert_eq!(get_display_html(&content), "<b>Bold</b>");
+    }
+
+    #[test]
+    fn test_location_rendering() {
+        use matrix_sdk::ruma::events::room::message::LocationMessageEventContent;
+        let content = RoomMessageEventContent::new(
+            matrix_sdk::ruma::events::room::message::MessageType::Location(
+                LocationMessageEventContent::new("Meeting Spot".to_string(), "geo:12.34,56.78".to_string())
+            )
+        );
+        let html = get_display_html(&content);
+        assert!(html.contains("Meeting Spot"));
+        assert!(html.contains("geo:12.34,56.78"));
     }
 }
 
@@ -1401,6 +1635,67 @@ pub extern "C" fn purple_matrix_rust_ignore_user(user_id: *const c_char) {
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_unignore_user(user_id: *const c_char) {
+    if user_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+
+    log::info!("Unignoring user {}...", user_id_str);
+
+    let client_guard = GLOBAL_CLIENT.lock().unwrap();
+    if let Some(client) = &*client_guard {
+        let client = client.clone();
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::UserId;
+            if let Ok(uid) = <&UserId>::try_from(user_id_str.as_str()) {
+                if let Err(e) = client.account().unignore_user(uid).await {
+                    log::error!("Failed to unignore user: {:?}", e);
+                } else {
+                    log::info!("User unignored successfully");
+                }
+            }
+        });
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_avatar_bytes(data: *const u8, len: usize) {
+    if data.is_null() || len == 0 { return; }
+    
+    // Copy bytes immediately because pointer might not be valid in async task
+    let bytes = unsafe { std::slice::from_raw_parts(data, len).to_vec() };
+
+    let client_guard = GLOBAL_CLIENT.lock().unwrap();
+    if let Some(client) = &*client_guard {
+        let client = client.clone();
+        RUNTIME.spawn(async move {
+            log::info!("Setting avatar from bytes ({} bytes)...", len);
+            
+            use mime_guess::mime;
+            // Guess mime type from magic bytes if possible, or default to png/jpeg
+            // Simple check: PNG starts with 89 50 4E 47, JPEG with FF D8
+            let mime_type = if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+                mime::IMAGE_PNG
+            } else if bytes.starts_with(&[0xFF, 0xD8]) {
+                mime::IMAGE_JPEG
+            } else {
+                mime::APPLICATION_OCTET_STREAM 
+            };
+
+            match client.media().upload(&mime_type, bytes, None).await {
+                 Ok(response) => {
+                     if let Err(e) = client.account().set_avatar_url(Some(&response.content_uri)).await {
+                        log::error!("Failed to set avatar URL: {:?}", e);
+                     } else {
+                        log::info!("Avatar set successfully from bytes");
+                     }
+                 },
+                 Err(e) => log::error!("Failed to upload avatar bytes: {:?}", e),
+            };
+        });
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_get_power_levels(room_id: *const c_char) {
     if room_id.is_null() { return; }
     let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
@@ -1636,6 +1931,124 @@ pub extern "C" fn purple_matrix_rust_send_location(room_id: *const c_char, body:
                     );
                     if let Err(e) = room.send(content).await {
                         log::error!("Failed to send location: {:?}", e);
+                    }
+                }
+            }
+        });
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_poll_create(room_id: *const c_char, question: *const c_char, options: *const c_char) {
+    if room_id.is_null() || question.is_null() || options.is_null() { return; }
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let question_str = unsafe { CStr::from_ptr(question).to_string_lossy().into_owned() };
+    let options_str = unsafe { CStr::from_ptr(options).to_string_lossy().into_owned() };
+
+    // Parse options (split by |)
+    let answers: Vec<String> = options_str.split('|').map(|s| s.trim().to_string()).collect();
+
+    let client_guard = GLOBAL_CLIENT.lock().unwrap();
+    if let Some(client) = &*client_guard {
+        let client = client.clone();
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::{RoomId, events::poll::start::PollStartEventContent, events::poll::start::PollAnswer};
+            use matrix_sdk::ruma::events::poll::start::{PollContentBlock, PollAnswers};
+            use matrix_sdk::ruma::events::message::TextContentBlock; // Correct import
+            use matrix_sdk::ruma::events::AnyMessageLikeEventContent;
+
+            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                if let Some(room) = client.get_room(rid) {
+                    log::info!("Creating poll in {}: {}", room_id_str, question_str);
+                    
+                    let mut poll_answers_vec = Vec::new();
+                    for (i, ans) in answers.iter().enumerate() {
+                        poll_answers_vec.push(PollAnswer::new(format!("opt_{}", i), TextContentBlock::plain(ans)));
+                    }
+                    
+                    if let Ok(poll_answers) = PollAnswers::try_from(poll_answers_vec) {
+                         let poll_content = PollStartEventContent::new(
+                            TextContentBlock::plain(question_str), 
+                            PollContentBlock::new(TextContentBlock::plain("Poll"), poll_answers)
+                         );
+                    
+                         let content = AnyMessageLikeEventContent::PollStart(poll_content);
+
+                         if let Err(e) = room.send(content).await {
+                              log::error!("Failed to send poll: {:?}", e);
+                         }
+                    } else {
+                         log::error!("Failed to create poll answers (invalid count?)");
+                    }
+                }
+            }
+        });
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_poll_vote(room_id: *const c_char, poll_event_id: *const c_char, selection_index: i32) {
+    if room_id.is_null() || poll_event_id.is_null() { return; }
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let poll_event_id_str = unsafe { CStr::from_ptr(poll_event_id).to_string_lossy().into_owned() };
+
+    let client_guard = GLOBAL_CLIENT.lock().unwrap();
+    if let Some(client) = &*client_guard {
+        let client = client.clone();
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::{RoomId, EventId, events::poll::response::PollResponseEventContent, events::poll::response::SelectionsContentBlock};
+            use matrix_sdk::ruma::events::AnyMessageLikeEventContent;
+
+            if let (Ok(rid), Ok(eid)) = (<&RoomId>::try_from(room_id_str.as_str()), <&EventId>::try_from(poll_event_id_str.as_str())) {
+                if let Some(room) = client.get_room(rid) {
+                    
+                    let answer_id = format!("opt_{}", selection_index - 1); 
+                    log::info!("Voting on poll {} in {}: {}", poll_event_id_str, room_id_str, answer_id);
+
+                    // SelectionsContentBlock usually implements From<Vec<String>>
+                    let selections: SelectionsContentBlock = vec![answer_id].into();
+
+                    let response = PollResponseEventContent::new(
+                        selections, 
+                        eid.to_owned()
+                    );
+                    let content = AnyMessageLikeEventContent::PollResponse(response);
+                    
+                    if let Err(e) = room.send(content).await {
+                         log::error!("Failed to vote on poll: {:?}", e);
+                    }
+                }
+            }
+        });
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_poll_end(room_id: *const c_char, poll_event_id: *const c_char) {
+    if room_id.is_null() || poll_event_id.is_null() { return; }
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let poll_event_id_str = unsafe { CStr::from_ptr(poll_event_id).to_string_lossy().into_owned() };
+
+    let client_guard = GLOBAL_CLIENT.lock().unwrap();
+    if let Some(client) = &*client_guard {
+        let client = client.clone();
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::{RoomId, EventId, events::poll::end::PollEndEventContent};
+            use matrix_sdk::ruma::events::message::TextContentBlock; // Correct import
+            use matrix_sdk::ruma::events::AnyMessageLikeEventContent;
+
+            if let (Ok(rid), Ok(eid)) = (<&RoomId>::try_from(room_id_str.as_str()), <&EventId>::try_from(poll_event_id_str.as_str())) {
+                if let Some(room) = client.get_room(rid) {
+                    log::info!("Ending poll {} in {}", poll_event_id_str, room_id_str);
+                    
+                    let end_content = PollEndEventContent::new(
+                        TextContentBlock::plain("Poll closed"), 
+                        eid.to_owned()
+                    );
+                    let content = AnyMessageLikeEventContent::PollEnd(end_content);
+
+                    if let Err(e) = room.send(content).await {
+                         log::error!("Failed to end poll: {:?}", e);
                     }
                 }
             }

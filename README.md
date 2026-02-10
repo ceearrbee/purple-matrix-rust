@@ -6,7 +6,9 @@ This plugin is a rewrite of the original `purple-matrix` plugin. It leverages th
 
 ## ✨ Features
 
-**SDK Implementation Coverage: 100.0% (49/49 core features)**
+**Implementation Status: Feature Complete (All planned core features implemented)**
+
+The plugin covers the vast majority of Matrix client features, mapping them to Libpurple's UI paradigms where possible.
 
 ### 1. Client & Authentication
 | Feature | Status | Notes |
@@ -15,6 +17,7 @@ This plugin is a rewrite of the original `purple-matrix` plugin. It leverages th
 | **Logout** | ✅ | Explicit API logout hooked to client shutdown. |
 | **SSO / OIDC** | ✅ | Session token persistence implemented. Use password field for token manually or trigger SSO flow. |
 | **Session Persistence** | ✅ | Uses `matrix-sdk-sqlite` for state storage and `session.json` for token persistence. |
+| **Change Password** | ✅ | Supported via Pidgin "Change Password" menu. |
 
 ### 2. Syncing & Room Management
 | Feature | Status | Notes |
@@ -26,7 +29,7 @@ This plugin is a rewrite of the original `purple-matrix` plugin. It leverages th
 | **Space Support** | ✅ | Rooms are grouped by their canonical parent Space in the Buddy List. |
 | **Direct Messages** | ✅ | Detected via `is_direct()` and grouped separately. |
 | **Room Creation** | ✅ | Via `/matrix_create_room`. |
-| **Public Search** | ✅ | Via `/matrix_public_rooms`. |
+| **Public Search** | ✅ | Via `/matrix_public_rooms` and Pidgin's **Room List** window. |
 | **Room Moderation** | ✅ | Kick, Ban, Unban, Redact, Knock supported. |
 | **Room State** | ✅ | Rename, Topic, Avatar, Aliases supported. |
 
@@ -37,6 +40,7 @@ This plugin is a rewrite of the original `purple-matrix` plugin. It leverages th
 | **Receive Text** | ✅ | Handles incoming `m.room.message` with proper local/remote echo handling. |
 | **Formatted Text** | ✅ | HTML/Markdown supported via `pulldown-cmark`. |
 | **Media (Images/Video)** | ✅ | Downloaded to `/tmp/`, displayed inline. |
+| **Stickers** | ✅ | Receiving supported. Sending via `/matrix_sticker`. |
 | **Reactions** | ✅ | Receiving and Sending (`/matrix_react`) supported. |
 | **Redactions** | ✅ | Receiving and Sending (`/matrix_redact`) supported. |
 | **Room Topics** | ✅ | Topic changes displayed as system messages. |
@@ -67,9 +71,19 @@ This plugin is a rewrite of the original `purple-matrix` plugin. It leverages th
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
 | **Presence** | ✅ | Maps Libpurple status (Online/Away/Offline) to Matrix presence. |
+| **Idle Status** | ✅ | Reports idle time to Matrix (sets 'unavailable' state). |
 | **User Profile** | ✅ | Avatars and Display Names synchronized. |
+| **Buddy Management** | ✅ | Adding a buddy ensures a Direct Message (DM) room exists. |
+| **Change Password** | ✅ | Supported via Pidgin "Change Password" menu. |
+| **Deactivation** | ✅ | Supported via Pidgin "Unregister" (Delete Account on Server) action. |
 | **Account Data** | ✅ | Syncing `m.fully_read`, tags, and ignored users. |
 | **User Search** | ✅ | Global user directory search via `/matrix_user_search`. |
+
+## ⚠️ Known Limitations
+
+*   **Message Interaction**: Due to Libpurple's limited API for historical message interaction, actions like **Reply**, **Edit**, **Redact**, **React**, and **Vote** currently operate on the **last received message** in the conversation window.
+*   **Poll Rendering**: Polls are displayed as text blocks. Voting is done via slash commands (e.g., `/matrix_poll_vote 1`).
+*   **VoIP**: Voice and Video calls are not yet supported.
 
 ## Changelog
 

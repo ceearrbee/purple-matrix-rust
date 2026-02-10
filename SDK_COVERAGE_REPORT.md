@@ -33,7 +33,7 @@ This document tracks the implementation status of Matrix SDK features within the
 | **Receive Text** | ✅ Implemented | Handles incoming `m.room.message`. |
 | **Formatted Text** | ✅ Implemented | HTML/Markdown parsing implemented using `pulldown-cmark`. |
 | **Media (Images/Video)** | ✅ Implemented | Downloaded to `/tmp/` and displayed inline via `file://` URI. |
-| **Stickers** | ✅ Implemented | Optimized: Downloads to temp cache and uses `file://` URI. |
+| **Stickers** | ✅ Implemented | Receiving supported. Sending via `/matrix_sticker <url>`. |
 | **Redactions** | ✅ Implemented | Received redactions logged/displayed. Sending via `/matrix_redact`. |
 | **Message Edits** | ✅ Implemented | Sending via `/matrix_edit`. |
 | **Replies** | ✅ Implemented | Sending via `/matrix_reply`. |
