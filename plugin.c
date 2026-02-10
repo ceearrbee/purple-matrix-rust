@@ -390,11 +390,13 @@ static gboolean process_msg_cb(gpointer data) {
     }
 
     // Ensure it is in the buddy list (grouped properly)
-    if (d->thread_root_id && separate_threads) {
+    if (d->thread_root_id && strlen(d->thread_root_id) > 0 && separate_threads) {
       purple_debug_info(
           "purple-matrix-rust",
           "process_msg_cb calling ensure_thread_in_blist for %s\n", target_id);
-      ensure_thread_in_blist(account, target_id, d->message, d->room_id);
+      char *clean_alias = purple_markup_strip_html(d->message);
+      ensure_thread_in_blist(account, target_id, clean_alias, d->room_id);
+      g_free(clean_alias);
     }
 
     if (!conv) {
@@ -1004,12 +1006,6 @@ static GList *matrix_chat_info(PurpleConnection *gc) {
   pce->label = _("Room ID");
   pce->identifier = "room_id";
   pce->required = TRUE;
-  m = g_list_append(m, pce);
-
-  pce = g_new0(struct proto_chat_entry, 1);
-  pce->label = _("Avatar Path");
-  pce->identifier = "avatar_path";
-  pce->required = FALSE;
   m = g_list_append(m, pce);
 
   return m;

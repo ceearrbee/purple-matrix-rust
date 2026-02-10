@@ -1212,6 +1212,12 @@ pub extern "C" fn purple_matrix_rust_send_file(id: *const c_char, filename: *con
                              log::error!("Failed to send file event: {:?}", e);
                          } else {
                              log::info!("File sent successfully");
+                             
+                             // Delete temporary pasted images
+                             if file_name.starts_with("matrix_pasted_") {
+                                 log::info!("Cleaning up temporary pasted file: {}", filename_str);
+                                 let _ = std::fs::remove_file(path);
+                             }
                          }
                      } else {
                          log::error!("Failed to upload file");
