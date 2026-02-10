@@ -86,6 +86,9 @@ extern void purple_matrix_rust_e2ee_status(const char *room_id);
 extern void purple_matrix_rust_verify_user(const char *user_id);
 extern void purple_matrix_rust_recover_keys(const char *passphrase);
 extern void purple_matrix_rust_logout(void);
+extern void purple_matrix_rust_send_location(const char *room_id,
+                                             const char *body,
+                                             const char *geo_uri);
 extern void purple_matrix_rust_send_read_receipt(const char *room_id,
                                                  const char *event_id);
 extern void purple_matrix_rust_send_reaction(const char *room_id,
@@ -1142,12 +1145,24 @@ static PurpleCmdRet cmd_help(PurpleConversation *conv, const gchar *cmd,
                   "<b>/matrix_thread &lt;msg&gt;</b>: Reply in thread<br>");
   g_string_append(msg, "<b>/matrix_set_name &lt;name&gt;</b>: Rename room<br>");
   g_string_append(msg, "<b>/matrix_set_topic &lt;topic&gt;</b>: Set topic<br>");
+  g_string_append(msg, "<b>/matrix_location &lt;desc&gt; &lt;geo_uri&gt;</b>: Send location<br>");
   g_string_append(msg, "<b>/matrix_mute / _unmute</b>: Mute/Unmute room<br>");
   g_string_append(msg, "<b>/matrix_logout</b>: Log out session<br>");
 
   purple_conversation_write(conv, "Matrix Help", msg->str,
                             PURPLE_MESSAGE_SYSTEM, time(NULL));
   g_string_free(msg, TRUE);
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_location(PurpleConversation *conv, const gchar *cmd,
+                                 gchar **args, gchar **error, void *data) {
+  if (!args[0] || !*args[0] || !args[1] || !*args[1]) {
+    *error = g_strdup("Usage: /matrix_location <description> <geo_uri>");
+    return PURPLE_CMD_RET_FAILED;
+  }
+  const char *room_id = purple_conversation_get_name(conv);
+  purple_matrix_rust_send_location(room_id, args[0], args[1]);
   return PURPLE_CMD_RET_OK;
 }
 
@@ -2519,6 +2534,12 @@ static void init_plugin(PurplePlugin *plugin) {
                       PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT,
                       "prpl-matrix-rust", cmd_help,
                       "matrix_help: List all available Matrix commands", NULL);
+
+  purple_cmd_register(
+      "matrix_location", "ww", PURPLE_CMD_P_PLUGIN,
+      PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust",
+      cmd_location,
+      "matrix_location <description> <geo_uri>: Send a location message", NULL);
 }
 
 extern void purple_matrix_rust_init_verification_cbs(

@@ -198,6 +198,19 @@ pub async fn render_room_message(ev: &OriginalSyncRoomMessageEvent, room: &Room)
             }
             if media_path.is_none() { body = format!("[Audio: {}] (Download failed)", content.body); }
         },
+        MessageType::Location(content) => {
+            let geo = &content.geo_uri;
+            // geo:52.5186,13.3761;u=35
+            let parts: Vec<&str> = geo.trim_start_matches("geo:").split(';').next().unwrap_or("").split(',').collect();
+            if parts.len() >= 2 {
+                let lat = parts[0];
+                let lon = parts[1];
+                body = format!("[Location: {}] <a href=\"https://www.openstreetmap.org/?mlat={}&mlon={}#map=16/{}/{}\">(View on Map)</a>", 
+                    content.body, lat, lon, lat, lon);
+            } else {
+                body = format!("[Location: {}] ({})", content.body, geo);
+            }
+        },
         _ => {
             body = crate::get_display_html(&ev.content);
         }

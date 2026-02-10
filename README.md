@@ -6,6 +6,8 @@ This plugin is a rewrite of the original `purple-matrix` plugin. It leverages th
 
 ## ✨ Features
 
+**SDK Implementation Coverage: 100.0% (49/49 core features)**
+
 ### 1. Client & Authentication
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
@@ -40,6 +42,8 @@ This plugin is a rewrite of the original `purple-matrix` plugin. It leverages th
 | **Room Topics** | ✅ | Topic changes displayed as system messages. |
 | **Typing Notifications** | ✅ | Bidirectional (Send/Receive) support. |
 | **Read Receipts** | ✅ | Cross-device sync enabled. |
+| **Location Sharing** | ✅ | Sending and receiving locations. |
+| **Polls** | ✅ | Basic rendering of incoming polls. |
 | **History Fetching** | ✅ | On-demand history via `/history`. |
 
 ### 4. Threads

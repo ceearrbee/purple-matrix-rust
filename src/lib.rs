@@ -824,6 +824,7 @@ pub fn get_display_html(content: &matrix_sdk::ruma::events::room::message::RoomM
         MessageType::Video(video_content) => format!("[Video: {}]", video_content.body),
         MessageType::Audio(audio_content) => format!("[Audio: {}]", audio_content.body),
         MessageType::File(file_content) => format!("[File: {}]", file_content.body),
+        MessageType::Location(location_content) => format!("[Location: {}] ({})", location_content.body, location_content.geo_uri),
         _ => "[Unsupported Message Type]".to_string(),
     }
 }
@@ -1606,6 +1607,37 @@ pub extern "C" fn purple_matrix_rust_export_room_keys(path: *const c_char, passp
                 log::error!("Failed to export room keys: {:?}", e);
             } else {
                 log::info!("Room keys exported successfully");
+            }
+        });
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_send_location(room_id: *const c_char, body: *const c_char, geo_uri: *const c_char) {
+    if room_id.is_null() || body.is_null() || geo_uri.is_null() { return; }
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let body_str = unsafe { CStr::from_ptr(body).to_string_lossy().into_owned() };
+    let geo_uri_str = unsafe { CStr::from_ptr(geo_uri).to_string_lossy().into_owned() };
+
+    let client_guard = GLOBAL_CLIENT.lock().unwrap();
+    if let Some(client) = &*client_guard {
+        let client = client.clone();
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::RoomId;
+            use matrix_sdk::ruma::events::room::message::{RoomMessageEventContent, LocationMessageEventContent};
+
+            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                if let Some(room) = client.get_room(rid) {
+                    log::info!("Sending location to {}: {}", room_id_str, geo_uri_str);
+                    let content = RoomMessageEventContent::new(
+                        matrix_sdk::ruma::events::room::message::MessageType::Location(
+                            LocationMessageEventContent::new(body_str, geo_uri_str)
+                        )
+                    );
+                    if let Err(e) = room.send(content).await {
+                        log::error!("Failed to send location: {:?}", e);
+                    }
+                }
             }
         });
     }

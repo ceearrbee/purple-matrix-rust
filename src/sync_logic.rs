@@ -12,7 +12,7 @@ use matrix_sdk::{
     Client, 
 };
 use std::ffi::CString;
-use crate::handlers::{messages, presence, typing, reactions, room_state, account_data};
+use crate::handlers::{messages, presence, typing, reactions, room_state, account_data, polls};
 
 pub async fn start_sync_loop(client: Client) {
     let client_for_sync = client.clone();
@@ -184,6 +184,7 @@ pub async fn start_sync_loop(client: Client) {
     client_for_sync.add_event_handler(room_state::handle_room_member);
     client_for_sync.add_event_handler(room_state::handle_stripped_member);
     client_for_sync.add_event_handler(account_data::handle_account_data);
+    client_for_sync.add_event_handler(polls::handle_poll_start);
 
     // Verification
     client_for_sync.add_event_handler(

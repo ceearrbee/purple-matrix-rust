@@ -44,6 +44,8 @@ This document tracks the implementation status of Matrix SDK features within the
 | **Power Levels** | ✅ Implemented | Support for viewing and setting levels via `/matrix_power_levels`. |
 | **Room State** | ✅ Implemented | Renaming rooms, setting topics, and downloading/displaying room avatars. |
 | **Content Reporting** | ✅ Implemented | Reporting abusive content via `/matrix_report <event_id>`. |
+| **Location Sharing** | ✅ Implemented | Sending and receiving locations with OpenStreetMap links. |
+| **Polls** | ✅ Implemented | Basic rendering of incoming poll start events. |
 
 ## 4. Threads
 | Feature | Status | Notes |
