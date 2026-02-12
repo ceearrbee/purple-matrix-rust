@@ -676,6 +676,85 @@ static PurpleChat *find_chat_manual(PurpleAccount *account,
   return NULL;
 }
 
+static gboolean is_virtual_room_id(const char *room_id) {
+  return room_id && strchr(room_id, '|') != NULL;
+}
+
+static char *derive_base_group_from_threads_group(const char *group_name) {
+  if (!group_name || !*group_name) {
+    return g_strdup("Matrix Rooms / Rooms");
+  }
+  const char *threads = strstr(group_name, " / Threads");
+  if (!threads) {
+    return g_strdup(group_name);
+  }
+  char *base = g_strndup(group_name, (gsize)(threads - group_name));
+  // Input looks like "<space-or-tag> / Rooms / <room> / Threads".
+  // Drop the trailing " / <room>" to get "<space-or-tag> / Rooms".
+  char *last_sep = g_strrstr(base, " / ");
+  if (last_sep) {
+    *last_sep = '\0';
+  }
+  if (!*base) {
+    g_free(base);
+    return g_strdup("Matrix Rooms / Rooms");
+  }
+  return base;
+}
+
+static void cleanup_stale_thread_labels(PurpleAccount *account) {
+  if (!account) {
+    return;
+  }
+  PurpleBlistNode *gnode = NULL;
+  for (gnode = purple_blist_get_root(); gnode; gnode = gnode->next) {
+    if (!PURPLE_BLIST_NODE_IS_GROUP(gnode)) {
+      continue;
+    }
+    for (PurpleBlistNode *cnode = gnode->child; cnode; cnode = cnode->next) {
+      if (!PURPLE_BLIST_NODE_IS_CHAT(cnode)) {
+        continue;
+      }
+      PurpleChat *chat = (PurpleChat *)cnode;
+      if (purple_chat_get_account(chat) != account) {
+        continue;
+      }
+
+      GHashTable *components = purple_chat_get_components(chat);
+      if (!components) {
+        continue;
+      }
+      const char *room_id = g_hash_table_lookup(components, "room_id");
+      if (!room_id || is_virtual_room_id(room_id)) {
+        continue;
+      }
+
+      if (chat->alias && g_str_has_prefix(chat->alias, "Thread: ")) {
+        const char *clean_alias = chat->alias + strlen("Thread: ");
+        if (clean_alias && *clean_alias) {
+          purple_blist_alias_chat(chat, clean_alias);
+        }
+      }
+
+      PurpleBlistNode *parent = PURPLE_BLIST_NODE(chat)->parent;
+      if (parent && PURPLE_BLIST_NODE_IS_GROUP(parent)) {
+        const char *group_name = purple_group_get_name((PurpleGroup *)parent);
+        if (group_name && strstr(group_name, " / Threads")) {
+          char *target_group_name =
+              derive_base_group_from_threads_group(group_name);
+          PurpleGroup *target_group = purple_find_group(target_group_name);
+          if (!target_group) {
+            target_group = purple_group_new(target_group_name);
+            purple_blist_add_group(target_group, NULL);
+          }
+          purple_blist_add_chat(chat, target_group, NULL);
+          g_free(target_group_name);
+        }
+      }
+    }
+  }
+}
+
 static gboolean process_room_cb(gpointer data) {
   MatrixRoomData *d = (MatrixRoomData *)data;
   PurpleAccount *account = find_matrix_account();
@@ -5112,6 +5191,7 @@ static gboolean process_connected_cb(gpointer data) {
     PurpleAccount *account = purple_connection_get_account(gc);
     const char *proto_id = purple_account_get_protocol_id(account);
     if (strcmp(proto_id, "prpl-matrix-rust") == 0) {
+      cleanup_stale_thread_labels(account);
       if (purple_connection_get_state(gc) == PURPLE_CONNECTING) {
         purple_connection_set_state(gc, PURPLE_CONNECTED);
         purple_debug_info("purple-matrix-rust",
