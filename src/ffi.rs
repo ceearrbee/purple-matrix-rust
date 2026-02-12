@@ -10,13 +10,19 @@ pub type InviteCallback = extern "C" fn(*const c_char, *const c_char);
 pub type UpdateBuddyCallback = extern "C" fn(*const c_char, *const c_char, *const c_char);
 pub type PresenceCallback = extern "C" fn(*const c_char, bool);
 pub type ChatTopicCallback = extern "C" fn(*const c_char, *const c_char, *const c_char);
-pub type ChatUserCallback = extern "C" fn(*const c_char, *const c_char, bool);
+// room_id, user_id, add, alias, avatar_path
+pub type ChatUserCallback = extern "C" fn(*const c_char, *const c_char, bool, *const c_char, *const c_char);
 pub type SsoCallback = extern "C" fn(*const c_char);
 pub type ConnectedCallback = extern "C" fn();
 pub type LoginFailedCallback = extern "C" fn(*const c_char);
 pub type VerificationRequestCallback = extern "C" fn(*const c_char, *const c_char);
 pub type VerificationEmojiCallback = extern "C" fn(*const c_char, *const c_char, *const c_char);
-pub type ReadMarkerCallback = extern "C" fn(*const c_char, *const c_char);
+pub type ShowVerificationQrCallback = extern "C" fn(*const c_char, *const c_char);
+pub type ReadMarkerCallback = extern "C" fn(*const c_char, *const c_char, *const c_char);
+pub type RoomPreviewCallback = extern "C" fn(*const c_char, *const c_char);
+pub type StickerPackCallback = extern "C" fn(*const c_char, *const c_char, *mut std::ffi::c_void);
+pub type StickerCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *mut std::ffi::c_void);
+pub type StickerDoneCallback = extern "C" fn(*mut std::ffi::c_void);
 
 // Global callbacks
 pub static MSG_CALLBACK: Lazy<Mutex<Option<MsgCallback>>> = Lazy::new(|| Mutex::new(None));
@@ -25,6 +31,7 @@ pub static ROOM_JOINED_CALLBACK: Lazy<Mutex<Option<RoomJoinedCallback>>> = Lazy:
 pub static INVITE_CALLBACK: Mutex<Option<InviteCallback>> = Mutex::new(None);
 pub static SAS_REQUEST_CALLBACK: Mutex<Option<VerificationRequestCallback>> = Mutex::new(None);
 pub static SAS_HAVE_EMOJI_CALLBACK: Mutex<Option<VerificationEmojiCallback>> = Mutex::new(None);
+pub static SHOW_VERIFICATION_QR_CALLBACK: Mutex<Option<ShowVerificationQrCallback>> = Mutex::new(None);
 pub static UPDATE_BUDDY_CALLBACK: Lazy<Mutex<Option<UpdateBuddyCallback>>> = Lazy::new(|| Mutex::new(None));
 pub static PRESENCE_CALLBACK: Lazy<Mutex<Option<PresenceCallback>>> = Lazy::new(|| Mutex::new(None));
 pub static CHAT_TOPIC_CALLBACK: Lazy<Mutex<Option<ChatTopicCallback>>> = Lazy::new(|| Mutex::new(None));
@@ -33,6 +40,7 @@ pub static SSO_CALLBACK: Mutex<Option<SsoCallback>> = Mutex::new(None);
 pub static CONNECTED_CALLBACK: Mutex<Option<ConnectedCallback>> = Mutex::new(None);
 pub static LOGIN_FAILED_CALLBACK: Mutex<Option<LoginFailedCallback>> = Mutex::new(None);
 pub static READ_MARKER_CALLBACK: Mutex<Option<ReadMarkerCallback>> = Mutex::new(None);
+pub static ROOM_PREVIEW_CALLBACK: Lazy<Mutex<Option<RoomPreviewCallback>>> = Lazy::new(|| Mutex::new(None));
 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_set_msg_callback(cb: MsgCallback) {
@@ -67,12 +75,15 @@ pub extern "C" fn purple_matrix_rust_init_invite_cb(cb: InviteCallback) {
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_init_verification_cbs(
     req_cb: VerificationRequestCallback,
-    emoji_cb: VerificationEmojiCallback
+    emoji_cb: VerificationEmojiCallback,
+    qr_cb: ShowVerificationQrCallback
 ) {
     let mut guard = SAS_REQUEST_CALLBACK.lock().unwrap();
     *guard = Some(req_cb);
     let mut guard = SAS_HAVE_EMOJI_CALLBACK.lock().unwrap();
     *guard = Some(emoji_cb);
+    let mut guard = SHOW_VERIFICATION_QR_CALLBACK.lock().unwrap();
+    *guard = Some(qr_cb);
 }
 
 #[no_mangle]
@@ -124,4 +135,22 @@ pub extern "C" fn purple_matrix_rust_set_show_user_info_callback(cb: ShowUserInf
 pub extern "C" fn purple_matrix_rust_set_read_marker_callback(cb: ReadMarkerCallback) {
     let mut guard = READ_MARKER_CALLBACK.lock().unwrap();
     *guard = Some(cb);
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_room_preview_callback(cb: RoomPreviewCallback) {
+    let mut guard = ROOM_PREVIEW_CALLBACK.lock().unwrap();
+    *guard = Some(cb);
+}
+
+pub fn send_system_message(_user_id: &str, msg: &str) {
+    let c_sender = std::ffi::CString::new("System").unwrap_or_default();
+    let c_body = std::ffi::CString::new(msg).unwrap_or_default();
+    // We use "System" as the room_id effectively acting as a console
+    let c_room_id = std::ffi::CString::new("System").unwrap_or_default();
+    
+    let guard = MSG_CALLBACK.lock().unwrap();
+    if let Some(cb) = *guard {
+         cb(c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), 0);
+    }
 }

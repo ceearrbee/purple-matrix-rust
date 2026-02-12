@@ -12,7 +12,7 @@ use matrix_sdk::{
     Client, 
 };
 use std::ffi::CString;
-use crate::handlers::{messages, presence, typing, reactions, room_state, account_data, polls};
+use crate::handlers::{messages, presence, typing, reactions, room_state, account_data, polls, receipts};
 
 pub async fn start_sync_loop(client: Client) {
     let client_for_sync = client.clone();
@@ -37,12 +37,12 @@ pub async fn start_sync_loop(client: Client) {
 
         let group = crate::grouping::get_room_group_name(&room).await;
         let topic = room.topic().unwrap_or_default();
-        let is_encrypted = room.is_encrypted().await.unwrap_or(false);
+        let is_encrypted = room.get_state_event_static::<matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent>().await.unwrap_or(None).is_some();
         
         // Download Room Avatar
         let mut avatar_path_str = String::new();
         if let Some(url) = room.avatar_url() {
-            if let Some(path) = crate::media_helper::download_avatar(client_for_sync.clone().client(), &url, room_id).await {
+            if let Some(path) = crate::media_helper::download_avatar(&client_for_sync, &url, room_id).await {
                 avatar_path_str = path;
             }
         }
@@ -167,8 +167,10 @@ pub async fn start_sync_loop(client: Client) {
     client_for_sync.add_event_handler(room_state::handle_room_topic);
     client_for_sync.add_event_handler(room_state::handle_room_member);
     client_for_sync.add_event_handler(room_state::handle_stripped_member);
+    client_for_sync.add_event_handler(room_state::handle_tombstone);
     client_for_sync.add_event_handler(account_data::handle_account_data);
     client_for_sync.add_event_handler(polls::handle_poll_start);
+    client_for_sync.add_event_handler(receipts::handle_receipt);
 
     // Verification
     client_for_sync.add_event_handler(
@@ -198,6 +200,10 @@ pub async fn start_sync_loop(client: Client) {
 
 // Logic to fetch history for a single room
 pub async fn fetch_room_history_logic(client: Client, room_id: String) {
+     fetch_room_history_logic_with_limit(client, room_id, 50).await;
+}
+
+pub async fn fetch_room_history_logic_with_limit(client: Client, room_id: String, limit: u16) {
      use matrix_sdk::ruma::events::room::message::Relation;
      use matrix_sdk::ruma::RoomId;
      
@@ -205,7 +211,7 @@ pub async fn fetch_room_history_logic(client: Client, room_id: String) {
          if let Some(room) = client.get_room(ruma_room_id) {
              log::info!("Scanning room {} history for threads...", room_id);
              let mut options = matrix_sdk::room::MessagesOptions::backward();
-             options.limit = 50u16.into();
+             options.limit = limit.into();
              
              // Check for pagination token
              if let Some(token) = crate::PAGINATION_TOKENS.lock().unwrap().get(&room_id) {

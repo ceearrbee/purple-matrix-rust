@@ -3,111 +3,89 @@ use std::os::raw::c_char;
 use std::path::PathBuf;
 use matrix_sdk::Client;
 use crate::ffi::{CONNECTED_CALLBACK, LOGIN_FAILED_CALLBACK, SSO_CALLBACK};
-use crate::{RUNTIME, GLOBAL_CLIENT, DATA_PATH};
+use crate::{RUNTIME, DATA_PATH, CLIENTS};
 use crate::sync_logic;
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_finish_sso(token: *const c_char) {
-    if token.is_null() { return; }
-    let token_str = unsafe { CStr::from_ptr(token).to_string_lossy().into_owned() };
-    
-    RUNTIME.spawn(async move {
-        let client_opt = {
-            let guard = GLOBAL_CLIENT.lock().unwrap();
-            guard.clone()
-        };
-        
-        if let Some(client) = client_opt {
-             log::info!("Finishing SSO login with token...");
-             match client.matrix_auth().login_token(&token_str).initial_device_display_name("Pidgin (Rust)").await {
-                 Ok(_) => {
-                     log::info!("SSO Login Successful! Persisting session...");
-                     finish_login_success(client).await;
-                 },
-                 Err(e) => {
-                     let err_msg = format!("SSO Login Failed: {:?}", e);
-                     log::error!("{}", err_msg);
-                     
-                     if err_msg.contains("Mismatched") || err_msg.contains("Session") {
-                         log::warn!("SSO Mismatch detected. Wiping data and retrying login...");
-                         
-                         // 1. Preserve config
-                         let hs_url = client.homeserver().to_string();
-                         
-                         // 2. Drop Client
-                         {
-                             let mut guard = GLOBAL_CLIENT.lock().unwrap();
-                             *guard = None;
-                         }
-                         drop(client); // Release DB lock
-                         
-                         // 3. Wipe Data
-                         let path_opt = {
-                              let guard = DATA_PATH.lock().unwrap();
-                              guard.clone()
-                         };
-                         
-                         if let Some(path) = path_opt {
-                             log::info!("Deleting data directory: {:?}", path);
-                             let _ = std::fs::remove_dir_all(&path);
-                             let _ = std::fs::create_dir_all(&path);
-                             
-                             // 4. Rebuild Client
-                             match build_client(&hs_url, &path).await {
-                                 Ok(new_client) => {
-                                     log::info!("Client rebuilt. Retrying login...");
-                                     
-                                     // Update Global
-                                     {
-                                         let mut guard = GLOBAL_CLIENT.lock().unwrap();
-                                         *guard = Some(new_client.clone());
-                                     }
-                                     
-                                     // 5. Retry Login
-                                     match new_client.matrix_auth().login_token(&token_str).initial_device_display_name("Pidgin (Rust)").await {
-                                         Ok(_) => {
-                                             log::info!("Retry SSO Login Successful!");
-                                             // Notify connected callback
-                                             {
-                                                 let guard = CONNECTED_CALLBACK.lock().unwrap();
-                                                 if let Some(cb) = *guard {
-                                                      cb();
-                                                 }
-                                             }
-                                             // Finish setup
-                                             finish_login_success(new_client).await;
-                                         },
-                                         Err(e2) => {
-                                             let msg = format!("Retry failed: {:?}", e2);
-                                             log::error!("{}", msg);
-                                             // Fallback report
-                                             let guard = LOGIN_FAILED_CALLBACK.lock().unwrap();
-                                             if let Some(cb) = *guard {
-                                                 let c_err = CString::new(msg).unwrap_or_default();
-                                                 cb(c_err.as_ptr());
-                                             }
-                                         }
-                                     }
-                                 },
-                                 Err(e_build) => {
-                                     log::error!("Failed to rebuild client for retry: {:?}", e_build);
-                                 }
-                             }
-                         }
-                     } else {
-                         // Notify user of non-mismatch error
-                         let guard = LOGIN_FAILED_CALLBACK.lock().unwrap();
-                         if let Some(cb) = *guard {
-                             let c_err = CString::new(err_msg).unwrap_or_default();
-                             cb(c_err.as_ptr());
-                         }
-                     }
-                 }
-             }
-        } else {
-            log::error!("Finish SSO called but no client instance found!");
+async fn finish_sso_internal(client: Client, token: String) {
+    log::info!("Finishing SSO login with token...");
+    match client.matrix_auth().login_token(&token).initial_device_display_name("Pidgin (Rust)").await {
+        Ok(_) => {
+            log::info!("SSO Login Successful! Persisting session...");
+            finish_login_success(client).await;
+        },
+        Err(e) => {
+            let err_msg = format!("SSO Login Failed: {:?}", e);
+            log::error!("{}", err_msg);
+            
+            if err_msg.contains("Mismatched") || err_msg.contains("Session") {
+                log::warn!("SSO Mismatch detected. Wiping data and retrying login...");
+                
+                // 1. Preserve config
+                let hs_url = client.homeserver().to_string();
+                
+                // 2. Drop Client - Implicitly dropped as we overwrite `client` or just ensure we don't use it.
+                // We need to drop the client instance to release DB lock if it holds it.
+                // `client` logic in `perform_login` retry handled this.
+                drop(client); 
+                
+                // 3. Wipe Data
+                let path_opt = {
+                        let guard = DATA_PATH.lock().unwrap();
+                        guard.clone()
+                };
+                
+                if let Some(path) = path_opt {
+                    log::info!("Deleting data directory: {:?}", path);
+                    let _ = std::fs::remove_dir_all(&path);
+                    let _ = std::fs::create_dir_all(&path);
+                    
+                    // 4. Rebuild Client
+                    match build_client(&hs_url, &path).await {
+                        Ok(new_client) => {
+                            log::info!("Client rebuilt. Retrying login...");
+                            
+                            // 5. Retry Login
+                            match new_client.matrix_auth().login_token(&token).initial_device_display_name("Pidgin (Rust)").await {
+                                Ok(_) => {
+                                    log::info!("Retry SSO Login Successful!");
+                                    // Notify connected callback
+                                    {
+                                        let guard = CONNECTED_CALLBACK.lock().unwrap();
+                                        if let Some(cb) = *guard {
+                                                cb();
+                                        }
+                                    }
+                                    // Finish setup
+                                    finish_login_success(new_client).await;
+                                },
+                                Err(e2) => {
+                                    let msg = format!("Retry failed: {:?}", e2);
+                                    log::error!("{}", msg);
+                                    // Fallback report
+                                    let guard = LOGIN_FAILED_CALLBACK.lock().unwrap();
+                                    if let Some(cb) = *guard {
+                                        let c_err = CString::new(msg).unwrap_or_default();
+                                        cb(c_err.as_ptr());
+                                    }
+                                }
+                            }
+                        },
+                        Err(e_build) => {
+                            log::error!("Failed to rebuild client for retry: {:?}", e_build);
+                        }
+                    }
+                }
+            } else {
+                // Notify user of non-mismatch error
+                let guard = LOGIN_FAILED_CALLBACK.lock().unwrap();
+                if let Some(cb) = *guard {
+                    let c_err = CString::new(err_msg).unwrap_or_default();
+                    cb(c_err.as_ptr());
+                }
+            }
         }
-    });
+    }
 }
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_login(
@@ -231,7 +209,7 @@ async fn perform_login(username: String, password: String, homeserver: String, d
                                    },
                                    tokens: SessionTokens {
                                        access_token: saved.access_token,
-                                       refresh_token: None,
+                                       refresh_token: saved.refresh_token,
                                    },
                                };
                                
@@ -286,8 +264,8 @@ async fn perform_login(username: String, password: String, homeserver: String, d
     // Unused variable removed: db_file
     
     {
-         let mut guard = GLOBAL_CLIENT.lock().unwrap();
-         *guard = Some(client.clone());
+         let mut clients = crate::CLIENTS.lock().unwrap();
+         clients.insert(client.user_id().map(|u| u.to_string()).unwrap_or(username.clone()), client.clone());
     }
 
     if !password.is_empty() {
@@ -342,6 +320,7 @@ struct SavedSession {
     user_id: String,
     device_id: String,
     access_token: String,
+    refresh_token: Option<String>,
 }
 
 async fn finish_login_success(client: Client) {
@@ -350,11 +329,13 @@ async fn finish_login_success(client: Client) {
          let user_id = client.user_id().map(|u| u.to_string()).unwrap_or_default();
          let device_id = client.device_id().map(|d| d.to_string()).unwrap_or_default();
          let access_token = session.access_token().to_string();
+         let refresh_token = session.get_refresh_token().map(|t: &str| t.to_string());
 
          let data = SavedSession {
              user_id,
              device_id,
              access_token, 
+             refresh_token,
          };
          
          // data_path logic needs to be robust. using DATA_PATH global.
@@ -376,8 +357,10 @@ async fn finish_login_success(client: Client) {
     }
 
     {
-         let mut guard = GLOBAL_CLIENT.lock().unwrap();
-         *guard = Some(client.clone());
+         let mut clients = crate::CLIENTS.lock().unwrap();
+         if let Some(user_id) = client.user_id() {
+             clients.insert(user_id.to_string(), client.clone());
+         }
     }
     {
          let guard = CONNECTED_CALLBACK.lock().unwrap();
@@ -448,19 +431,80 @@ fn start_sso_flow(client: Client) {
                         let _ = request.respond(response);
                         
                         // Finish SSO on Runtime
-                        purple_matrix_rust_finish_sso(CString::new(token).unwrap().as_ptr());
+                        RUNTIME.spawn(finish_sso_internal(client, token));
                 }
             }
     });
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_logout() {
-    log::info!("Disconnecting (Shutdown)...");
-    let mut guard = GLOBAL_CLIENT.lock().unwrap();
+pub extern "C" fn purple_matrix_rust_finish_sso(token: *const c_char) {
+    if token.is_null() {
+        return;
+    }
+    let token_str = unsafe { CStr::from_ptr(token).to_string_lossy().into_owned() };
+    if token_str.is_empty() {
+        return;
+    }
+
+    let pending_client = {
+        let clients = CLIENTS.lock().unwrap();
+        clients
+            .values()
+            .find(|c| c.user_id().is_none())
+            .cloned()
+            .or_else(|| clients.values().next().cloned())
+    };
+
+    if let Some(client) = pending_client {
+        RUNTIME.spawn(finish_sso_internal(client, token_str));
+    } else {
+        report_login_failure("SSO completion requested but no pending Matrix client is available.".to_string());
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_deactivate_account(erase_data: bool) {
+    let client_opt = {
+        let mut clients = CLIENTS.lock().unwrap();
+        if let Some((key, _)) = clients.iter().next() {
+            let key_owned = key.clone();
+            clients.remove(&key_owned)
+        } else {
+            None
+        }
+    };
+
+    if let Some(client) = client_opt {
+        RUNTIME.spawn(async move {
+            if let Err(e) = client.logout().await {
+                log::error!("Failed to logout during deactivation: {:?}", e);
+            }
+        });
+    }
+
+    if erase_data {
+        let path_opt = {
+            let guard = DATA_PATH.lock().unwrap();
+            guard.clone()
+        };
+        if let Some(path) = path_opt {
+            if let Err(e) = std::fs::remove_dir_all(&path) {
+                log::warn!("Failed to remove data directory {:?}: {:?}", path, e);
+            }
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_logout(user_id: *const c_char) {
+    if user_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    log::info!("Disconnecting {}...", user_id_str);
+    let mut clients = crate::CLIENTS.lock().unwrap();
     
     // Just drop the client to stop the sync loop.
-    if let Some(client) = guard.take() {
+    if let Some(client) = clients.remove(&user_id_str) {
          log::info!("Dropping global client instance for disconnect.");
          // Ensure client is dropped within the Tokio runtime context to prevent
          // "there is no reactor running" panics from internal components (e.g. deadpool).
@@ -471,11 +515,13 @@ pub extern "C" fn purple_matrix_rust_logout() {
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_destroy_session() {
-    log::info!("Explicit Logout Requested. Invalidating session...");
-    let mut guard = GLOBAL_CLIENT.lock().unwrap();
+pub extern "C" fn purple_matrix_rust_destroy_session(user_id: *const c_char) {
+    if user_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    log::info!("Explicit Logout Requested for {}. Invalidating session...", user_id_str);
+    let mut clients = crate::CLIENTS.lock().unwrap();
     
-    if let Some(client) = guard.take() {
+    if let Some(client) = clients.remove(&user_id_str) {
         RUNTIME.spawn(async move {
             // 1. Invalidate on server
             if let Err(e) = client.logout().await {
