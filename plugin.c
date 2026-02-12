@@ -543,24 +543,9 @@ static gboolean process_msg_cb(gpointer data) {
       }
     }
 
-    // Append Thread Reply Link if event_id is present (and not already in a
-    // thread)
-    // Prepend Thread Reply Icon if event_id is present (and not already in a
-    // thread)
-    char *final_msg = NULL;
-    if (d->event_id && !d->thread_root_id) {
-      // Use a shorter text hint for replies
-      char *hint = g_strdup_printf("[🧵/reply %s] ", d->event_id);
-      final_msg = g_strconcat(hint, d->message, NULL);
-      g_free(hint);
-    } else {
-      final_msg = g_strdup(d->message);
-    }
-
     // Deliver message to target room
-    serv_got_chat_in(gc, chat_id, d->sender, PURPLE_MESSAGE_RECV, final_msg,
+    serv_got_chat_in(gc, chat_id, d->sender, PURPLE_MESSAGE_RECV, d->message,
                      d->timestamp / 1000);
-    g_free(final_msg);
   }
 
   g_free(d->sender);
@@ -691,6 +676,21 @@ static gboolean process_room_cb(gpointer data) {
   MatrixRoomData *d = (MatrixRoomData *)data;
   PurpleAccount *account = find_matrix_account();
 
+  // Normal room population must never create/update virtual thread chats.
+  if (d->room_id && strchr(d->room_id, '|')) {
+    purple_debug_warning("purple-matrix-rust",
+                         "Skipping virtual thread id in process_room_cb: %s\n",
+                         d->room_id);
+    g_free(d->room_id);
+    g_free(d->name);
+    g_free(d->group_name);
+    g_free(d->avatar_url);
+    if (d->topic)
+      g_free(d->topic);
+    g_free(d);
+    return FALSE;
+  }
+
   // Determine key for group name (default to "Matrix Rooms" if NULL/Empty)
   const char *group_name = "Matrix Rooms";
   if (d->group_name && strlen(d->group_name) > 0) {
@@ -759,9 +759,23 @@ static gboolean process_room_cb(gpointer data) {
       }
       g_hash_table_replace(components, g_strdup("encrypted"),
                            g_strdup(d->encrypted ? "1" : "0"));
-      // Build move logic: check if it's in the right group
-      // But for now, just alias it. Moving is complex (remove/add).
-      // Let's at least rename it.
+
+      // If an existing room is in a stale group (for example from an old
+      // thread-grouping bug), move it to the current canonical group.
+      PurpleBlistNode *chat_node = PURPLE_BLIST_NODE(chat);
+      PurpleBlistNode *parent = chat_node ? chat_node->parent : NULL;
+      const char *current_group_name = NULL;
+      if (parent && PURPLE_BLIST_NODE_IS_GROUP(parent)) {
+        current_group_name = purple_group_get_name((PurpleGroup *)parent);
+      }
+      if (!current_group_name || g_strcmp0(current_group_name, group_name) != 0) {
+        purple_debug_info("purple-matrix-rust",
+                          "Moving room %s from group '%s' to '%s'\n",
+                          d->room_id,
+                          current_group_name ? current_group_name : "(none)",
+                          group_name);
+        purple_blist_add_chat(chat, group, NULL);
+      }
     }
 
     if (chat && d->name && strlen(d->name) > 0) {
@@ -1264,7 +1278,6 @@ static void poll_vote_action_cb(void *user_data, PurpleRequestFields *fields) {
   int index = purple_request_field_choice_get_value(field);
 
   char **options = g_strsplit(ctx->options_str, "|", -1);
-  const char *selected_opt = NULL;
   int count = 0;
   while (options[count])
     count++;
@@ -1527,7 +1540,9 @@ static void matrix_login(PurpleAccount *account) {
 static void matrix_close(PurpleConnection *gc) {
   // interactions to teardown rust client
   purple_debug_info("purple-matrix-rust", "Closing connection\n");
-  purple_matrix_rust_destroy_session(
+  // Normal disconnect must not invalidate the server session or delete session
+  // storage; doing so causes reconnect/login loops.
+  purple_matrix_rust_logout(
       purple_account_get_username(purple_connection_get_account(gc)));
 }
 
@@ -1641,15 +1656,11 @@ static char *matrix_get_chat_name(GHashTable *components);
 static GList *blist_node_menu_cb(PurpleBlistNode *node);
 
 static void matrix_chat_leave(PurpleConnection *gc, int id) {
-  PurpleConversation *conv = purple_find_chat(gc, id);
-  purple_debug_info("purple-matrix-rust", "Leaving chat id %d\n", id);
-
-  if (conv) {
-    const char *room_id = purple_conversation_get_name(conv);
-    purple_matrix_rust_leave_room(
-        purple_account_get_username(purple_connection_get_account(gc)),
-        room_id);
-  }
+  // Pidgin calls chat_leave when closing a chat window/tab.
+  // Do not map that to a Matrix room leave; leaving must stay explicit
+  // (e.g. /matrix_leave).
+  purple_debug_info("purple-matrix-rust",
+                    "chat_leave for id %d ignored (local close only)\n", id);
 }
 
 static void matrix_chat_invite(PurpleConnection *gc, int id,
@@ -1920,6 +1931,56 @@ static PurpleCmdRet cmd_logout(PurpleConversation *conv, const gchar *cmd,
   return PURPLE_CMD_RET_OK;
 }
 
+static PurpleCmdRet cmd_reconnect(PurpleConversation *conv, const gchar *cmd,
+                                  gchar **args, gchar **error, void *data) {
+  PurpleAccount *account = purple_conversation_get_account(conv);
+  PurpleConnection *gc = purple_account_get_connection(account);
+
+  if (gc) {
+    PurpleConnectionState state = purple_connection_get_state(gc);
+    if (state == PURPLE_CONNECTED) {
+      purple_conversation_write(conv, "System", "Already connected.",
+                                PURPLE_MESSAGE_SYSTEM, time(NULL));
+      return PURPLE_CMD_RET_OK;
+    }
+    if (state == PURPLE_CONNECTING) {
+      purple_conversation_write(conv, "System", "Connection attempt already in progress.",
+                                PURPLE_MESSAGE_SYSTEM, time(NULL));
+      return PURPLE_CMD_RET_OK;
+    }
+  }
+
+  purple_account_connect(account);
+  purple_conversation_write(conv, "System", "Reconnecting account...",
+                            PURPLE_MESSAGE_SYSTEM, time(NULL));
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_leave(PurpleConversation *conv, const gchar *cmd,
+                              gchar **args, gchar **error, void *data) {
+  const char *raw_room_id = purple_conversation_get_name(conv);
+  if (!raw_room_id || !*raw_room_id) {
+    *error = g_strdup("No room is selected.");
+    return PURPLE_CMD_RET_FAILED;
+  }
+
+  // If called from a thread virtual chat (room_id|thread_id), leave only the
+  // base room.
+  char *room_id = g_strdup(raw_room_id);
+  char *pipe = strchr(room_id, '|');
+  if (pipe) {
+    *pipe = '\0';
+  }
+
+  purple_matrix_rust_leave_room(
+      purple_account_get_username(purple_conversation_get_account(conv)),
+      room_id);
+  purple_conversation_write(conv, "System", "Leaving room...",
+                            PURPLE_MESSAGE_SYSTEM, time(NULL));
+  g_free(room_id);
+  return PURPLE_CMD_RET_OK;
+}
+
 static PurpleCmdRet cmd_help(PurpleConversation *conv, const gchar *cmd,
                              gchar **args, gchar **error, void *data) {
   GString *msg = g_string_new("");
@@ -1928,13 +1989,14 @@ static PurpleCmdRet cmd_help(PurpleConversation *conv, const gchar *cmd,
   g_string_append(msg, "<br><b>General</b><br>");
   g_string_append(msg, "&bull; <b>/join &lt;room_id&gt;</b>: Join a room<br>");
   g_string_append(msg,
-                  "&bull; <b>/invite &lt;user_id&gt;</b>: Invite a user<br>");
+                  "&bull; <b>/matrix_invite &lt;user_id&gt;</b>: Invite a user<br>");
   g_string_append(msg,
-                  "&bull; <b>/nick &lt;name&gt;</b>: Set display name<br>");
-  g_string_append(msg, "&bull; <b>/avatar &lt;path&gt;</b>: Set avatar<br>");
+                  "&bull; <b>/matrix_nick &lt;name&gt;</b>: Set display name<br>");
+  g_string_append(msg, "&bull; <b>/matrix_avatar &lt;path&gt;</b>: Set avatar<br>");
   g_string_append(
       msg, "&bull; <b>/matrix_create_room &lt;name&gt;</b>: Create a room<br>");
   g_string_append(msg, "&bull; <b>/matrix_leave [reason]</b>: Leave room<br>");
+  g_string_append(msg, "&bull; <b>/matrix_reconnect</b>: Reconnect account<br>");
   g_string_append(
       msg, "&bull; <b>/matrix_public_rooms [term]</b>: Search directory<br>");
   g_string_append(
@@ -1974,9 +2036,9 @@ static PurpleCmdRet cmd_help(PurpleConversation *conv, const gchar *cmd,
 
   g_string_append(msg, "<br><b>Moderation &amp; Admin</b><br>");
   g_string_append(msg,
-                  "&bull; <b>/kick &lt;user&gt; [reason]</b>: Kick user<br>");
+                  "&bull; <b>/matrix_kick &lt;user&gt; [reason]</b>: Kick user<br>");
   g_string_append(msg,
-                  "&bull; <b>/ban &lt;user&gt; [reason]</b>: Ban user<br>");
+                  "&bull; <b>/matrix_ban &lt;user&gt; [reason]</b>: Ban user<br>");
   g_string_append(msg,
                   "&bull; <b>/matrix_unban &lt;user&gt;</b>: Unban user<br>");
   g_string_append(
@@ -1994,6 +2056,11 @@ static PurpleCmdRet cmd_help(PurpleConversation *conv, const gchar *cmd,
   g_string_append(msg,
                   "&bull; <b>/matrix_e2ee_status</b>: Check E2EE status<br>");
   g_string_append(msg, "&bull; <b>/matrix_export_keys</b>: Export keys<br>");
+  g_string_append(msg, "&bull; <b>/matrix_recover_keys &lt;passphrase&gt;</b>: "
+                       "Recover keys from backup<br>");
+  g_string_append(msg, "&bull; <b>/matrix_reconnect</b>: Reconnect after session issues<br>");
+  g_string_append(msg, "&bull; <b>/matrix_logout</b>: Logout and invalidate "
+                       "session<br>");
 
   purple_conversation_write(conv, "Matrix Help", msg->str,
                             PURPLE_MESSAGE_SYSTEM, time(NULL));
@@ -2076,7 +2143,7 @@ static PurpleCmdRet cmd_poll_end(PurpleConversation *conv, const gchar *cmd,
 static PurpleCmdRet cmd_verify(PurpleConversation *conv, const gchar *cmd,
                                gchar **args, gchar **error, void *data) {
   if (!args[0] || !*args[0]) {
-    *error = g_strdup("Usage: /verify <user_id>");
+    *error = g_strdup("Usage: /matrix_verify <user_id>");
     return PURPLE_CMD_RET_FAILED;
   }
 
@@ -2106,7 +2173,7 @@ static PurpleCmdRet cmd_reset_cross_signing(PurpleConversation *conv,
 static PurpleCmdRet cmd_recover_keys(PurpleConversation *conv, const gchar *cmd,
                                      gchar **args, gchar **error, void *data) {
   if (!args[0] || !*args[0]) {
-    *error = g_strdup("Usage: /recover_keys <passphrase>");
+    *error = g_strdup("Usage: /matrix_recover_keys <passphrase>");
     return PURPLE_CMD_RET_FAILED;
   }
   purple_matrix_rust_recover_keys(
@@ -2134,7 +2201,7 @@ static PurpleCmdRet cmd_read_receipt(PurpleConversation *conv, const gchar *cmd,
 static PurpleCmdRet cmd_react(PurpleConversation *conv, const gchar *cmd,
                               gchar **args, gchar **error, void *data) {
   if (!args[0] || !*args[0]) {
-    *error = g_strdup("Usage: /react <emoji>");
+    *error = g_strdup("Usage: /matrix_react <emoji>");
     return PURPLE_CMD_RET_FAILED;
   }
 
@@ -2253,7 +2320,7 @@ static PurpleCmdRet cmd_set_auto_fetch_history(PurpleConversation *conv,
 static PurpleCmdRet cmd_create_room(PurpleConversation *conv, const gchar *cmd,
                                     gchar **args, gchar **error, void *data) {
   if (!args[0] || !*args[0]) {
-    *error = g_strdup("Usage: /create_room <name>");
+    *error = g_strdup("Usage: /matrix_create_room <name>");
     return PURPLE_CMD_RET_FAILED;
   }
   purple_matrix_rust_create_room(
@@ -2768,8 +2835,6 @@ static void action_preview_room_cb(PurplePluginAction *action) {
 }
 
 extern void purple_matrix_rust_enable_key_backup(const char *user_id);
-extern void purple_matrix_rust_restore_from_backup(const char *user_id,
-                                                   const char *recovery_key);
 
 static void action_enable_backup_cb(PurplePluginAction *action) {
   PurpleConnection *gc = (PurpleConnection *)action->context;
@@ -2777,21 +2842,28 @@ static void action_enable_backup_cb(PurplePluginAction *action) {
       purple_account_get_username(purple_connection_get_account(gc)));
 }
 
-static void restore_backup_input_cb(void *user_data, const char *key) {
-  PurpleConnection *gc = (PurpleConnection *)user_data;
-  if (key && *key) {
-    purple_matrix_rust_restore_from_backup(
-        purple_account_get_username(purple_connection_get_account(gc)), key);
-  }
-}
-
-static void action_restore_backup_cb(PurplePluginAction *action) {
+static void action_reconnect_cb(PurplePluginAction *action) {
   PurpleConnection *gc = (PurpleConnection *)action->context;
-  purple_request_input(
-      gc, "Restore Backup", "Restore from Online Key Backup",
-      "Enter your Recovery Key (Security Phrase or SSSS Key):", NULL, FALSE,
-      TRUE, NULL, "Restore", G_CALLBACK(restore_backup_input_cb), "Cancel",
-      NULL, purple_connection_get_account(gc), NULL, NULL, gc);
+  if (!gc)
+    return;
+  PurpleAccount *account = purple_connection_get_account(gc);
+  if (!account)
+    return;
+
+  PurpleConnectionState state = purple_connection_get_state(gc);
+  if (state == PURPLE_CONNECTED) {
+    purple_notify_info(gc, "Matrix", "Reconnect", "Already connected.");
+    return;
+  }
+  if (state == PURPLE_CONNECTING) {
+    purple_notify_info(gc, "Matrix", "Reconnect",
+                       "Connection attempt already in progress.");
+    return;
+  }
+
+  purple_account_connect(account);
+  purple_notify_info(gc, "Matrix", "Reconnect",
+                     "Reconnect requested. Please complete login if prompted.");
 }
 
 // Sticker Data Structures
@@ -2832,18 +2904,21 @@ static void packs_loaded_cb(void *user_data);
 static void sticker_cb(const char *shortcode, const char *body, const char *url,
                        void *user_data);
 static void stickers_loaded_cb(void *user_data);
+static void free_matrix_pack(gpointer data);
+static void free_matrix_sticker(gpointer data);
 
 static void free_sticker_req_data(StickerRequestData *data) {
   if (!data)
     return;
-  g_list_free_full(data->packs,
-                   g_free); // Leaks struct contents? Yes. fix below.
-  g_list_free_full(data->stickers, g_free);
+  g_list_free_full(data->packs, free_matrix_pack);
+  g_list_free_full(data->stickers, free_matrix_sticker);
+  data->packs = NULL;
+  data->stickers = NULL;
   g_free(data->selected_pack_id);
   g_free(data->room_id);
   g_free(data);
 }
-// We need deep free helpers
+
 static void free_matrix_pack(gpointer data) {
   MatrixStickerPack *p = (MatrixStickerPack *)data;
   g_free(p->id);
@@ -2889,13 +2964,11 @@ static void pack_selected_cb(gpointer user_data, PurpleRequestFields *fields) {
   }
 
   // Cancelled or invalid
-  g_list_free_full(data->packs, free_matrix_pack);
   free_sticker_req_data(data);
 }
 
 static void pack_cancel_cb(gpointer user_data, PurpleRequestFields *fields) {
   StickerRequestData *data = (StickerRequestData *)user_data;
-  g_list_free_full(data->packs, free_matrix_pack);
   free_sticker_req_data(data);
 }
 
@@ -2980,15 +3053,11 @@ static void sticker_send_cb(gpointer user_data, PurpleRequestFields *fields) {
   }
 
   // Clean up everything
-  g_list_free_full(data->packs, free_matrix_pack);
-  g_list_free_full(data->stickers, free_matrix_sticker);
   free_sticker_req_data(data);
 }
 
 static void sticker_cancel_cb(gpointer user_data, PurpleRequestFields *fields) {
   StickerRequestData *data = (StickerRequestData *)user_data;
-  g_list_free_full(data->packs, free_matrix_pack);
-  g_list_free_full(data->stickers, free_matrix_sticker);
   free_sticker_req_data(data);
 }
 
@@ -2999,7 +3068,6 @@ static void stickers_loaded_cb(void *user_data) {
     purple_notify_info(data->gc, "Stickers", "Empty Pack",
                        "No stickers found in this pack.");
     // Should we go back? For now, just cancel.
-    g_list_free_full(data->packs, free_matrix_pack);
     free_sticker_req_data(data);
     return;
   }
@@ -3026,38 +3094,6 @@ static void stickers_loaded_cb(void *user_data) {
       G_CALLBACK(sticker_send_cb), "Cancel", G_CALLBACK(sticker_cancel_cb),
       purple_connection_get_account(data->gc), NULL, NULL, data);
 }
-
-static void action_send_sticker_cb(PurplePluginAction *action) {
-  PurpleConnection *gc = (PurpleConnection *)action->context;
-  // Context for action is usually plugin if global, or connection/blist_node if
-  // specific. Wait, matrix_actions context? "static GList
-  // *matrix_actions(PurplePlugin *plugin, gpointer context)" The context passed
-  // to actions is what we set? Actually, `purple_plugin_action_new` takes a
-  // callback `PurplePluginActionCallback`. The `context` in
-  // `purple_plugin_action_new` is `context` arg from `matrix_actions`. In
-  // Pidgin, context is usually `PurplePlugin*` for main menu? Or
-  // `PurpleBlistNode*` if from buddy list? The previous actions used
-  // `action_verify_device_cb` etc. Let's check `action_verify_device_cb`.
-}
-
-// Redefine action_send_sticker_cb correctly based on usage.
-// If this is a CHAT menu action, `context` is `PurpleConversation*`? No.
-// `blist_node_menu` passes `PurpleBlistNode*`.
-// `matrix_actions` (Plugin Actions menu) passes `NULL` usually?
-//
-// We want "Send Sticker" in the CONVERSATION menu?
-// Standard Pidgin doesn't have a "Conversation Actions" API easily for plugins
-// except via signals or extending headers?
-//
-// OR we add it to the Plugin Actions (Accounts -> Matrix -> Send Sticker...).
-// But we need to know WHICH room to send it to.
-//
-// Blist Node Menu is for Buddies/Chats.
-// `blist_node_menu` implementation in `plugin.c`:
-//
-// static GList *blist_node_menu(PurpleBlistNode *node) { ... }
-//
-// We should add "Send Sticker..." there.
 
 static void blist_action_send_sticker_cb(PurpleBlistNode *node, gpointer data) {
   PurpleAccount *account;
@@ -3119,13 +3155,14 @@ static GList *matrix_actions(PurplePlugin *plugin, gpointer context) {
   act = purple_plugin_action_new("E2EE Status Info", action_e2ee_status_cb);
   l = g_list_append(l, act);
 
+  act = purple_plugin_action_new("Reconnect / Re-Login", action_reconnect_cb);
+  l = g_list_append(l, act);
+
   act = purple_plugin_action_new("Enable/Check Key Backup",
                                  action_enable_backup_cb);
   l = g_list_append(l, act);
 
-  act = purple_plugin_action_new("Restore from Backup...",
-                                 action_restore_backup_cb);
-  l = g_list_append(l, act);
+  // Hidden until backup restore is fully implemented end-to-end.
 
   return l;
 }
@@ -3381,11 +3418,16 @@ static void update_buddy_callback(const char *user_id, const char *alias,
 static void ensure_thread_in_blist(PurpleAccount *account,
                                    const char *virtual_id, const char *alias,
                                    const char *parent_room_id) {
-  fprintf(stderr,
-          "[MatrixPlugin] ensure_thread_in_blist called for %s (Parent: %s)\n",
-          virtual_id, parent_room_id);
   if (!account || !virtual_id)
     return;
+  // Only handle virtual thread room IDs (room_id|thread_root_id).
+  if (!strchr(virtual_id, '|')) {
+    purple_debug_warning(
+        "purple-matrix-rust",
+        "ensure_thread_in_blist called with non-thread id '%s'; ignoring\n",
+        virtual_id);
+    return;
+  }
 
   PurpleConnection *gc = purple_account_get_connection(account);
   if (!gc)
@@ -3396,17 +3438,25 @@ static void ensure_thread_in_blist(PurpleAccount *account,
                     virtual_id, parent_room_id ? parent_room_id : "None");
 
   // determine group name
-  // Default to "Matrix Threads" only if we really can't find a parent
+  // Libpurple groups are flat (no true nested groups), so we emulate hierarchy
+  // using path-like labels: "<Group> > <Room> > Threads".
   char *group_name = NULL;
 
-  // Try to find parent room name for better grouping: "🧵 Threads: Room Name"
+  // Try to find parent room metadata for better grouping.
   if (parent_room_id) {
     // Check active conversations first
     PurpleConversation *parent_conv = purple_find_conversation_with_account(
         PURPLE_CONV_TYPE_CHAT, parent_room_id, account);
     const char *parent_title = NULL;
+    const char *parent_group_name = NULL;
     if (parent_conv) {
       parent_title = purple_conversation_get_title(parent_conv);
+      PurpleChat *parent_chat = find_chat_manual(account, parent_room_id);
+      if (parent_chat) {
+        PurpleGroup *pg = purple_chat_get_group(parent_chat);
+        if (pg)
+          parent_group_name = purple_group_get_name(pg);
+      }
     } else {
       // Check buddy list
       PurpleChat *parent_chat = find_chat_manual(account, parent_room_id);
@@ -3416,25 +3466,28 @@ static void ensure_thread_in_blist(PurpleAccount *account,
         } else {
           parent_title = purple_chat_get_name(parent_chat);
         }
+        PurpleGroup *pg = purple_chat_get_group(parent_chat);
+        if (pg)
+          parent_group_name = purple_group_get_name(pg);
       }
     }
 
-    if (parent_title) {
-      group_name = g_strdup_printf("🧵 Threads: %s", parent_title);
-    } else {
-      group_name = g_strdup_printf("🧵 Threads: Room %s", parent_room_id);
-    }
+    if (!parent_group_name || !*parent_group_name)
+      parent_group_name = "Matrix Rooms";
+    if (!parent_title || !*parent_title)
+      parent_title = parent_room_id;
+
+    group_name =
+        g_strdup_printf("%s / %s / Threads", parent_group_name, parent_title);
   } else {
-    group_name = g_strdup("🧵 Matrix Threads");
+    group_name = g_strdup("Matrix Rooms / Unknown Room / Threads");
   }
 
-  fprintf(stderr, "[MatrixPlugin] Target Group: %s\n", group_name);
   purple_debug_info("purple-matrix-rust",
                     "ensure_thread_in_blist: Target Group '%s'\n", group_name);
 
   PurpleGroup *group = purple_find_group(group_name);
   if (!group) {
-    fprintf(stderr, "[MatrixPlugin] Creating new group: %s\n", group_name);
     purple_debug_info("purple-matrix-rust",
                       "ensure_thread_in_blist: Creating group '%s'\n",
                       group_name);
@@ -3463,13 +3516,11 @@ static void ensure_thread_in_blist(PurpleAccount *account,
       g_free(truncated);
       truncated = tmp;
     }
-    nice_alias = g_strdup_printf("[Thread] %s", truncated);
+    nice_alias = g_strdup_printf("Thread: %s", truncated);
     g_free(truncated);
   }
 
   if (!chat) {
-    fprintf(stderr, "[MatrixPlugin] Adding new chat %s to group %s\n",
-            virtual_id, group_name);
     purple_debug_info("purple-matrix-rust",
                       "ensure_thread_in_blist: Adding new chat to group\n");
     GHashTable *components =
@@ -3480,8 +3531,6 @@ static void ensure_thread_in_blist(PurpleAccount *account,
   } else {
     // Move to correct group if needed
     if (purple_chat_get_group(chat) != group) {
-      fprintf(stderr, "[MatrixPlugin] Moving chat %s to group %s\n", virtual_id,
-              group_name);
       purple_debug_info(
           "purple-matrix-rust",
           "ensure_thread_in_blist: Moving chat to correct group\n");
@@ -4507,16 +4556,6 @@ static PurpleCmdRet cmd_debug_thread(PurpleConversation *conv, const gchar *cmd,
   return PURPLE_CMD_RET_OK;
 }
 
-static void sso_input_cb(void *user_data, const char *token) {
-  if (token && *token) {
-    purple_debug_info("purple-matrix-rust",
-                      "SSO token received, finishing login...\n");
-    purple_matrix_rust_finish_sso(token);
-  } else {
-    purple_debug_error("purple-matrix-rust", "SSO token empty!\n");
-  }
-}
-
 static gboolean process_sso_cb(gpointer data) {
   char *url = (char *)data;
   PurpleAccount *account = find_matrix_account();
@@ -4528,21 +4567,14 @@ static gboolean process_sso_cb(gpointer data) {
     purple_notify_uri(handle, url);
 
     char *msg = g_strdup_printf(
-        "A browser window has been opened to:\n%s\n\nPlease login there. "
-        "Pidgin will automatically detect when you have finished.\n\n"
-        "(If it fails, you can copy the 'loginToken' from the URL manually)",
+        "A browser window has been opened to:\n%s\n\n"
+        "Please complete login in your browser.\n"
+        "Pidgin will finish login automatically after the browser redirects "
+        "back to localhost.\n\n"
+        "If no callback is received within 3 minutes, login will time out and "
+        "you can retry.",
         url);
-
-    purple_request_input(handle,           // handle
-                         "SSO Login",      // title
-                         "Login Required", // primary
-                         msg,              // secondary
-                         NULL,             // default value
-                         FALSE,            // multiline
-                         FALSE,            // masked
-                         NULL,             // hint
-                         "Login", G_CALLBACK(sso_input_cb), "Cancel", NULL,
-                         account, NULL, NULL, NULL);
+    purple_notify_info(handle, "SSO Login", "Login Required", msg);
     g_free(msg);
   }
   g_free(url);
@@ -4679,6 +4711,12 @@ static void init_plugin(PurplePlugin *plugin) {
                       "matrix_create_room <name>: Create a new Matrix room",
                       NULL);
 
+  purple_cmd_register("matrix_leave", "s", PURPLE_CMD_P_PLUGIN,
+                      PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT,
+                      "prpl-matrix-rust", cmd_leave,
+                      "matrix_leave [reason]: Leave the current Matrix room",
+                      NULL);
+
   purple_cmd_register(
       "matrix_public_rooms", "w", PURPLE_CMD_P_PLUGIN,
       PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust",
@@ -4800,6 +4838,12 @@ static void init_plugin(PurplePlugin *plugin) {
       PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_logout,
       "matrix_logout: Explicitly invalidate session and logout", NULL);
 
+  purple_cmd_register(
+      "matrix_reconnect", "", PURPLE_CMD_P_PLUGIN,
+      PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust",
+      cmd_reconnect,
+      "matrix_reconnect: Reconnect the Matrix account and retry login", NULL);
+
   purple_cmd_register("matrix_debug_thread", "", PURPLE_CMD_P_PLUGIN,
                       PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT,
                       "prpl-matrix-rust", cmd_debug_thread,
@@ -4895,13 +4939,43 @@ static gboolean process_login_failed_cb(gpointer data) {
   purple_debug_error("purple-matrix-rust", "Login Failed Callback: %s\n",
                      reason);
 
-  PurpleAccount *account = find_matrix_account();
-  if (account) {
-    PurpleConnection *gc = purple_account_get_connection(account);
-    if (gc) {
+  gboolean notified = FALSE;
+  GList *connections = purple_connections_get_all();
+  for (GList *l = connections; l != NULL; l = l->next) {
+    PurpleConnection *gc = (PurpleConnection *)l->data;
+    PurpleAccount *account = purple_connection_get_account(gc);
+    if (!account)
+      continue;
+    if (strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") != 0)
+      continue;
+
+    if (purple_connection_get_state(gc) == PURPLE_CONNECTING ||
+        purple_connection_get_state(gc) == PURPLE_CONNECTED) {
       purple_connection_error_reason(gc, PURPLE_CONNECTION_ERROR_NETWORK_ERROR,
                                      reason);
+      notified = TRUE;
     }
+  }
+
+  if (!notified) {
+    PurpleAccount *account = find_matrix_account();
+    if (account) {
+      PurpleConnection *gc = purple_account_get_connection(account);
+      if (gc) {
+        purple_connection_error_reason(gc, PURPLE_CONNECTION_ERROR_NETWORK_ERROR,
+                                       reason);
+      }
+    }
+  }
+
+  if (g_strrstr(reason, "session expired") ||
+      g_strrstr(reason, "token invalidated") ||
+      g_strrstr(reason, "M_UNKNOWN_TOKEN")) {
+    purple_notify_info(
+        NULL, "Matrix Login", "Session Expired",
+        "Your Matrix session expired. Please sign in again.\n"
+        "Use 'Reconnect / Re-Login' in the account actions menu, or run "
+        "/matrix_reconnect.");
   }
   g_free(reason);
   return FALSE;
@@ -5052,42 +5126,6 @@ static void connected_cb() {
   g_idle_add(process_connected_cb, NULL);
 }
 
-// External Rust function for lazy history
-extern void purple_matrix_rust_fetch_history(const char *user_id,
-                                             const char *room_id);
-
-static void conv_created_cb(PurpleConversation *conv, gpointer data) {
-  PurpleAccount *account = purple_conversation_get_account(conv);
-  const char *proto_id = purple_account_get_protocol_id(account);
-
-  if (g_strcmp0(proto_id, "prpl-matrix-rust") != 0) {
-    return;
-  }
-
-  purple_debug_info("purple-matrix-rust",
-                    "conv_created_cb triggered for type %d\n",
-                    purple_conversation_get_type(conv));
-
-  if (!purple_account_get_bool(account, "auto_fetch_history_on_open", TRUE)) {
-    purple_debug_info("purple-matrix-rust",
-                      "auto_fetch_history_on_open disabled; skipping fetch\n");
-    return;
-  }
-
-  // Sync history for both Chats and IMs (DMs)
-  // For IMs, the 'name' is the User ID. Rust side must handle resolving UserID
-  // -> RoomID.
-  const char *name = purple_conversation_get_name(conv);
-  if (name) {
-    guint32 page_size = get_history_page_size(account);
-    purple_debug_info("purple-matrix-rust",
-                      "Triggering history sync for conversation: %s (limit=%u)\n",
-                      name, page_size);
-    purple_matrix_rust_fetch_history_with_limit(
-        purple_account_get_username(account), name, page_size);
-  }
-}
-
 // QR Verification Callback
 typedef struct {
   char *user_id;
@@ -5170,14 +5208,9 @@ static gboolean plugin_load(PurplePlugin *plugin) {
   purple_matrix_rust_set_thread_list_callback(thread_list_cb);
   purple_matrix_rust_set_poll_list_callback(poll_list_cb);
 
-  // Connect Conversation Created Signal for Lazy History Sync
-  purple_signal_connect(purple_conversations_get_handle(),
-                        "conversation-created", plugin,
-                        PURPLE_CALLBACK(conv_created_cb), NULL);
-
-  // Also connect chat-joined as a more reliable backup for history
-  purple_signal_connect(purple_conversations_get_handle(), "chat-joined",
-                        plugin, PURPLE_CALLBACK(conv_created_cb), NULL);
+  // These signals are not available on all libpurple builds (e.g. some
+  // Pidgin 2.14 variants), and attempting to connect can leave signal system
+  // warnings/errors. Keep lazy history available through explicit commands.
 
   return TRUE;
 }

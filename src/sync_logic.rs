@@ -1,6 +1,7 @@
 use crate::ffi::{
     MSG_CALLBACK, ROOM_JOINED_CALLBACK, INVITE_CALLBACK
 };
+use crate::{CLIENTS, DATA_PATH};
 // use crate::RUNTIME;
 use matrix_sdk::{
     config::SyncSettings,
@@ -14,13 +15,51 @@ use matrix_sdk::{
 use std::ffi::CString;
 use crate::handlers::{messages, presence, typing, reactions, room_state, account_data, polls, receipts};
 
+fn is_auth_failure(error_str: &str) -> bool {
+    error_str.contains("M_UNKNOWN_TOKEN")
+        || error_str.contains("Token is not active")
+        || error_str.contains("Invalid access token")
+        || error_str.contains("401")
+}
+
+fn handle_auth_failure(client: &Client) {
+    // Clear stale local session so reconnect performs fresh auth.
+    if let Some(user_id) = client.user_id().map(|u| u.to_string()) {
+        CLIENTS.lock().unwrap().remove(&user_id);
+    }
+
+    if let Some(mut path) = DATA_PATH.lock().unwrap().clone() {
+        path.push("session.json");
+        if path.exists() {
+            if let Err(err) = std::fs::remove_file(&path) {
+                log::warn!("Failed to remove stale session file {:?}: {:?}", path, err);
+            } else {
+                log::info!("Removed stale session file after auth failure: {:?}", path);
+            }
+        }
+    }
+
+    let msg = "Matrix session expired or token invalidated. Please re-login.";
+    if let Ok(c_msg) = CString::new(msg) {
+        let guard = crate::ffi::LOGIN_FAILED_CALLBACK.lock().unwrap();
+        if let Some(cb) = *guard {
+            cb(c_msg.as_ptr());
+        }
+    }
+}
+
 pub async fn start_sync_loop(client: Client) {
     let client_for_sync = client.clone();
     
     log::info!("Starting sync loop");
 
     if let Err(e) = client.sync_once(SyncSettings::default()).await {
+        let error_str = e.to_string();
         log::error!("Initial sync failed: {:?}", e);
+        if is_auth_failure(&error_str) {
+            handle_auth_failure(&client_for_sync);
+            return;
+        }
     }
 
     // Initial Room List Population
@@ -186,14 +225,8 @@ pub async fn start_sync_loop(client: Client) {
          
          // Notify C side about the failure if it's an auth error
          let error_str = e.to_string();
-         if error_str.contains("M_UNKNOWN_TOKEN") || error_str.contains("401") {
-             let msg = "Matrix session expired or token invalidated. Please re-login.";
-             if let Ok(c_msg) = CString::new(msg) {
-                 let guard = crate::ffi::LOGIN_FAILED_CALLBACK.lock().unwrap();
-                 if let Some(cb) = *guard {
-                     cb(c_msg.as_ptr());
-                 }
-             }
+         if is_auth_failure(&error_str) {
+             handle_auth_failure(&client_for_sync);
          }
     }
 }
