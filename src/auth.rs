@@ -294,8 +294,8 @@ async fn perform_login(username: String, password: String, homeserver: String, d
          }
     }
 
-    if client.user_id().is_some() {
-         log::info!("Restored existing session for {}", client.user_id().unwrap());
+    if let Some(user) = client.user_id() {
+         log::info!("Restored existing session for {}", user);
          finish_login_success(client).await;
          return;
     }
@@ -463,7 +463,14 @@ fn start_sso_flow(client: Client) {
                 }
             };
             
-            let port = listener.server_addr().to_ip().unwrap().port();
+            let port = match listener.server_addr().to_ip() {
+                Some(addr) => addr.port(),
+                None => {
+                    set_sso_in_progress(false);
+                    report_login_failure("Failed to bind local SSO callback listener to an IP address.".to_string());
+                    return;
+                }
+            };
             let state = generate_sso_state();
             let redirect_url = format!("http://localhost:{}/login?state={}", port, state);
             log::info!("Listening for SSO callback on {}", redirect_url);
@@ -485,7 +492,7 @@ fn start_sso_flow(client: Client) {
             {
                 let guard = SSO_CALLBACK.lock().unwrap();
                 if let Some(cb) = *guard {
-                    let c_url = CString::new(sso_url).unwrap();
+                    let c_url = CString::new(sso_url.replace('\0', "")).unwrap_or_default();
                     cb(c_url.as_ptr());
                 }
             }

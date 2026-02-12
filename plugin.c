@@ -4683,22 +4683,6 @@ static GList *blist_node_menu_cb(PurpleBlistNode *node) {
   return list;
 }
 
-// Debug Command: /debug_thread
-static PurpleCmdRet cmd_debug_thread(PurpleConversation *conv, const gchar *cmd,
-                                     gchar **args, gchar **error, void *data) {
-  PurpleAccount *account = purple_conversation_get_account(conv);
-  const char *room_id = purple_conversation_get_name(conv);
-
-  purple_debug_info("purple-matrix-rust", "Running /debug_thread test...\n");
-
-  // Simulate a threaded message
-  char *virtual_id = g_strdup_printf("%s|debug_thread_123", room_id);
-  ensure_thread_in_blist(account, virtual_id, "Debug Thread Message", room_id);
-
-  g_free(virtual_id);
-  return PURPLE_CMD_RET_OK;
-}
-
 static gboolean process_sso_cb(gpointer data) {
   char *url = (char *)data;
   PurpleAccount *account = find_matrix_account();
@@ -4999,12 +4983,6 @@ static void init_plugin(PurplePlugin *plugin) {
       PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust",
       cmd_reconnect,
       "matrix_reconnect: Reconnect the Matrix account and retry login", NULL);
-
-  purple_cmd_register("matrix_debug_thread", "", PURPLE_CMD_P_PLUGIN,
-                      PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT,
-                      "prpl-matrix-rust", cmd_debug_thread,
-                      "matrix_debug_thread: Simulate a thread for debugging",
-                      NULL);
 
   purple_cmd_register("matrix_help", "", PURPLE_CMD_P_PLUGIN,
                       PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT,

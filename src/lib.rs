@@ -729,8 +729,13 @@ pub extern "C" fn purple_matrix_rust_send_sticker(user_id: *const c_char, room_i
                         }
                     };
 
-                    let uri = <OwnedMxcUri>::try_from(mxc_uri.as_str())
-                        .expect("OwnedMxcUri conversion from &str is infallible");
+                    let uri = match <OwnedMxcUri>::try_from(mxc_uri.as_str()) {
+                        Ok(u) => u,
+                        Err(e) => {
+                            log::error!("Failed to build MXC URI for sticker '{}': {:?}", mxc_uri, e);
+                            return;
+                        }
+                    };
                     let info = ImageInfo::new();
                     let content = StickerEventContent::new("Sticker".to_string(), info, uri);
                     let any_content = AnyMessageLikeEventContent::Sticker(content);
