@@ -49,6 +49,7 @@ typedef void (*MsgCallback)(const char *sender, const char *body,
 extern void purple_matrix_rust_init(void);
 
 // Forward declarations
+static char *sanitize_markup_text(const char *input);
 static void ensure_thread_in_blist(PurpleAccount *account,
                                    const char *virtual_id, const char *alias,
                                    const char *parent_room_id);
@@ -64,6 +65,8 @@ extern void purple_matrix_rust_set_typing_callback(TypingCallback cb);
 extern void purple_matrix_rust_send_typing(const char *user_id,
                                            const char *room_id,
                                            gboolean is_typing);
+extern void purple_request_field_set_help_string(PurpleRequestField *field,
+                                                 const char *hint);
 typedef void (*RoomJoinedCallback)(const char *room_id, const char *name,
                                    const char *group_name,
                                    const char *avatar_url, const char *topic,
@@ -236,6 +239,9 @@ extern void purple_matrix_rust_report_content(const char *user_id,
 extern void purple_matrix_rust_export_room_keys(const char *user_id,
                                                 const char *path,
                                                 const char *passphrase);
+extern void purple_matrix_rust_restore_from_backup(const char *user_id,
+                                                   const char *recovery_key);
+extern void purple_matrix_rust_enable_key_backup(const char *user_id);
 extern void purple_matrix_rust_bulk_redact(const char *user_id,
                                            const char *room_id, int count,
                                            const char *reason);
@@ -503,7 +509,7 @@ static gboolean process_msg_cb(gpointer data) {
       purple_debug_info(
           "purple-matrix-rust",
           "process_msg_cb calling ensure_thread_in_blist for %s\n", target_id);
-      char *clean_alias = purple_markup_strip_html(d->message);
+    char *clean_alias = sanitize_markup_text(d->message);
       ensure_thread_in_blist(account, target_id, clean_alias, d->room_id);
       g_free(clean_alias);
     }
@@ -782,18 +788,31 @@ static gboolean process_room_cb(gpointer data) {
     group_name = d->group_name;
   }
 
+  char *target_group_name = g_strdup(group_name);
+  if (strstr(target_group_name, " / Threads")) {
+    gchar *clean_group = derive_base_group_from_threads_group(group_name);
+    g_free(target_group_name);
+    target_group_name = clean_group;
+  }
+
+  const char *effective_group_name = target_group_name;
+  const char *room_title =
+      (d->name && strlen(d->name) > 0) ? d->name : d->room_id;
+  char *room_group_name = g_strdup_printf("%s / %s", effective_group_name,
+                                          room_title);
+
   if (account) {
     purple_debug_info("purple-matrix-rust",
-                      "Processing room: %s (%s) in Group: %s\n", d->room_id,
-                      d->name, group_name);
+                      "Processing room: %s (%s) in Group: %s -> %s\n",
+                      d->room_id, d->name, group_name, room_group_name);
 
     purple_debug_info("purple-matrix-rust", "Finding/Creating group '%s'\n",
-                      group_name);
-    PurpleGroup *group = purple_find_group(group_name);
+                      room_group_name);
+    PurpleGroup *group = purple_find_group(room_group_name);
     if (!group) {
       purple_debug_info("purple-matrix-rust", "Creating group '%s'\n",
-                        group_name);
-      group = purple_group_new(group_name);
+                        room_group_name);
+      group = purple_group_new(room_group_name);
       purple_blist_add_group(group, NULL);
     }
 
@@ -857,8 +876,8 @@ static gboolean process_room_cb(gpointer data) {
         purple_debug_info("purple-matrix-rust",
                           "Moving room %s from group '%s' to '%s'\n",
                           d->room_id,
-                          current_group_name ? current_group_name : "(none)",
-                          group_name);
+          current_group_name ? current_group_name : "(none)",
+                          room_group_name);
         purple_blist_add_chat(chat, group, NULL);
       }
     }
@@ -868,6 +887,9 @@ static gboolean process_room_cb(gpointer data) {
     }
   }
 
+  g_free(target_group_name);
+  g_free(target_group_name);
+  g_free(room_group_name);
   g_free(d->room_id);
   g_free(d->name);
   g_free(d->group_name);
@@ -1652,7 +1674,7 @@ static char *matrix_chat_status_text(PurpleChat *chat) {
   const char *topic = g_hash_table_lookup(components, "topic");
   if (topic && strlen(topic) > 0) {
     // Strip HTML for blist display
-    return purple_markup_strip_html(topic);
+    return sanitize_markup_text(topic);
   }
   return NULL;
 }
@@ -1679,7 +1701,7 @@ static void matrix_chat_tooltip_text(PurpleChat *chat,
   }
 
   if (topic && strlen(topic) > 0) {
-    char *clean_topic = purple_markup_strip_html(topic);
+    char *clean_topic = sanitize_markup_text(topic);
     purple_notify_user_info_add_pair(user_info, "Topic", clean_topic);
     g_free(clean_topic);
   }
@@ -2204,6 +2226,9 @@ static PurpleCmdRet cmd_help(PurpleConversation *conv, const gchar *cmd,
   g_string_append(msg, "&bull; <b>/matrix_export_keys</b>: Export keys<br>");
   g_string_append(msg, "&bull; <b>/matrix_recover_keys &lt;passphrase&gt;</b>: "
                        "Recover keys from backup<br>");
+  g_string_append(msg,
+                  "&bull; <b>/matrix_restore_backup &lt;recovery key&gt;</b>: "
+                  "Restore keys from online key backup<br>");
   g_string_append(msg, "&bull; <b>/matrix_reconnect</b>: Reconnect after session issues<br>");
   g_string_append(msg, "&bull; <b>/matrix_logout</b>: Logout and invalidate "
                        "session<br>");
@@ -2325,6 +2350,22 @@ static PurpleCmdRet cmd_recover_keys(PurpleConversation *conv, const gchar *cmd,
   purple_matrix_rust_recover_keys(
       purple_account_get_username(purple_conversation_get_account(conv)),
       args[0]);
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_restore_backup(PurpleConversation *conv, const gchar *cmd,
+                                       gchar **args, gchar **error, void *data) {
+  if (!args[0] || !*args[0]) {
+    *error = g_strdup("Usage: /matrix_restore_backup <recovery key>");
+    return PURPLE_CMD_RET_FAILED;
+  }
+
+  purple_matrix_rust_restore_from_backup(
+      purple_account_get_username(purple_conversation_get_account(conv)), args[0]);
+  purple_conversation_write(
+      conv, "System",
+      "Restoring encryption keys from backup. Check the log for progress.",
+      PURPLE_MESSAGE_SYSTEM, time(NULL));
   return PURPLE_CMD_RET_OK;
 }
 
@@ -2871,6 +2912,44 @@ static void action_recover_keys_cb(PurplePluginAction *action) {
                        NULL, NULL);
 }
 
+static void menu_action_buddy_list_help_cb(PurpleBlistNode *node, gpointer data) {
+  PurpleChat *chat = (PurpleChat *)node;
+  PurpleAccount *account = purple_chat_get_account(chat);
+  if (!account) {
+    return;
+  }
+  PurpleConnection *gc = purple_account_get_connection(account);
+  if (!gc) {
+    return;
+  }
+  const char *msg =
+      "Buddy List Layout:\n"
+      "1. Spaces/Tags appear as top-level groups.\n"
+      "2. Rooms live under their space/tag (Space / Room).\n"
+      "3. Threads show as nested entries when \"Separate Thread Tabs\" is "
+      "enabled or via \"List Threads\".";
+  purple_notify_info(gc, "Buddy List Help", "Navigation Tip", msg);
+}
+
+static void action_restore_backup_input_cb(void *user_data,
+                                           const char *recovery_key) {
+  if (recovery_key && *recovery_key) {
+    if (user_data) {
+      purple_matrix_rust_restore_from_backup(
+          purple_account_get_username((PurpleAccount *)user_data), recovery_key);
+    }
+  }
+}
+
+static void action_restore_backup_cb(PurplePluginAction *action) {
+  PurpleConnection *gc = (PurpleConnection *)action->context;
+  purple_request_input(gc, "Restore Backup", "Enter Key Backup Recovery Key",
+                       "Enter the recovery key to download backed-up room keys.",
+                       NULL, FALSE, FALSE, NULL, "Restore",
+                       G_CALLBACK(action_restore_backup_input_cb), "Cancel",
+                       NULL, purple_connection_get_account(gc), NULL, NULL, NULL);
+}
+
 static void create_room_cb(void *user_data, PurpleRequestFields *fields) {
   const char *name = purple_request_fields_get_string(fields, "name");
   const char *topic = purple_request_fields_get_string(fields, "topic");
@@ -2979,8 +3058,6 @@ static void action_preview_room_cb(PurplePluginAction *action) {
       FALSE, NULL, "Preview", G_CALLBACK(action_preview_room_input_cb),
       "Cancel", NULL, purple_connection_get_account(gc), NULL, NULL, gc);
 }
-
-extern void purple_matrix_rust_enable_key_backup(const char *user_id);
 
 static void action_enable_backup_cb(PurplePluginAction *action) {
   PurpleConnection *gc = (PurpleConnection *)action->context;
@@ -3282,6 +3359,10 @@ static GList *matrix_actions(PurplePlugin *plugin, gpointer context) {
       purple_plugin_action_new("Recover Keys (4S)...", action_recover_keys_cb);
   l = g_list_append(l, act);
 
+  act =
+      purple_plugin_action_new("Restore Key Backup...", action_restore_backup_cb);
+  l = g_list_append(l, act);
+
   act = purple_plugin_action_new("Create Room...", action_create_room_cb);
   l = g_list_append(l, act);
 
@@ -3558,6 +3639,25 @@ static void update_buddy_callback(const char *user_id, const char *alias,
   d->alias = g_strdup(alias);
   d->icon_path = g_strdup(icon_path);
   g_idle_add(process_buddy_update_cb, d);
+}
+
+// Helper to strip simple HTML tags (sanitization)
+static char *sanitize_markup_text(const char *input) {
+  if (!input) {
+    return NULL;
+  }
+  GString *out = g_string_new("");
+  gboolean in_tag = FALSE;
+  for (const char *p = input; *p; p++) {
+    if (*p == '<') {
+      in_tag = TRUE;
+    } else if (*p == '>') {
+      in_tag = FALSE;
+    } else if (!in_tag) {
+      g_string_append_c(out, *p);
+    }
+  }
+  return g_string_free(out, FALSE);
 }
 
 // Helper to organize threads in Buddy List
@@ -4539,6 +4639,11 @@ static GList *blist_node_menu_cb(PurpleBlistNode *node) {
           PURPLE_CALLBACK(menu_action_e2ee_status_cb), NULL, NULL);
       list = g_list_append(list, act_e2ee);
 
+      PurpleMenuAction *act_layout_help = purple_menu_action_new(
+          "Buddy List Help", PURPLE_CALLBACK(menu_action_buddy_list_help_cb),
+          NULL, NULL);
+      list = g_list_append(list, act_layout_help);
+
       // --- Interaction ---
       PurpleMenuAction *act_reply = purple_menu_action_new(
           "Reply (Last Msg)...", PURPLE_CALLBACK(menu_action_reply_cb), NULL,
@@ -4683,6 +4788,24 @@ static GList *blist_node_menu_cb(PurpleBlistNode *node) {
   return list;
 }
 
+static void manual_sso_token_action_cb(void *user_data,
+                                       PurpleRequestFields *fields) {
+  const char *token = purple_request_fields_get_string(fields, "sso_token");
+  PurpleAccount *account = (PurpleAccount *)user_data;
+  PurpleConnection *gc = account ? purple_account_get_connection(account) : NULL;
+  void *handle = gc ? (void *)gc : (void *)my_plugin;
+
+  if (!token || !*token) {
+    purple_notify_error(handle, "SSO token required",
+                        "Please paste the loginToken=... query parameter "
+                        "from the browser callback.",
+                        NULL);
+    return;
+  }
+
+  purple_matrix_rust_finish_sso(token);
+}
+
 static gboolean process_sso_cb(gpointer data) {
   char *url = (char *)data;
   PurpleAccount *account = find_matrix_account();
@@ -4695,15 +4818,34 @@ static gboolean process_sso_cb(gpointer data) {
 
     char *msg = g_strdup_printf(
         "A browser window has been opened to:\n%s\n\n"
-        "Please complete login in your browser.\n"
-        "Pidgin will finish login automatically after the browser redirects "
-        "back to localhost.\n\n"
-        "If no callback is received within 3 minutes, login will time out and "
-        "you can retry.",
-        url);
+        "Complete login in that browser tab. Pidgin will finish the "
+        "SSO flow automatically after the redirect returns to localhost.\n\n"
+        "If for some reason the redirect can't reach %s, copy the "
+        "\"loginToken\" value and paste it into the dialog below.",
+        url, purple_account_get_string(account, "server", "https://matrix.org"));
     purple_notify_info(handle, "SSO Login", "Login Required", msg);
     g_free(msg);
+
+    PurpleRequestFields *fields = purple_request_fields_new();
+    PurpleRequestFieldGroup *group = purple_request_field_group_new(NULL);
+    purple_request_fields_add_group(fields, group);
+    PurpleRequestField *field = purple_request_field_string_new(
+        "sso_token", "Login Token", NULL, FALSE);
+    purple_request_field_set_help_string(
+        field,
+        "Paste the loginToken=... value from the browser redirect if it "
+        "doesn't reach localhost automatically.");
+    purple_request_field_group_add_field(group, field);
+
+    purple_request_fields(gc, "SSO Token", "Manual completion",
+                          "Paste the one-time token if the automatic "
+                          "callback fails.",
+                          fields, "Submit Token",
+                          G_CALLBACK(manual_sso_token_action_cb), "Cancel",
+                          NULL, purple_connection_get_account(gc), NULL, NULL,
+                          NULL);
   }
+
   g_free(url);
   return FALSE;
 }
@@ -4778,6 +4920,12 @@ static void init_plugin(PurplePlugin *plugin) {
                       PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT,
                       "prpl-matrix-rust", cmd_recover_keys,
                       "matrix_recover_keys <passphrase>: Recover keys from 4S",
+                      NULL);
+
+  purple_cmd_register("matrix_restore_backup", "w", PURPLE_CMD_P_PLUGIN,
+                      PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT,
+                      "prpl-matrix-rust", cmd_restore_backup,
+                      "matrix_restore_backup <recovery key>: Download keys from online backup",
                       NULL);
 
   purple_cmd_register("matrix_read_receipt", "", PURPLE_CMD_P_PLUGIN,

@@ -22,6 +22,7 @@ The plugin is currently **Feature Complete** for core messaging, media, and encr
 | **Login** | ✅ | Username/Password and legacy SSO fallback supported. |
 | **Logout** | ✅ | Normal disconnect keeps session; explicit `/matrix_logout` invalidates server session. |
 | **SSO / OIDC** | ✅ | Session token persistence implemented. Use password field for token manually or trigger SSO flow. |
+| **Manual SSO Token Entry** | ✅ | New dialog explains how to paste the `loginToken` if the browser redirect can’t reach localhost. |
 | **Session Persistence** | ✅ | Uses `matrix-sdk-sqlite` for state storage and `session.json` for token persistence. |
 | **Change Password** | ✅ | Supported via Pidgin "Change Password" menu. |
 
@@ -66,6 +67,7 @@ The plugin is currently **Feature Complete** for core messaging, media, and encr
 | **Thread UI** | ✅ | Threads appear as distinct chats grouped under the parent room. Inline indentation used in main chat. |
 | **Reply to Thread** | ✅ | "Start Thread" Context Menu and slash command `/matrix_thread`. |
 | **List Threads** | ✅ | Full list fetched from recent history, displayed in dialog. Join via selection. |
+| **Buddy List Hierarchy** | ✅ | Rooms now appear under `Space / Room` groups, with an optional `Threads` subgroup when separate thread tabs are enabled, and contextual help explaining the drill-down. |
 
 ### 5. End-to-End Encryption (E2EE)
 | Feature | Status | Notes |
@@ -90,7 +92,7 @@ The plugin is currently **Feature Complete** for core messaging, media, and encr
 
 ## ⚠️ Known Limitations
 *   **VoIP**: Voice and Video calls are not yet supported.
-*   **Backup Restore UI**: "Restore from Backup" currently shows a not-implemented notice.
+*   **Backup Restore UI**: Manual recovery key entry now downloads keys from the user's online backup (when available) via the “Restore Backup” account action.
 *   **Sticker Packs**: Account-data based sticker-pack discovery is limited (`im.ponies.user_defined_sticker_pack`).
 
 ## Security Notes

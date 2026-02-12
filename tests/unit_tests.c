@@ -629,6 +629,8 @@ void *purple_notify_formatted(void *handle, const char *title,
                               gpointer user_data) {
   return NULL;
 }
+void purple_request_field_set_help_string(PurpleRequestField *field,
+                                          const char *hint) {}
 
 // Additional Rust FFI Mocks
 void purple_matrix_rust_enable_key_backup(const char *user_id) {}

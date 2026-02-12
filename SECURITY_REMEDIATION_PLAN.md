@@ -95,11 +95,11 @@ Exit criteria:
 ## Phase 4: Unimplemented Feature Resolution
 1. Thread listing
 - File: `src/lib.rs`
-- Either complete implementation or hide command/UI with explicit user feedback.
+- Provide a real thread enumeration flow (manual token and `/matrix_threads` dialog) and keep the command active with clear feedback about how to open a selected thread.
 
 2. Backup restore
 - File: `src/handlers/crypto.rs`
-- Implement minimal working flow or disable exposed entry points.
+- Implemented; users can now paste a recovery key and download keys from the configured backup. Keep the account action visible alongside the guidance text.
 
 3. Sticker packs
 - File: `src/handlers/stickers.rs`
@@ -129,6 +129,7 @@ Exit criteria:
 1. Verify thread labeling only for real virtual thread IDs.
 2. Verify room opening, previews, updates, and history behavior.
 3. Confirm explicit logout remains explicit-only behavior.
+4. Confirm buddy list hierarchy matches `Space / Room / Threads` expectations and document the drill-down help text for direct discovery.
 
 Exit criteria:
 - No normal rooms mislabeled as threads.
