@@ -6,15 +6,21 @@ This plugin is a rewrite of the original `purple-matrix` plugin. It leverages th
 
 ## ✨ Features
 
-**Implementation Status: Feature Complete (All planned core features implemented)**
+### ✨ Implementation Status: 90% (Beta / Daily Driver Ready)
 
-The plugin covers the vast majority of Matrix client features, mapping them to Libpurple's UI paradigms where possible.
+The plugin is currently **Feature Complete** for core messaging, media, and encryption. It is stable enough for daily use as a text-only client.
+
+**UX/UI Experience**:
+- **Native Integration**: Seamlessly fits into Pidgin's Buddy List and Conversation windows.
+- **Inline Media**: Images, Videos, and Audio files play/display directly in the chat window.
+- **Flat Threading**: Threads are rendered inline with indentation (🧵) to preserve the linear chat history while indicating context.
+- **Command Driven**: Advanced features (Polls, Moderation) are accessible via context menus or `/matrix_` slash commands.
 
 ### 1. Client & Authentication
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
 | **Login** | ✅ | Username/Password and legacy SSO fallback supported. |
-| **Logout** | ✅ | Explicit API logout hooked to client shutdown. |
+| **Logout** | ✅ | Normal disconnect keeps session; explicit `/matrix_logout` invalidates server session. |
 | **SSO / OIDC** | ✅ | Session token persistence implemented. Use password field for token manually or trigger SSO flow. |
 | **Session Persistence** | ✅ | Uses `matrix-sdk-sqlite` for state storage and `session.json` for token persistence. |
 | **Change Password** | ✅ | Supported via Pidgin "Change Password" menu. |
@@ -36,9 +42,9 @@ The plugin covers the vast majority of Matrix client features, mapping them to L
 ### 3. Messaging & Events
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
-| **Send Text** | ✅ | Basic text messages with HTML support. |
+| **Send Text** | ✅ | Basic text messages supported. |
 | **Receive Text** | ✅ | Handles incoming `m.room.message` with proper local/remote echo handling. |
-| **Formatted Text** | ✅ | HTML/Markdown supported via `pulldown-cmark`. |
+| **Formatted Text** | ✅ | Remote formatted content is sanitized before display. |
 | **Media (Images/Video)** | ✅ | Downloaded to `/tmp/`, displayed inline. |
 | **Stickers** | ✅ | Receiving supported. Sending via `/matrix_sticker`. |
 | **Reactions** | ✅ | Receiving and Sending (`/matrix_react`) supported. |
@@ -47,16 +53,19 @@ The plugin covers the vast majority of Matrix client features, mapping them to L
 | **Typing Notifications** | ✅ | Bidirectional (Send/Receive) support. |
 | **Read Receipts** | ✅ | Cross-device sync enabled. Context Menu "Mark as Read". |
 | **Location Sharing** | ✅ | Sending and receiving locations. |
-| **Polls** | ✅ | Create via Context Menu. Vote via slash command. |
+| **Polls** | ✅ | Create via Context Menu. Vote via interactive dialog or slash command. |
+| **Editing** | ✅ | "Edit Last Message" or "Edit by ID" (Context Menu). |
+| **Redaction** | ✅ | "Redact Last Message" or "Redact by ID" (Context Menu). |
 | **History Fetching** | ✅ | On-demand history via Context Menu or `/history`. |
 
 ### 4. Threads
 | Feature | Status | Notes |
 | :--- | :---: | :--- |
 | **Thread Detection** | ✅ | Detects `m.thread` relation in incoming messages. |
-| **Historical Scan** | ✅ | Scans last 50 messages on startup to populate active threads in Buddy List. |
-| **Thread UI** | ✅ | Threads appear as distinct chats grouped under the parent room. |
+| **Historical Scan** | ⚠️ | Startup-wide pre-scan is disabled; use on-demand thread/history actions. |
+| **Thread UI** | ✅ | Threads appear as distinct chats grouped under the parent room. Inline indentation used in main chat. |
 | **Reply to Thread** | ✅ | "Start Thread" Context Menu and slash command `/matrix_thread`. |
+| **List Threads** | ✅ | Full list fetched from recent history, displayed in dialog. Join via selection. |
 
 ### 5. End-to-End Encryption (E2EE)
 | Feature | Status | Notes |
@@ -80,10 +89,13 @@ The plugin covers the vast majority of Matrix client features, mapping them to L
 | **User Search** | ✅ | Via "Search Users" Account Action or `/matrix_user_search`. |
 
 ## ⚠️ Known Limitations
-
-*   **Message Interaction**: Due to Libpurple's limited API for historical message interaction, actions like **Reply**, **Edit**, **Redact**, **React**, and **Vote** currently operate on the **last received message** in the conversation window.
-*   **Poll Rendering**: Polls are displayed as text blocks. Voting is done via slash commands (e.g., `/matrix_poll_vote 1`).
 *   **VoIP**: Voice and Video calls are not yet supported.
+*   **Backup Restore UI**: "Restore from Backup" currently shows a not-implemented notice.
+*   **Sticker Packs**: Account-data based sticker-pack discovery is limited (`im.ponies.user_defined_sticker_pack`).
+
+## Security Notes
+* TLS certificate verification is enabled by default.
+* A debug-only override exists: set `MATRIX_RUST_INSECURE_SSL=1` to disable TLS verification (not recommended).
 
 ## Changelog
 

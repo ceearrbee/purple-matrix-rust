@@ -9,7 +9,7 @@ pub async fn handle_poll_start(event: SyncPollStartEvent, room: Room) {
         let room_id = room.room_id().as_str();
         let timestamp: u64 = ev.origin_server_ts.0.into();
         
-        let body = format!("[Poll] A poll has been started by {}. (Full poll rendering not yet implemented in this client)", sender);
+        let body = format!("[Poll] A poll has been started by {}. Use 'Active Polls' from the menu to vote.", sender);
 
         let c_sender = CString::new(sender).unwrap_or_default();
         let c_body = CString::new(body).unwrap_or_default();

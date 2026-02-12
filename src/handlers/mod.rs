@@ -5,3 +5,6 @@ pub mod reactions;
 pub mod room_state;
 pub mod account_data;
 pub mod polls;
+pub mod receipts;
+pub mod crypto;
+pub mod stickers;

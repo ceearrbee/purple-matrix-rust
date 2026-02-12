@@ -10,9 +10,12 @@ pub async fn handle_account_data(event: AnyRoomAccountDataEvent, room: Room) {
 
             let guard = crate::ffi::READ_MARKER_CALLBACK.lock().unwrap();
             if let Some(cb) = *guard {
+                let client = room.client();
+                let user_id = client.user_id().map(|u| u.as_str()).unwrap_or("Unknown");
                 let c_room_id = std::ffi::CString::new(room_id).unwrap_or_default();
                 let c_event_id = std::ffi::CString::new(event_id).unwrap_or_default();
-                cb(c_room_id.as_ptr(), c_event_id.as_ptr());
+                let c_user_id = std::ffi::CString::new(user_id).unwrap_or_default();
+                cb(c_room_id.as_ptr(), c_event_id.as_ptr(), c_user_id.as_ptr());
             }
         },
         _ => {

@@ -368,6 +368,15 @@ fn send_preview_system_message(output_room_id: Option<&str>, preview_target: &st
 pub mod auth;
 pub mod grouping;
 
+pub fn escape_html(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_set_status(user_id: *const c_char, status: i32, msg: *const c_char) {
      if user_id.is_null() { return; }
@@ -720,16 +729,14 @@ pub extern "C" fn purple_matrix_rust_send_sticker(user_id: *const c_char, room_i
                         }
                     };
 
-                    if let Ok(uri) = <OwnedMxcUri>::try_from(mxc_uri.as_str()) {
-                        let info = ImageInfo::new();
-                        let content = StickerEventContent::new("Sticker".to_string(), info, uri);
-                        let any_content = AnyMessageLikeEventContent::Sticker(content);
-                        
-                        if let Err(e) = room.send(any_content).await {
-                            log::error!("Failed to send sticker: {:?}", e);
-                        }
-                    } else {
-                        log::error!("Invalid MXC URI for sticker: {}", mxc_uri);
+                    let uri = <OwnedMxcUri>::try_from(mxc_uri.as_str())
+                        .expect("OwnedMxcUri conversion from &str is infallible");
+                    let info = ImageInfo::new();
+                    let content = StickerEventContent::new("Sticker".to_string(), info, uri);
+                    let any_content = AnyMessageLikeEventContent::Sticker(content);
+                    
+                    if let Err(e) = room.send(any_content).await {
+                        log::error!("Failed to send sticker: {:?}", e);
                     }
                 }
             }
@@ -788,8 +795,6 @@ pub extern "C" fn purple_matrix_rust_get_active_polls(user_id: *const c_char, ro
                     use matrix_sdk::ruma::UInt;
                     let mut options = MessagesOptions::backward();
                     options.limit = UInt::new(50).unwrap();
-                    let mut found_any = false;
-
                     if let Ok(messages) = room.messages(options).await {
                        let c_room_id = CString::new(room_id_str.clone()).unwrap_or_default();
                        let guard = POLL_LIST_CALLBACK.lock().unwrap();
@@ -820,7 +825,6 @@ pub extern "C" fn purple_matrix_rust_get_active_polls(user_id: *const c_char, ro
                                             let c_options = CString::new(options_str).unwrap_or_default();
                                             
                                             cb(c_room_id.as_ptr(), c_event_id.as_ptr(), c_sender.as_ptr(), c_question.as_ptr(), c_options.as_ptr());
-                                            found_any = true;
                                         }
                                    }
                                }
@@ -1303,50 +1307,41 @@ pub fn get_display_html(content: &matrix_sdk::ruma::events::room::message::RoomM
              // Check if HTML is present
              if let Some(formatted) = &text_content.formatted {
                  if formatted.format == matrix_sdk::ruma::events::room::message::MessageFormat::Html {
-                     return formatted.body.clone();
+                     return sanitize_untrusted_html(&formatted.body);
                  }
              }
-
-             // Fallback to Markdown
-             let parser = pulldown_cmark::Parser::new(&text_content.body);
-             let mut html_output = String::new();
-             pulldown_cmark::html::push_html(&mut html_output, parser);
-             
-             // Strip wrapping <p> tags if it's a single line
-             if html_output.starts_with("<p>") && html_output.ends_with("</p>\n") {
-                 let inner = &html_output[3..html_output.len()-5];
-                 if !inner.contains("<p>") {
-                     return inner.to_string();
-                 }
-             }
-             html_output
+             // Treat plain text as untrusted and escape.
+             escape_html(&text_content.body)
         },
         MessageType::Emote(content) => {
-             // Emotes usually start with * <displayname>
-             let body_html = if let Some(formatted) = &content.formatted {
+             let body_safe = if let Some(formatted) = &content.formatted {
                  if formatted.format == matrix_sdk::ruma::events::room::message::MessageFormat::Html {
-                     formatted.body.clone()
+                     sanitize_untrusted_html(&formatted.body)
                  } else {
-                     content.body.clone()
+                     escape_html(&content.body)
                  }
              } else {
-                 content.body.clone()
+                 escape_html(&content.body)
              };
-             format!("* {}", body_html)
+             format!("* {}", body_safe)
         },
         MessageType::Notice(content) => {
              if let Some(formatted) = &content.formatted {
                  if formatted.format == matrix_sdk::ruma::events::room::message::MessageFormat::Html {
-                     return formatted.body.clone();
+                     return sanitize_untrusted_html(&formatted.body);
                  }
              }
-             content.body.clone()
+             escape_html(&content.body)
         },
-        MessageType::Image(image_content) => format!("[Image: {}]", image_content.body),
-        MessageType::Video(video_content) => format!("[Video: {}]", video_content.body),
-        MessageType::Audio(audio_content) => format!("[Audio: {}]", audio_content.body),
-        MessageType::File(file_content) => format!("[File: {}]", file_content.body),
-        MessageType::Location(location_content) => format!("[Location: {}] ({})", location_content.body, location_content.geo_uri),
+        MessageType::Image(image_content) => format!("[Image: {}]", escape_html(&image_content.body)),
+        MessageType::Video(video_content) => format!("[Video: {}]", escape_html(&video_content.body)),
+        MessageType::Audio(audio_content) => format!("[Audio: {}]", escape_html(&audio_content.body)),
+        MessageType::File(file_content) => format!("[File: {}]", escape_html(&file_content.body)),
+        MessageType::Location(location_content) => format!(
+            "[Location: {}] ({})",
+            escape_html(&location_content.body),
+            escape_html(location_content.geo_uri.as_str())
+        ),
         _ => "[Unsupported Message Type]".to_string(),
     }
 }
@@ -1383,17 +1378,23 @@ mod tests {
     #[test]
     fn test_format_markdown() {
         let content = RoomMessageEventContent::text_plain("**Bold** and *Italic*");
-        // pulldown-cmark renders this as <p><strong>Bold</strong> and <em>Italic</em></p>
-        // distinct from plain text.
-        // Our helper strips <p> tags.
         let html = get_display_html(&content);
-        assert_eq!(html, "<strong>Bold</strong> and <em>Italic</em>");
+        assert_eq!(html, "**Bold** and *Italic*");
     }
     
     #[test]
     fn test_formatted_html_override() {
         let content = RoomMessageEventContent::text_html("Plain", "<b>Bold</b>");
-        assert_eq!(get_display_html(&content), "<b>Bold</b>");
+        assert_eq!(get_display_html(&content), "Bold");
+    }
+
+    #[test]
+    fn test_formatted_html_sanitizes_script_payload() {
+        let content = RoomMessageEventContent::text_html(
+            "x",
+            "<img src=x onerror=alert(1)><script>alert(2)</script><b>ok</b>",
+        );
+        assert_eq!(get_display_html(&content), "alert(2)ok");
     }
 
     #[test]
@@ -1434,6 +1435,11 @@ fn strip_html_tags(input: &str) -> String {
                    .replace("&nbsp;", " ");
                    
     output
+}
+
+fn sanitize_untrusted_html(input: &str) -> String {
+    // Conservative strategy: strip all tags, then escape.
+    escape_html(&strip_html_tags(input))
 }
 
 #[no_mangle]
@@ -1728,28 +1734,49 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
                     // Fetch recent messages to find threads
                     // We will scan the last 50 messages for now
                     use matrix_sdk::room::MessagesOptions;
-                    
+                    use matrix_sdk::ruma::events::{AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent};
+                    use matrix_sdk::ruma::events::room::message::Relation;
                     use matrix_sdk::ruma::UInt;
                     let mut options = MessagesOptions::backward();
                     options.limit = UInt::new(50).unwrap();
                     
                     // We need to accumulate threads: Map<RootID, (LatestMsg, Count, TS)>
                     // This is a naive scan. Ideally we'd use the /threads API if available.
-                    let threads: std::collections::HashMap<String, (String, u64, u64)> = std::collections::HashMap::new();
+                    let mut threads: std::collections::HashMap<String, (String, u64, u64)> = std::collections::HashMap::new();
 
-                    if let Ok(_messages) = room.messages(options).await {
-                       /* Thread scanning disabled due to type mismatches
-                       for event in messages.chunk {
-                           // ...
-                       }
-                       */
+                    if let Ok(messages) = room.messages(options).await {
+                        for event in messages.chunk {
+                            if let Ok(any_ev) = event.raw().deserialize() {
+                                if let AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomMessage(msg_ev)) = any_ev {
+                                    if let SyncMessageLikeEvent::Original(orig) = msg_ev {
+                                        if let Some(Relation::Thread(thread)) = &orig.content.relates_to {
+                                            let root_id = thread.event_id.to_string();
+                                            let body = crate::handlers::messages::render_room_message(&orig, &room).await;
+                                            let ts: u64 = orig.origin_server_ts.0.into();
+
+                                            if let Some((latest_body, count, latest_ts)) = threads.get_mut(&root_id) {
+                                                *count += 1;
+                                                if ts >= *latest_ts {
+                                                    *latest_body = body;
+                                                    *latest_ts = ts;
+                                                }
+                                            } else {
+                                                threads.insert(root_id, (body, 1, ts));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     // Send results to C
                     let c_room_id = CString::new(room_id_str.clone()).unwrap_or_default();
                     let guard = THREAD_LIST_CALLBACK.lock().unwrap();
                     if let Some(cb) = *guard {
-                        for (root_id, (body, count, ts)) in threads {
+                        let mut items: Vec<(String, (String, u64, u64))> = threads.into_iter().collect();
+                        items.sort_by(|a, b| b.1.2.cmp(&a.1.2));
+                        for (root_id, (body, count, ts)) in items {
                             let c_root = CString::new(root_id).unwrap_or_default();
                             // Sanitize body to prevent null byte crashes
                             let safe_body = body.replace('\0', "");

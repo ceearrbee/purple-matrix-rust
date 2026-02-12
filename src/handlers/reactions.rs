@@ -35,7 +35,7 @@ pub async fn handle_sticker(event: SyncStickerEvent, room: Room) {
         log::info!("Sticker in {}: {}", room_id, content.body);
         
         use matrix_sdk::media::{MediaFormat, MediaRequestParameters};
-        use base64::Engine as _;
+
         
         let request = MediaRequestParameters { source: content.source.clone().into(), format: MediaFormat::File };
         
