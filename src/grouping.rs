@@ -10,10 +10,10 @@ pub async fn get_room_group_name(room: &Room) -> String {
     
     if let Ok(Some(tags)) = room.tags().await {
         if tags.contains_key(&TagName::Favorite) {
-            return "Favorites".to_string();
+            return "Favorites / Rooms".to_string();
         }
         if tags.contains_key(&TagName::LowPriority) {
-            return "Low Priority".to_string();
+            return "Low Priority / Rooms".to_string();
         }
         // UserDefined tags could be used here too if we wanted "Matrix: [Tag]"
     }
@@ -35,7 +35,7 @@ pub async fn get_room_group_name(room: &Room) -> String {
                                  if let Ok(parent_id_obj) = <&matrix_sdk::ruma::RoomId>::try_from(parent_id.as_str()) {
                                       if let Some(parent_space) = room.client().get_room(parent_id_obj) {
                                            if let Ok(space_name) = parent_space.display_name().await {
-                                               return space_name.to_string();
+                                               return format!("{} / Rooms", space_name);
                                            }
                                       }
                                  }
@@ -48,5 +48,5 @@ pub async fn get_room_group_name(room: &Room) -> String {
     }
 
     // 4. Default
-    "Matrix Rooms".to_string()
+    "Matrix Rooms / Rooms".to_string()
 }

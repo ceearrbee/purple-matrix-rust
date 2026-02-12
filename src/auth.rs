@@ -5,7 +5,7 @@ use std::os::raw::c_char;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use matrix_sdk::Client;
 use crate::ffi::{CONNECTED_CALLBACK, LOGIN_FAILED_CALLBACK, SSO_CALLBACK};
 use crate::{RUNTIME, DATA_PATH, CLIENTS};
@@ -38,13 +38,7 @@ fn extract_login_token(input: &str) -> Option<String> {
         || trimmed.contains('?')
         || trimmed.contains("loginToken=")
     {
-        let query = trimmed.split('?').nth(1).unwrap_or(trimmed);
-        for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
-            if k == "loginToken" && !v.is_empty() {
-                return Some(v.into_owned());
-            }
-        }
-        None
+        extract_query_param(trimmed, "loginToken")
     } else {
         // Backward compatibility: allow raw token pasted directly.
         if trimmed.chars().any(|c| c.is_whitespace()) {
@@ -53,6 +47,24 @@ fn extract_login_token(input: &str) -> Option<String> {
             Some(trimmed.to_string())
         }
     }
+}
+
+fn extract_query_param(input: &str, key: &str) -> Option<String> {
+    let query = input.split('?').nth(1).unwrap_or(input);
+    for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+        if k == key && !v.is_empty() {
+            return Some(v.into_owned());
+        }
+    }
+    None
+}
+
+fn generate_sso_state() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{:x}{:x}", nanos, std::process::id())
 }
 
 #[no_mangle]
@@ -452,7 +464,8 @@ fn start_sso_flow(client: Client) {
             };
             
             let port = listener.server_addr().to_ip().unwrap().port();
-            let redirect_url = format!("http://localhost:{}/login", port);
+            let state = generate_sso_state();
+            let redirect_url = format!("http://localhost:{}/login?state={}", port, state);
             log::info!("Listening for SSO callback on {}", redirect_url);
 
             // Native SSO URL Construction
@@ -494,6 +507,13 @@ fn start_sso_flow(client: Client) {
                     Ok(Some(request)) => {
                         let url_string = request.url().to_string();
                         if let Some(token) = extract_login_token(&url_string) {
+                            let returned_state = extract_query_param(&url_string, "state");
+                            if returned_state.as_deref() != Some(state.as_str()) {
+                                let response = tiny_http::Response::from_string(
+                                    "SSO verification failed (invalid state). Please retry login.");
+                                let _ = request.respond(response);
+                                continue;
+                            }
                             log::info!("Captured SSO token from callback.");
                             let response = tiny_http::Response::from_string("Login successful! You can close this window.");
                             let _ = request.respond(response);

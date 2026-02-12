@@ -32,6 +32,16 @@ fn build_safe_media_path(event_id: &str, kind: &str, original_name: &str) -> Str
     format!("/tmp/matrix_{}_{}_{}", safe_event, safe_kind, safe_name)
 }
 
+fn short_event_id(id: &str) -> String {
+    let trimmed = id.trim_start_matches('$');
+    let short = trimmed.chars().take(10).collect::<String>();
+    if short.is_empty() {
+        "message".to_string()
+    } else {
+        short
+    }
+}
+
 pub async fn handle_room_message(event: SyncRoomMessageEvent, room: Room) {
     if let SyncRoomMessageEvent::Original(ev) = event {
         let sender = ev.sender.as_str();
@@ -55,24 +65,21 @@ pub async fn handle_room_message(event: SyncRoomMessageEvent, room: Room) {
         
         let body = render_room_message(&ev, &room).await;
 
-        log::info!("[Rust] Inspecting event {} from {} for relations. Has relates_to: {}", ev.event_id, sender, ev.content.relates_to.is_some());
-        
         // Check for Thread Relation
         if let Some(Relation::Thread(thread)) = ev.content.relates_to.clone() {
-            log::info!("[Rust] Thread relation detected! Root: {}", thread.event_id);
             thread_root_id = Some(thread.event_id.to_string());
         }
 
         let mut final_body = body;
 
-        // Handle Reply Rendering (Blockquote)
+        // Handle reply rendering without leaking full event IDs into chat text.
         if let Some(Relation::Reply { in_reply_to }) = &ev.content.relates_to {
             let style = "border-left: 3px solid #ccc; padding-left: 8px; margin-left: 5px; color: #666; font-size: 90%;";
-            // Check if we can get the actual replied-to event? (Future improvement)
+            let reply_ref = short_event_id(in_reply_to.event_id.as_str());
             final_body = format!(
-                "<div style=\"{}\">Replying to msg {}</div><br/>{}",
+                "<div style=\"{}\">Reply to {}...</div><br/>{}",
                 style,
-                crate::escape_html(in_reply_to.event_id.as_str()),
+                crate::escape_html(&reply_ref),
                 final_body
             );
         }
