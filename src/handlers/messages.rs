@@ -8,14 +8,14 @@ fn sanitize_filename_component(input: &str, fallback: &str) -> String {
     let mut out: String = input
         .chars()
         .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+            if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') {
                 c
             } else {
                 '_'
             }
         })
         .collect();
-    out = out.trim_matches('_').trim_matches('.').to_string();
+    out = out.trim_matches('_').to_string();
     if out.is_empty() {
         fallback.to_string()
     } else if out.len() > 80 {
