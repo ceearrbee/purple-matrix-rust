@@ -512,9 +512,13 @@ static gboolean process_msg_cb(gpointer data) {
       conv = purple_find_chat(gc, chat_id);
 
       if (conv) {
-        // Set title if it's a thread
-        if (d->thread_root_id && separate_threads) {
-          purple_conversation_set_title(conv, d->message);
+        // Keep stable human-friendly title from buddy list metadata, not
+        // per-message content.
+        PurpleChat *blist_chat = purple_blist_find_chat(account, target_id);
+        if (blist_chat && blist_chat->alias) {
+          purple_conversation_set_title(conv, blist_chat->alias);
+        } else if (d->thread_root_id && separate_threads) {
+          purple_conversation_set_title(conv, "Thread");
         }
       }
     } else {
