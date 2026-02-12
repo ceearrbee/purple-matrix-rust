@@ -150,6 +150,8 @@ extern void purple_matrix_rust_set_room_preview_callback(
 extern void purple_matrix_rust_set_thread_list_callback(
     void (*cb)(const char *room_id, const char *thread_root_id,
                const char *latest_msg, guint64 count, guint64 ts));
+extern void purple_matrix_rust_list_threads(const char *user_id,
+                                            const char *room_id);
 
 extern void purple_matrix_rust_set_poll_list_callback(
     void (*cb)(const char *room_id, const char *event_id, const char *sender,
@@ -2039,6 +2041,8 @@ static PurpleCmdRet cmd_reconnect(PurpleConversation *conv, const gchar *cmd,
   return PURPLE_CMD_RET_OK;
 }
 
+static char *dup_base_room_id(const char *raw_room_id);
+
 static PurpleCmdRet cmd_leave(PurpleConversation *conv, const gchar *cmd,
                               gchar **args, gchar **error, void *data) {
   const char *raw_room_id = purple_conversation_get_name(conv);
@@ -2049,11 +2053,7 @@ static PurpleCmdRet cmd_leave(PurpleConversation *conv, const gchar *cmd,
 
   // If called from a thread virtual chat (room_id|thread_id), leave only the
   // base room.
-  char *room_id = g_strdup(raw_room_id);
-  char *pipe = strchr(room_id, '|');
-  if (pipe) {
-    *pipe = '\0';
-  }
+  char *room_id = dup_base_room_id(raw_room_id);
 
   purple_matrix_rust_leave_room(
       purple_account_get_username(purple_conversation_get_account(conv)),
@@ -2061,6 +2061,66 @@ static PurpleCmdRet cmd_leave(PurpleConversation *conv, const gchar *cmd,
   purple_conversation_write(conv, "System", "Leaving room...",
                             PURPLE_MESSAGE_SYSTEM, time(NULL));
   g_free(room_id);
+  return PURPLE_CMD_RET_OK;
+}
+
+static char *dup_base_room_id(const char *raw_room_id) {
+  if (!raw_room_id) {
+    return NULL;
+  }
+  char *room_id = g_strdup(raw_room_id);
+  char *pipe = strchr(room_id, '|');
+  if (pipe) {
+    *pipe = '\0';
+  }
+  return room_id;
+}
+
+static PurpleCmdRet cmd_list_threads(PurpleConversation *conv, const gchar *cmd,
+                                     gchar **args, gchar **error, void *data) {
+  const char *raw_room_id = purple_conversation_get_name(conv);
+  if (!raw_room_id || !*raw_room_id) {
+    *error = g_strdup("No room is selected.");
+    return PURPLE_CMD_RET_FAILED;
+  }
+  char *room_id = dup_base_room_id(raw_room_id);
+  purple_matrix_rust_list_threads(
+      purple_account_get_username(purple_conversation_get_account(conv)),
+      room_id);
+  purple_conversation_write(conv, "System", "Loading thread list...",
+                            PURPLE_MESSAGE_SYSTEM, time(NULL));
+  g_free(room_id);
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_set_separate_threads(PurpleConversation *conv,
+                                             const gchar *cmd, gchar **args,
+                                             gchar **error, void *data) {
+  if (!args[0] || !*args[0]) {
+    *error = g_strdup("Usage: /matrix_set_separate_threads <on|off>");
+    return PURPLE_CMD_RET_FAILED;
+  }
+  PurpleAccount *account = purple_conversation_get_account(conv);
+  gboolean enabled = FALSE;
+  if (g_ascii_strcasecmp(args[0], "on") == 0 ||
+      g_ascii_strcasecmp(args[0], "true") == 0 ||
+      strcmp(args[0], "1") == 0) {
+    enabled = TRUE;
+  } else if (g_ascii_strcasecmp(args[0], "off") == 0 ||
+             g_ascii_strcasecmp(args[0], "false") == 0 ||
+             strcmp(args[0], "0") == 0) {
+    enabled = FALSE;
+  } else {
+    *error = g_strdup("Value must be 'on' or 'off'.");
+    return PURPLE_CMD_RET_FAILED;
+  }
+
+  purple_account_set_bool(account, "separate_threads", enabled);
+  purple_conversation_write(
+      conv, "System",
+      enabled ? "Separate thread tabs enabled."
+              : "Separate thread tabs disabled.",
+      PURPLE_MESSAGE_SYSTEM, time(NULL));
   return PURPLE_CMD_RET_OK;
 }
 
@@ -2093,6 +2153,9 @@ static PurpleCmdRet cmd_help(PurpleConversation *conv, const gchar *cmd,
       "&bull; <b>/matrix_reply &lt;msg&gt;</b>: Reply to last message<br>");
   g_string_append(
       msg, "&bull; <b>/matrix_thread &lt;msg&gt;</b>: Reply in thread<br>");
+  g_string_append(msg, "&bull; <b>/matrix_threads</b>: Browse active threads in this room<br>");
+  g_string_append(
+      msg, "&bull; <b>/matrix_set_separate_threads &lt;on|off&gt;</b>: Toggle separate thread tabs<br>");
   g_string_append(
       msg, "&bull; <b>/matrix_edit &lt;msg&gt;</b>: Edit last message<br>");
   g_string_append(
@@ -3796,9 +3859,6 @@ static void room_settings_cb(void *user_data, PurpleRequestFields *fields) {
   g_free(room_id);
 }
 
-extern void purple_matrix_rust_list_threads(const char *user_id,
-                                            const char *room_id);
-
 static void menu_action_list_threads_cb(PurpleBlistNode *node, gpointer data) {
   PurpleChat *chat = (PurpleChat *)node;
   GHashTable *components = purple_chat_get_components(chat);
@@ -4702,6 +4762,19 @@ static void init_plugin(PurplePlugin *plugin) {
       "matrix_thread", "s", PURPLE_CMD_P_PLUGIN,
       PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_thread,
       "matrix_thread <message>: Reply to a thread on the last message", NULL);
+
+  purple_cmd_register(
+      "matrix_threads", "", PURPLE_CMD_P_PLUGIN,
+      PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust",
+      cmd_list_threads,
+      "matrix_threads: List active threads in the current room", NULL);
+
+  purple_cmd_register(
+      "matrix_set_separate_threads", "w", PURPLE_CMD_P_PLUGIN,
+      PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust",
+      cmd_set_separate_threads,
+      "matrix_set_separate_threads <on|off>: Toggle separate thread tabs",
+      NULL);
 
   purple_cmd_register(
       "matrix_reply", "w", PURPLE_CMD_P_PLUGIN,
