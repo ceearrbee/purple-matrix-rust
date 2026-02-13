@@ -574,6 +574,21 @@ static void menu_action_room_settings_cb(PurpleBlistNode *node, gpointer data) {
   purple_request_fields(purple_chat_get_account(chat), "Settings", "Room Settings", NULL, fields, "Save", G_CALLBACK(room_settings_cb), "Cancel", NULL, purple_chat_get_account(chat), NULL, NULL, g_strdup(room_id));
 }
 
+static void menu_action_leave_room_cb(PurpleBlistNode *node, gpointer data) {
+  PurpleChat *chat = (PurpleChat *)node;
+  purple_matrix_rust_leave_room(purple_account_get_username(purple_chat_get_account(chat)), g_hash_table_lookup(purple_chat_get_components(chat), "room_id"));
+}
+
+static void menu_action_mark_unread_cb(PurpleBlistNode *node, gpointer data) {
+  PurpleChat *chat = (PurpleChat *)node;
+  purple_matrix_rust_mark_unread(purple_account_get_username(purple_chat_get_account(chat)), g_hash_table_lookup(purple_chat_get_components(chat), "room_id"), TRUE);
+}
+
+static void menu_action_ignore_buddy_cb(PurpleBlistNode *node, gpointer data) {
+  PurpleBuddy *buddy = (PurpleBuddy *)node;
+  purple_matrix_rust_ignore_user(purple_account_get_username(purple_buddy_get_account(buddy)), purple_buddy_get_name(buddy));
+}
+
 GList *blist_node_menu_cb(PurpleBlistNode *node) {
   GList *list = NULL;
   if (PURPLE_BLIST_NODE_IS_CHAT(node)) {
@@ -581,8 +596,10 @@ GList *blist_node_menu_cb(PurpleBlistNode *node) {
     if (strcmp(purple_account_get_protocol_id(purple_chat_get_account(chat)), "prpl-matrix-rust") == 0) {
       list = g_list_append(list, purple_menu_action_new("Settings...", PURPLE_CALLBACK(menu_action_room_settings_cb), NULL, NULL));
       list = g_list_append(list, purple_menu_action_new("Mark Read", PURPLE_CALLBACK(menu_action_mark_read_cb), NULL, NULL));
+      list = g_list_append(list, purple_menu_action_new("Mark Unread", PURPLE_CALLBACK(menu_action_mark_unread_cb), NULL, NULL));
       list = g_list_append(list, purple_menu_action_new("Security Status", PURPLE_CALLBACK(menu_action_e2ee_status_cb), NULL, NULL));
       list = g_list_append(list, purple_menu_action_new("Power Levels", PURPLE_CALLBACK(cmd_power_levels), NULL, NULL));
+      list = g_list_append(list, purple_menu_action_new("Leave Room", PURPLE_CALLBACK(menu_action_leave_room_cb), NULL, NULL));
       list = g_list_append(list, purple_menu_action_new("Help", PURPLE_CALLBACK(menu_action_buddy_list_help_cb), NULL, NULL));
     }
   } else if (PURPLE_BLIST_NODE_IS_BUDDY(node)) {
@@ -590,6 +607,7 @@ GList *blist_node_menu_cb(PurpleBlistNode *node) {
       list = g_list_append(list, purple_menu_action_new("Get Info", PURPLE_CALLBACK(menu_action_user_info_cb), NULL, NULL));
       list = g_list_append(list, purple_menu_action_new("Verify User", PURPLE_CALLBACK(menu_action_verify_buddy_cb), NULL, NULL));
       list = g_list_append(list, purple_menu_action_new("Send Sticker", PURPLE_CALLBACK(blist_action_send_sticker_cb), NULL, NULL));
+      list = g_list_append(list, purple_menu_action_new("Ignore User", PURPLE_CALLBACK(menu_action_ignore_buddy_cb), NULL, NULL));
     }
   }
   return list;
@@ -600,12 +618,64 @@ static void action_my_profile_cb(PurplePluginAction *action) { purple_matrix_rus
 static void action_enable_backup_cb(PurplePluginAction *action) { menu_action_enable_backup_cb(NULL); }
 static void action_bootstrap_crypto_cb(PurplePluginAction *action) { menu_action_bootstrap_crypto_cb(NULL); }
 
+static void create_room_dialog_cb(void *user_data, PurpleRequestFields *fields) {
+  const char *name = purple_request_fields_get_string(fields, "name");
+  const char *topic = purple_request_fields_get_string(fields, "topic");
+  gboolean public = purple_request_fields_get_bool(fields, "public");
+  if (name && *name) {
+    purple_matrix_rust_create_room(purple_account_get_username(find_matrix_account()), name, topic, public);
+  }
+}
+
+static void action_create_room_cb(PurplePluginAction *action) {
+  PurpleRequestFields *fields = purple_request_fields_new();
+  PurpleRequestFieldGroup *group = purple_request_field_group_new(NULL);
+  purple_request_fields_add_group(fields, group);
+  purple_request_field_group_add_field(group, purple_request_field_string_new("name", "Room Name", NULL, FALSE));
+  purple_request_field_group_add_field(group, purple_request_field_string_new("topic", "Topic", NULL, TRUE));
+  purple_request_field_group_add_field(group, purple_request_field_bool_new("public", "Publicly Searchable", FALSE));
+  purple_request_fields(find_matrix_account(), "Create Room", "Create a new Matrix room", NULL, fields, "Create", G_CALLBACK(create_room_dialog_cb), "Cancel", NULL, find_matrix_account(), NULL, NULL, NULL);
+}
+
+static void action_public_rooms_cb(PurplePluginAction *action) {
+  purple_roomlist_show_with_account(find_matrix_account());
+}
+
+static void action_qr_login_cb(PurplePluginAction *action) {
+  purple_matrix_rust_login_with_qr(purple_account_get_string(find_matrix_account(), "server", "https://matrix.org"), purple_user_dir());
+}
+
+static void join_room_dialog_cb(void *user_data, const char *room_id) {
+  if (room_id && *room_id) {
+    purple_matrix_rust_join_room(purple_account_get_username(find_matrix_account()), room_id);
+  }
+}
+
+static void action_join_room_cb(PurplePluginAction *action) {
+  purple_request_input(find_matrix_account(), "Join Room", "Enter Room ID or Alias", "e.g. #room:example.com", NULL, FALSE, FALSE, NULL, "Join", G_CALLBACK(join_room_dialog_cb), "Cancel", NULL, find_matrix_account(), NULL, NULL, NULL);
+}
+
+static void user_search_dialog_cb(void *user_data, const char *term) {
+  if (term && *term) {
+    purple_matrix_rust_search_users(purple_account_get_username(find_matrix_account()), term, "System");
+  }
+}
+
+static void action_user_search_cb(PurplePluginAction *action) {
+  purple_request_input(find_matrix_account(), "Search Users", "Enter search term", NULL, NULL, FALSE, FALSE, NULL, "Search", G_CALLBACK(user_search_dialog_cb), "Cancel", NULL, find_matrix_account(), NULL, NULL, NULL);
+}
+
 GList *matrix_actions(PurplePlugin *plugin, gpointer context) {
   GList *l = NULL; 
   l = g_list_append(l, purple_plugin_action_new("My Profile", action_my_profile_cb));
+  l = g_list_append(l, purple_plugin_action_new("Join Room by ID...", action_join_room_cb));
+  l = g_list_append(l, purple_plugin_action_new("Create New Room...", action_create_room_cb));
+  l = g_list_append(l, purple_plugin_action_new("Search Users...", action_user_search_cb));
+  l = g_list_append(l, purple_plugin_action_new("Browse Public Rooms", action_public_rooms_cb));
   l = g_list_append(l, purple_plugin_action_new("Reconnect", action_reconnect_cb));
   l = g_list_append(l, purple_plugin_action_new("Check/Enable Online Backup", action_enable_backup_cb));
   l = g_list_append(l, purple_plugin_action_new("Bootstrap Cross-Signing", action_bootstrap_crypto_cb));
+  l = g_list_append(l, purple_plugin_action_new("QR Code Login (MSC4108)", action_qr_login_cb));
   return l;
 }
 

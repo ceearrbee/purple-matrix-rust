@@ -106,6 +106,12 @@ GList *matrix_status_types(PurpleAccount *account) {
 }
 
 char *matrix_status_text(PurpleBuddy *buddy) {
+  if (PURPLE_BLIST_NODE_IS_CHAT((PurpleBlistNode *)buddy)) {
+      PurpleChat *chat = (PurpleChat *)buddy;
+      GHashTable *components = purple_chat_get_components(chat);
+      const char *topic = g_hash_table_lookup(components, "topic");
+      return topic ? purple_markup_strip_html(topic) : NULL;
+  }
   PurplePresence *presence = purple_buddy_get_presence(buddy);
   if (!presence) return NULL;
   PurpleStatus *status = purple_presence_get_active_status(presence);

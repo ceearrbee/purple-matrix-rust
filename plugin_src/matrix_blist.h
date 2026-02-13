@@ -20,6 +20,7 @@ void matrix_roomlist_cancel(PurpleRoomlist *list);
 // PRPL Ops
 const char *matrix_list_icon(PurpleAccount *account, PurpleBuddy *buddy);
 const char *matrix_list_emblem(PurpleBuddy *buddy);
+char *matrix_status_text(PurpleBuddy *buddy);
 void matrix_tooltip_text(PurpleBuddy *buddy, PurpleNotifyUserInfo *user_info, gboolean full);
 void matrix_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group);
 void matrix_remove_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *group);
