@@ -64,6 +64,15 @@ static PurplePluginProtocolInfo prpl_info = {
     .struct_size = sizeof(PurplePluginProtocolInfo)
 };
 
+static void conversation_created_cb(PurpleConversation *conv) {
+  PurpleAccount *account = purple_conversation_get_account(conv);
+  if (strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
+    if (purple_account_get_bool(account, "auto_fetch_history_on_open", TRUE)) {
+      purple_matrix_rust_fetch_history(purple_account_get_username(account), purple_conversation_get_name(conv));
+    }
+  }
+}
+
 static gboolean plugin_load(PurplePlugin *plugin) {
   my_plugin = plugin;
   purple_matrix_rust_init();
@@ -82,10 +91,17 @@ static gboolean plugin_load(PurplePlugin *plugin) {
   purple_matrix_rust_set_poll_list_callback(poll_list_cb);
   matrix_init_sso_callbacks();
   register_matrix_commands(plugin);
+
+  purple_signal_connect(purple_conversations_get_handle(), "conversation-created",
+                        plugin, PURPLE_CALLBACK(conversation_created_cb), NULL);
+
   return TRUE;
 }
 
-static gboolean plugin_unload(PurplePlugin *plugin) { return TRUE; }
+static gboolean plugin_unload(PurplePlugin *plugin) {
+  purple_signals_disconnect_by_handle(plugin);
+  return TRUE;
+}
 
 static PurplePluginInfo info = {
     .magic = PURPLE_PLUGIN_MAGIC,

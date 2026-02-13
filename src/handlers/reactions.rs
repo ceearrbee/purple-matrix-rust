@@ -6,14 +6,23 @@ use crate::ffi::MSG_CALLBACK;
 
 pub async fn handle_reaction(event: SyncReactionEvent, room: Room) {
     if let Some(original_event) = event.as_original() {
-        let sender = original_event.sender.as_str();
+        let sender_id = original_event.sender.as_str();
+        let mut sender_display = sender_id.to_string();
+        
+        if let Ok(Some(member)) = room.get_member(&original_event.sender).await {
+            if let Some(dn) = member.display_name() {
+                 sender_display = dn.to_owned();
+            }
+        }
+        
         let room_id = room.room_id().as_str();
         let emoji = &original_event.content.relates_to.key;
         
-        let body = format!("[Reaction] {} reacted with {}", sender, emoji);
-        log::info!("Reaction in {}: {} -> {}", room_id, sender, emoji);
+        // Use italics and grey color for reactions to make them less intrusive
+        let body = format!("<span style=\"color: #888; font-style: italic;\">* {} reacted with {}</span>", crate::escape_html(&sender_display), emoji);
+        log::info!("Reaction in {}: {} -> {}", room_id, sender_display, emoji);
 
-        let c_sender = CString::new(sender).unwrap_or_default();
+        let c_sender = CString::new(original_event.sender.as_str()).unwrap_or_default();
         let c_body = CString::new(body).unwrap_or_default();
         let c_room_id = CString::new(room_id).unwrap_or_default();
         
@@ -41,8 +50,9 @@ pub async fn handle_sticker(event: SyncStickerEvent, room: Room) {
         
         // Generate a safe filename for the sticker
         let sticker_id = original_event.event_id.as_str().replace(":", "_").replace("$", ""); // Event ID is unique
-        let path = std::path::PathBuf::from(format!("/tmp/matrix_stickers/{}.png", sticker_id)); // Assume PNG or try to deduce?
-        // Stickers usually don't have extension in URL, but PNG/WebP is common.
+        let mut path_buf = crate::media_helper::get_media_dir();
+        path_buf.push(format!("sticker_{}.png", sticker_id));
+        let path = path_buf.as_path();
         
         let mut sticker_uri = String::new();
         let mut downloaded = false;
@@ -51,7 +61,7 @@ pub async fn handle_sticker(event: SyncStickerEvent, room: Room) {
              sticker_uri = format!("file://{}", path.to_string_lossy());
              downloaded = true;
         } else {
-             let _ = std::fs::create_dir_all("/tmp/matrix_stickers");
+             // Directory guaranteed by get_media_dir
              if let Ok(bytes) = room.client().media().get_media_content(&request, true).await {
                   if let Ok(mut file) = std::fs::File::create(&path) {
                        use std::io::Write;

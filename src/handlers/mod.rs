@@ -8,3 +8,4 @@ pub mod polls;
 pub mod receipts;
 pub mod crypto;
 pub mod stickers;
+pub mod commands;

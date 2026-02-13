@@ -42,7 +42,10 @@ void matrix_login(PurpleAccount *account) {
   else if (success != 2) purple_connection_error_reason(gc, PURPLE_CONNECTION_ERROR_NETWORK_ERROR, "Failed to login");
 }
 
-void matrix_close(PurpleConnection *gc) { }
+void matrix_close(PurpleConnection *gc) {
+  PurpleAccount *account = purple_connection_get_account(gc);
+  purple_matrix_rust_logout(purple_account_get_username(account));
+}
 
 static void manual_sso_token_action_cb(void *user_data, PurpleRequestFields *fields) {
   const char *token = purple_request_fields_get_string(fields, "sso_token");

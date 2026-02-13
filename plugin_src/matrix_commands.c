@@ -458,7 +458,20 @@ GList *blist_node_menu_cb(PurpleBlistNode *node) {
   return list;
 }
 
+static PurpleCmdRet cmd_resync_history(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  PurpleAccount *acc = purple_conversation_get_account(conv);
+  purple_matrix_rust_resync_recent_history(purple_account_get_username(acc), purple_conversation_get_name(conv));
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_enable_backup(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  purple_matrix_rust_enable_key_backup(purple_account_get_username(purple_conversation_get_account(conv)));
+  return PURPLE_CMD_RET_OK;
+}
+
 void register_matrix_commands(PurplePlugin *plugin) {
+  purple_cmd_register("matrix_sync_history", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_resync_history, "matrix_sync_history: Reset and resync history", NULL);
+  purple_cmd_register("matrix_enable_backup", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_enable_backup, "matrix_enable_backup: Check or enable online key backup", NULL);
   purple_cmd_register("matrix_thread", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_thread, "matrix_thread <msg>", NULL);
   purple_cmd_register("matrix_threads", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_list_threads, "matrix_threads: List threads", NULL);
   purple_cmd_register("matrix_leave", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_leave, "matrix_leave [reason]", NULL);

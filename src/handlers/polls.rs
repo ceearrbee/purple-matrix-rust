@@ -9,7 +9,10 @@ pub async fn handle_poll_start(event: SyncPollStartEvent, room: Room) {
         let room_id = room.room_id().as_str();
         let timestamp: u64 = ev.origin_server_ts.0.into();
         
-        let body = format!("[Poll] A poll has been started by {}. Use 'Active Polls' from the menu to vote.", sender);
+        let question = ev.content.poll.question.text.find_plain().unwrap_or("Poll").to_string();
+        let options: Vec<String> = ev.content.poll.answers.iter().map(|a| a.text.find_plain().unwrap_or("Option").to_string()).collect();
+        
+        let body = crate::html_fmt::style_poll(&question, options);
 
         let c_sender = CString::new(sender).unwrap_or_default();
         let c_body = CString::new(body).unwrap_or_default();

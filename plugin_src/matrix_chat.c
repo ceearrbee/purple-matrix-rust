@@ -235,6 +235,11 @@ void matrix_join_chat(PurpleConnection *gc, GHashTable *data) {
   if (!room_id) return;
   purple_matrix_rust_join_room(purple_account_get_username(account), room_id);
   purple_matrix_rust_fetch_room_members(purple_account_get_username(account), room_id);
+
+  if (purple_account_get_bool(account, "auto_fetch_history_on_open", TRUE)) {
+    purple_matrix_rust_fetch_history(purple_account_get_username(account), room_id);
+  }
+
   int chat_id = get_chat_id(room_id);
   PurpleConversation *conv = purple_find_chat(gc, chat_id);
   if (!conv) {

@@ -99,7 +99,7 @@ async fn finish_sso_internal(client: Client, token: String) {
                 
                 if let Some(path) = path_opt {
                     log::info!("Deleting data directory: {:?}", path);
-                    let _ = std::fs::remove_dir_all(&path);
+                    safe_wipe_data_dir(&path);
                     let _ = std::fs::create_dir_all(&path);
                     
                     // 4. Rebuild Client
@@ -215,6 +215,18 @@ fn write_session_json_secure(path: &std::path::Path, json: &str) -> std::io::Res
     file.write_all(json.as_bytes())
 }
 
+fn safe_wipe_data_dir(path: &std::path::Path) {
+    let path_str = path.to_string_lossy();
+    // Safety check: Ensure we are only wiping directories that look like our expected data path.
+    // It must contain 'matrix_rust_data' and must not be a top-level system directory.
+    if path_str.contains("matrix_rust_data") && path.components().count() > 3 {
+        log::warn!("Safety wipe: Deleting directory {:?}", path);
+        let _ = std::fs::remove_dir_all(path);
+    } else {
+        log::error!("Safety wipe BLOCKED: Path {:?} looks suspicious or too high-level.", path);
+    }
+}
+
 async fn perform_login(username: String, password: String, homeserver: String, data_dir: String) {
     let data_path = PathBuf::from(&data_dir);
     
@@ -235,7 +247,7 @@ async fn perform_login(username: String, password: String, homeserver: String, d
         Ok(c) => c,
         Err(e) => {
              log::error!("Failed to build client: {:?}. Wiping and retrying...", e);
-             let _ = std::fs::remove_dir_all(&data_path);
+             safe_wipe_data_dir(&data_path);
              let _ = std::fs::create_dir_all(&data_path);
              match build_client(&homeserver, &data_path).await {
                  Ok(c2) => c2,
@@ -302,7 +314,7 @@ async fn perform_login(username: String, password: String, homeserver: String, d
 
     log::warn!("No existing session found (user_id is None). Wiping potentially stale data to prevent MismatchedAccount errors...");
     if data_path.exists() {
-         let _ = std::fs::remove_dir_all(&data_path);
+         safe_wipe_data_dir(&data_path);
          let _ = std::fs::create_dir_all(&data_path);
          
          // Re-build client after wipe to ensure fresh state
@@ -564,9 +576,7 @@ pub extern "C" fn purple_matrix_rust_deactivate_account(erase_data: bool) {
             guard.clone()
         };
         if let Some(path) = path_opt {
-            if let Err(e) = std::fs::remove_dir_all(&path) {
-                log::warn!("Failed to remove data directory {:?}: {:?}", path, e);
-            }
+            safe_wipe_data_dir(&path);
         }
     }
 }

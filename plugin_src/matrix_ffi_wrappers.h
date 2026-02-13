@@ -5,7 +5,6 @@
 #include <stdbool.h>
 
 // Rust FFI declarations
-extern void purple_matrix_rust_init_logging(void);
 extern void purple_matrix_rust_init_invite_cb(void (*cb)(const char *, const char *));
 extern void purple_matrix_rust_send_im(const char *user_id, const char *target_id, const char *text);
 extern void purple_matrix_rust_fetch_room_members(const char *user_id, const char *room_id);
@@ -22,7 +21,6 @@ extern void purple_matrix_rust_set_read_marker_callback(void (*cb)(const char *r
 extern void purple_matrix_rust_join_room(const char *user_id, const char *room_id);
 extern void purple_matrix_rust_leave_room(const char *user_id, const char *room_id);
 extern void purple_matrix_rust_invite_user(const char *user_id, const char *room_id, const char *invitee_id);
-extern void purple_matrix_rust_set_update_buddy_callback(void (*cb)(const char *user_id, const char *alias, const char *icon_path));
 extern void purple_matrix_rust_init_sso_cb(void (*cb)(const char *));
 extern void purple_matrix_rust_finish_sso(const char *token);
 extern void purple_matrix_rust_set_display_name(const char *user_id, const char *name);
@@ -56,6 +54,7 @@ extern void purple_matrix_rust_send_reaction(const char *user_id, const char *ro
 extern void purple_matrix_rust_redact_event(const char *user_id, const char *room_id, const char *event_id, const char *reason);
 extern void purple_matrix_rust_send_reply(const char *user_id, const char *room_id, const char *event_id, const char *text);
 extern void purple_matrix_rust_send_edit(const char *user_id, const char *room_id, const char *event_id, const char *body);
+extern void purple_matrix_rust_fetch_history(const char *user_id, const char *room_id);
 extern void purple_matrix_rust_fetch_more_history(const char *user_id, const char *room_id);
 extern void purple_matrix_rust_fetch_more_history_with_limit(const char *user_id, const char *room_id, guint32 limit);
 extern void purple_matrix_rust_resync_recent_history(const char *user_id, const char *room_id);

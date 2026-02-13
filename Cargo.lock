@@ -2714,6 +2714,7 @@ dependencies = [
  "once_cell",
  "pulldown-cmark 0.9.6",
  "qrcode 0.12.0",
+ "regex",
  "serde",
  "serde_json",
  "simple_logger",
