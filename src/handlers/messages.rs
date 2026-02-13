@@ -45,8 +45,8 @@ fn short_event_id(id: &str) -> String {
     }
 }
 
-pub async fn handle_room_message(event: SyncRoomMessageEvent, room: Room) {
-    if let SyncRoomMessageEvent::Original(ev) = event {
+pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMessageEvent>, room: Room) {
+    if let Ok(SyncRoomMessageEvent::Original(ev)) = event.deserialize() {
         let mut sender_display = ev.sender.to_string();
         if let Ok(Some(member)) = room.get_member(&ev.sender).await {
             if let Some(dn) = member.display_name() {
@@ -100,12 +100,18 @@ pub async fn handle_room_message(event: SyncRoomMessageEvent, room: Room) {
             final_body = crate::html_fmt::style_edit(&final_body);
         }
         
-        // Evaluate Highlights (Simple Mentions)
+        // Evaluate Push Rules for Highlight status
         let mut is_highlight = false;
         if let Some(me) = room.client().user_id() {
             if ev.sender != me {
-                let my_id = me.as_str();
-                if final_body.contains(my_id) {
+                if let Ok(Some(push_actions)) = room.event_push_actions(&event).await {
+                    is_highlight = push_actions.iter().any(|a| {
+                        matches!(a, matrix_sdk::ruma::push::Action::SetTweak(matrix_sdk::ruma::push::Tweak::Highlight(true)))
+                    });
+                }
+                
+                // Fallback to simple mention if ruleset check failed or didn't catch it
+                if !is_highlight && final_body.contains(me.as_str()) {
                     is_highlight = true;
                 }
             }
@@ -139,10 +145,10 @@ pub async fn handle_room_message(event: SyncRoomMessageEvent, room: Room) {
     }
 }
 
-pub async fn handle_encrypted(event: matrix_sdk::ruma::events::room::encrypted::SyncRoomEncryptedEvent, room: Room) {
+pub async fn handle_encrypted(event: matrix_sdk::ruma::serde::Raw<matrix_sdk::ruma::events::room::encrypted::SyncRoomEncryptedEvent>, room: Room) {
      use matrix_sdk::ruma::events::room::encrypted::SyncRoomEncryptedEvent;
      
-     if let SyncRoomEncryptedEvent::Original(ev) = event {
+     if let Ok(SyncRoomEncryptedEvent::Original(ev)) = event.deserialize() {
          let sender = ev.sender.as_str();
          let room_id = room.room_id().as_str();
          let timestamp: u64 = ev.origin_server_ts.0.into();
@@ -164,22 +170,24 @@ pub async fn handle_encrypted(event: matrix_sdk::ruma::events::room::encrypted::
      }
 }
 
-pub async fn handle_redaction(event: matrix_sdk::ruma::events::room::redaction::SyncRoomRedactionEvent, room: Room) {
-     let sender = event.sender().as_str();
-     let room_id = room.room_id().as_str();
-     let timestamp: u64 = event.origin_server_ts().0.into();
-     let body = format!(
-         "<span style=\"color: #999; font-style: italic;\">[Redacted] {} removed a message.</span>",
-         crate::escape_html(sender)
-     );
-     
-     let c_sender = CString::new(sender).unwrap_or_default();
-     let c_body = CString::new(body).unwrap_or_default();
-     let c_room_id = CString::new(room_id).unwrap_or_default();
-     
-     let guard = MSG_CALLBACK.lock().unwrap();
-     if let Some(cb) = *guard {
-         cb(c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), timestamp);
+pub async fn handle_redaction(event: matrix_sdk::ruma::serde::Raw<matrix_sdk::ruma::events::room::redaction::SyncRoomRedactionEvent>, room: Room) {
+     if let Ok(ev) = event.deserialize() {
+         let sender = ev.sender().as_str();
+         let room_id = room.room_id().as_str();
+         let timestamp: u64 = ev.origin_server_ts().0.into();
+         let body = format!(
+             "<span style=\"color: #999; font-style: italic;\">[Redacted] {} removed a message.</span>",
+             crate::escape_html(sender)
+         );
+         
+         let c_sender = CString::new(sender).unwrap_or_default();
+         let c_body = CString::new(body).unwrap_or_default();
+         let c_room_id = CString::new(room_id).unwrap_or_default();
+         
+         let guard = MSG_CALLBACK.lock().unwrap();
+         if let Some(cb) = *guard {
+             cb(c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), timestamp);
+         }
      }
 }
 

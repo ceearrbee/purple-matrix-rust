@@ -580,9 +580,8 @@ pub extern "C" fn purple_matrix_rust_set_room_permission(user_id: *const c_char,
             use matrix_sdk::ruma::events::StateEventType;
             
             if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
-                if let Some(room) = client.get_room(rid) {
-                    if let Ok(level_int) = Int::try_from(level as i64) {
-                        // Map special names to their state event types or handle generic strings
+                if let Some(_room) = client.get_room(rid) {
+                    if let Ok(_level_int) = Int::try_from(level as i64) {
                         let ev_type = match ev_type_str.as_str() {
                             "ban" | "kick" | "redact" | "invite" => {
                                 crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, "Use /matrix_set_power_level for ban/kick/redact/invite defaults for now.");
@@ -590,12 +589,6 @@ pub extern "C" fn purple_matrix_rust_set_room_permission(user_id: *const c_char,
                             },
                             s => StateEventType::from(s),
                         };
-                        
-                        // Updating specific event type levels
-                        // Note: SDK might need manual power level event construction for generic event types
-                        // For now, assume common ones or use update_power_levels if it supports it.
-                        // matrix-sdk's update_power_levels usually handles users.
-                        // For generic events, we might need a lower-level call.
                         crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &format!("Setting permission for {} to {} (WIP)", ev_type, level));
                     }
                 }
@@ -785,9 +778,8 @@ pub extern "C" fn purple_matrix_rust_upgrade_room(user_id: *const c_char, room_i
             use matrix_sdk::ruma::RoomVersionId;
             
             if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
-                if let Some(room) = client.get_room(rid) {
-                    use matrix_sdk::ruma::RoomVersionId;
-                    let version = match RoomVersionId::try_from(version_str.as_str()) {
+                if let Some(_room) = client.get_room(rid) {
+                    let _version = match RoomVersionId::try_from(version_str.as_str()) {
                         Ok(v) => v,
                         Err(_) => {
                             crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, "Invalid room version format.");
@@ -796,10 +788,6 @@ pub extern "C" fn purple_matrix_rust_upgrade_room(user_id: *const c_char, room_i
                     };
                     log::info!("Upgrading room {} to version {}", room_id_str, version_str);
                     
-                    // In matrix-sdk 0.16, upgrading a room involves sending a tombstone manually or using a helper if exists.
-                    // Usually it is room.create_room_version(...) but maybe it was named differently or required more args.
-                    // Checking if 'upgrade' or 'create_version' exists.
-                    // Reverting to manual placeholder if API not found.
                     crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, "Room upgrade API not directly found in this SDK version. Use a full client for upgrades.");
                 }
             }
