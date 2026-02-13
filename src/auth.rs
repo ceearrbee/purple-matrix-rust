@@ -300,37 +300,32 @@ async fn perform_login(username: String, password: String, homeserver: String, d
          return;
     }
 
-    log::warn!("No existing session found (user_id is None). Checking for stale data...");
+    log::warn!("No existing session found (user_id is None). Wiping potentially stale data to prevent MismatchedAccount errors...");
     if data_path.exists() {
-         let db_file = data_path.join("matrix-sdk-state.sqlite");
-         if db_file.exists() {
-             log::warn!("Database file exists at {:?} but session was not loaded.", db_file);
-             log::warn!("Configured Homeserver: {}", client.homeserver());
-             // This implies a potential mismatch or corrupted store.
-         } else {
-             log::info!("Data directory exists but no database found.");
+         let _ = std::fs::remove_dir_all(&data_path);
+         let _ = std::fs::create_dir_all(&data_path);
+         
+         // Re-build client after wipe to ensure fresh state
+         let client = match build_client(&homeserver, &data_path).await {
+             Ok(c) => c,
+             Err(e) => {
+                 report_login_failure(format!("Failed to rebuild client after safety wipe: {:?}", e));
+                 return;
+             }
+         };
+         
+         {
+              let mut clients = crate::CLIENTS.lock().unwrap();
+              clients.insert(username.clone(), client.clone());
          }
+         
+         proceed_with_login(client, username, password).await;
+    } else {
+         proceed_with_login(client, username, password).await;
     }
-    
-    // SAFETY WIPE: 
-    // If we are here, 'client' failed to load session. 
-    // If the data directory contains a database, 'login' will fail with "MismatchedAccount".
-    // We MUST wipe to allow login to proceed.
-    // This sacrifices persistence (which just failed anyway) for login ability.
-    if data_path.exists() {
-        let has_files = data_path.read_dir().map(|mut i| i.next().is_some()).unwrap_or(false);
-        if has_files {
-             log::info!("Data directory present but no active session. Proceeding with fresh login flow...");
-        }
-    }
-    
-    // Unused variable removed: db_file
-    
-    {
-         let mut clients = crate::CLIENTS.lock().unwrap();
-         clients.insert(client.user_id().map(|u| u.to_string()).unwrap_or(username.clone()), client.clone());
-    }
+}
 
+async fn proceed_with_login(client: Client, username: String, password: String) {
     if !password.is_empty() {
         log::info!("Attempting Password Login...");
         match client.matrix_auth().login_username(&username, &password).initial_device_display_name("Pidgin (Rust)").await {
@@ -339,42 +334,12 @@ async fn perform_login(username: String, password: String, homeserver: String, d
                 finish_login_success(client).await;
             },
             Err(e) => {
-                // If error is mismatch, we should wipe and retry
-                let err_str = format!("{:?}", e);
-                if err_str.contains("Mismatched") || err_str.contains("Session") {
-                    log::warn!("Login failed due to Store Mismatch. Wiping and retrying...");
-                    drop(client);
-                    let _ = std::fs::remove_dir_all(&data_path);
-                    let _ = std::fs::create_dir_all(&data_path);
-                    
-                    // Recursive retry (safe because we wiped)
-                    // Note: ensure we don't infinite loop. One retry is enough.
-                    // Ideally call perform_login again but it's async recursion.
-                    // Just report failure for now, asking user to retry.
-                    report_login_failure("Session conflict detected. data wiped. Please retry login.".to_string());
-                } else {
-                    report_login_failure(format!("Login failed: {:?}", e));
-                }
+                report_login_failure(format!("Login failed: {:?}", e));
             }
         }
     } else {
         log::info!("Password empty, checking login discovery...");
-        
-        let client_clone = client.clone();
-        RUNTIME.spawn(async move {
-            match client_clone.matrix_auth().get_login_types().await {
-                Ok(types) => {
-                    log::info!("Supported login types: {:?}", types);
-                    // Check for SSO/OIDC
-                    // types is a Ruma Response which contains a list of LoginType
-                    // (Actually in 0.16.0 it might be a bit different)
-                },
-                Err(e) => {
-                    log::warn!("Failed to query login types: {:?}. Assuming SSO.", e);
-                }
-            }
-            start_sso_flow(client_clone);
-        });
+        start_sso_flow(client);
     }
 }
 

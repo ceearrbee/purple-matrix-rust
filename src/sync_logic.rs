@@ -65,7 +65,7 @@ pub async fn start_sync_loop(client: Client) {
     // Initial Room List Population
     let rooms = client_for_sync.joined_rooms();
     for room in rooms {
-        let room_id = room.room_id().as_str();
+        let room_id = room.room_id().as_str().to_string();
         let name = room.display_name().await.map(|d| d.to_string()).unwrap_or_else(|_| "Unknown Room".to_string());
 
         // Check if it is a space
@@ -78,24 +78,42 @@ pub async fn start_sync_loop(client: Client) {
         let topic = room.topic().unwrap_or_default();
         let is_encrypted = room.get_state_event_static::<matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent>().await.unwrap_or(None).is_some();
         
-        // Download Room Avatar
-        let mut avatar_path_str = String::new();
-        if let Some(url) = room.avatar_url() {
-            if let Some(path) = crate::media_helper::download_avatar(&client_for_sync, &url, room_id).await {
-                avatar_path_str = path;
-            }
-        }
+        log::info!("Populating initial room: {} ({}) in group {}. Encrypted: {}", room_id, name, group, is_encrypted);
 
-        log::info!("Populating initial room: {} ({}) in group {}. Icon: {}, Encrypted: {}", room_id, name, group, avatar_path_str, is_encrypted);
-
-        if let (Ok(c_room_id), Ok(c_name), Ok(c_group), Ok(c_avatar), Ok(c_topic)) =
-           (CString::new(room_id), CString::new(name), CString::new(group), CString::new(avatar_path_str), CString::new(topic))
+        if let (Ok(c_room_id), Ok(c_name), Ok(c_group), Ok(c_topic)) =
+           (CString::new(room_id.clone()), CString::new(name.clone()), CString::new(group.clone()), CString::new(topic.clone()))
         {
             let guard = ROOM_JOINED_CALLBACK.lock().unwrap();
             if let Some(cb) = *guard {
-                cb(c_room_id.as_ptr(), c_name.as_ptr(), c_group.as_ptr(), c_avatar.as_ptr(), c_topic.as_ptr(), is_encrypted);
+                cb(c_room_id.as_ptr(), c_name.as_ptr(), c_group.as_ptr(), std::ptr::null(), c_topic.as_ptr(), is_encrypted);
             }
         }
+
+        // Spawn avatar download in background
+        let client_clone = client_for_sync.clone();
+        let room_id_clone = room_id.clone();
+        let name_clone = name.clone();
+        let group_clone = group.clone();
+        let topic_clone = topic.clone();
+        let is_encrypted_clone = is_encrypted;
+
+        tokio::spawn(async move {
+            if let Some(room) = client_clone.get_room(matrix_sdk::ruma::RoomId::parse(&room_id_clone).unwrap().as_ref()) {
+                if let Some(url) = room.avatar_url() {
+                    if let Some(path) = crate::media_helper::download_avatar(&client_clone, &url, &room_id_clone).await {
+                         log::info!("Updating avatar for {}: {}", room_id_clone, path);
+                         if let (Ok(c_room_id), Ok(c_name), Ok(c_group), Ok(c_avatar), Ok(c_topic)) =
+                            (CString::new(room_id_clone), CString::new(name_clone), CString::new(group_clone), CString::new(path), CString::new(topic_clone))
+                         {
+                             let guard = ROOM_JOINED_CALLBACK.lock().unwrap();
+                             if let Some(cb) = *guard {
+                                 cb(c_room_id.as_ptr(), c_name.as_ptr(), c_group.as_ptr(), c_avatar.as_ptr(), c_topic.as_ptr(), is_encrypted_clone);
+                             }
+                         }
+                    }
+                }
+            }
+        });
     }
 
     // Initial Invite Population (for pending invites)

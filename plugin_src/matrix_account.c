@@ -103,7 +103,10 @@ GList *matrix_status_types(PurpleAccount *account) {
 }
 
 char *matrix_status_text(PurpleBuddy *buddy) {
-  PurpleStatus *status = purple_presence_get_active_status(purple_buddy_get_presence(buddy));
+  PurplePresence *presence = purple_buddy_get_presence(buddy);
+  if (!presence) return NULL;
+  PurpleStatus *status = purple_presence_get_active_status(presence);
+  if (!status) return NULL;
   const char *msg = purple_status_get_attr_string(status, "message");
   return msg ? g_strdup(msg) : NULL;
 }

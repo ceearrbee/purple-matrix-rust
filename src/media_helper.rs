@@ -45,6 +45,11 @@ pub async fn cleanup_media_files() {
     if let Ok(mut entries) = tokio::fs::read_dir(&temp_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
+            if let Ok(metadata) = tokio::fs::metadata(&path).await {
+                if !metadata.is_file() {
+                    continue;
+                }
+            }
             if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
                 if filename.starts_with("matrix_") {
                     if let Err(e) = tokio::fs::remove_file(&path).await {
