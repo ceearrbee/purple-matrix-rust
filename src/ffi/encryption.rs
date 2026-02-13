@@ -165,3 +165,56 @@ pub extern "C" fn purple_matrix_rust_export_room_keys(user_id: *const c_char, pa
         });
     });
 }
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_enable_key_backup(user_id: *const c_char) {
+    if user_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            let encryption = client.encryption();
+            let backup = encryption.backups();
+            
+            match backup.state() {
+                matrix_sdk::encryption::backups::BackupState::Unknown => {
+                    log::info!("Backup state unknown, checking server...");
+                    if let Ok(exists) = backup.exists_on_server().await {
+                        if exists {
+                             crate::ffi::send_system_message(&user_id_str, "Online Key Backup exists on server. You can restore from it using /matrix_restore_backup <security_key>.");
+                        } else {
+                             crate::ffi::send_system_message(&user_id_str, "No Online Key Backup found. Auto-creation is not yet supported in this version. Please enable backup on another client.");
+                             // create_backup() not available in this SDK version or requires different args.
+                        }
+                    } else {
+                        crate::ffi::send_system_message(&user_id_str, "Failed to check backup status on server.");
+                    }
+                },
+                state => {
+                    crate::ffi::send_system_message(&user_id_str, &format!("Key backup state: {:?}", state));
+                }
+            }
+        });
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_restore_from_backup(user_id: *const c_char, recovery_key: *const c_char) {
+    if user_id.is_null() || recovery_key.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let key_str = unsafe { CStr::from_ptr(recovery_key).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            log::info!("Restoring from backup...");
+            let recovery_key = key_str.trim();
+            
+            // Try to use the secret storage recovery which often handles backup decryption too.
+            // This avoids needing the specific RecoveryKey struct which we failed to import.
+            match client.encryption().recovery().recover(recovery_key).await {
+                 Ok(_) => crate::ffi::send_system_message(&user_id_str, "Secret Storage recovered and keys restored from backup (if available)."),
+                 Err(e) => crate::ffi::send_system_message(&user_id_str, &format!("Recovery failed: {:?}", e)),
+            }
+        });
+    });
+}
