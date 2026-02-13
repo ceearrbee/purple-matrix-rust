@@ -48,11 +48,7 @@ char *sanitize_markup_text(const char *input) {
 }
 
 void matrix_request_field_set_help_string(PurpleRequestField *field, const char *hint) {
-#if PURPLE_VERSION_CHECK(2, 15, 0)
-  purple_request_field_set_help_string(field, hint);
-#else
   (void)field; (void)hint;
-#endif
 }
 
 PurpleAccount *find_matrix_account(void) {
