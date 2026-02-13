@@ -110,6 +110,22 @@ pub extern "C" fn purple_matrix_rust_search_users(user_id: *const c_char, search
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_search_stickers(user_id: *const c_char, search_term: *const c_char, room_id: *const c_char) {
+    if user_id.is_null() || search_term.is_null() || room_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let _term = unsafe { CStr::from_ptr(search_term).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            // Sticker search depends on specific integration or custom implementations.
+            // Placeholder: report not supported yet but mention command exists.
+            crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, "Sticker search is not fully implemented in this version. Use /matrix_sticker <mxc_url> to send a known sticker.");
+        });
+    });
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_set_roomlist_add_callback(cb: RoomListAddCallback) {
     let mut guard = ROOMLIST_ADD_CALLBACK.lock().unwrap();
     *guard = Some(cb);

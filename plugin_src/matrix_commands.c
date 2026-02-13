@@ -33,6 +33,12 @@ static PurpleCmdRet cmd_sticker(PurpleConversation *conv, const gchar *cmd, gcha
   return PURPLE_CMD_RET_OK;
 }
 
+static PurpleCmdRet cmd_sticker_search(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  if (!args[0] || !*args[0]) { *error = g_strdup("Usage: /matrix_sticker_search <term>"); return PURPLE_CMD_RET_FAILED; }
+  purple_matrix_rust_search_stickers(purple_account_get_username(purple_conversation_get_account(conv)), args[0], purple_conversation_get_name(conv));
+  return PURPLE_CMD_RET_OK;
+}
+
 static PurpleCmdRet cmd_reply(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
   const char *last_id = purple_conversation_get_data(conv, "last_event_id");
   if (!last_id) { *error = g_strdup("No message to reply to."); return PURPLE_CMD_RET_FAILED; }
@@ -223,6 +229,11 @@ static PurpleCmdRet cmd_preview_room(PurpleConversation *conv, const gchar *cmd,
   return PURPLE_CMD_RET_OK;
 }
 
+static PurpleCmdRet cmd_my_profile(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  purple_matrix_rust_get_my_profile(purple_account_get_username(purple_conversation_get_account(conv)));
+  return PURPLE_CMD_RET_OK;
+}
+
 static PurpleCmdRet cmd_set_history_page_size(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
   if (!args[0]) return PURPLE_CMD_RET_FAILED;
   purple_account_set_string(purple_conversation_get_account(conv), "history_page_size", args[0]);
@@ -286,6 +297,11 @@ static PurpleCmdRet cmd_set_power_level(PurpleConversation *conv, const gchar *c
   return PURPLE_CMD_RET_OK;
 }
 
+static PurpleCmdRet cmd_set_permission(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  if (args[0] && args[1]) purple_matrix_rust_set_room_permission(purple_account_get_username(purple_conversation_get_account(conv)), purple_conversation_get_name(conv), args[0], atoi(args[1]));
+  return PURPLE_CMD_RET_OK;
+}
+
 static PurpleCmdRet cmd_set_name(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
   if (args[0]) purple_matrix_rust_set_room_name(purple_account_get_username(purple_conversation_get_account(conv)), purple_conversation_get_name(conv), args[0]);
   return PURPLE_CMD_RET_OK;
@@ -323,6 +339,25 @@ static PurpleCmdRet cmd_bulk_redact(PurpleConversation *conv, const gchar *cmd, 
 
 static PurpleCmdRet cmd_knock(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
   if (args[0]) purple_matrix_rust_knock(purple_account_get_username(purple_conversation_get_account(conv)), args[0], args[1]);
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_set_join_rule(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  if (!args[0]) return PURPLE_CMD_RET_FAILED;
+  purple_matrix_rust_set_room_join_rule(purple_account_get_username(purple_conversation_get_account(conv)), purple_conversation_get_name(conv), args[0]);
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_set_guest_access(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  if (!args[0]) return PURPLE_CMD_RET_FAILED;
+  gboolean allow = (g_ascii_strcasecmp(args[0], "allow") == 0 || g_ascii_strcasecmp(args[0], "on") == 0 || strcmp(args[0], "1") == 0);
+  purple_matrix_rust_set_room_guest_access(purple_account_get_username(purple_conversation_get_account(conv)), purple_conversation_get_name(conv), allow);
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_set_history_visibility(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  if (!args[0]) return PURPLE_CMD_RET_FAILED;
+  purple_matrix_rust_set_room_history_visibility(purple_account_get_username(purple_conversation_get_account(conv)), purple_conversation_get_name(conv), args[0]);
   return PURPLE_CMD_RET_OK;
 }
 
@@ -476,6 +511,7 @@ void register_matrix_commands(PurplePlugin *plugin) {
   purple_cmd_register("matrix_threads", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_list_threads, "matrix_threads: List threads", NULL);
   purple_cmd_register("matrix_leave", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_leave, "matrix_leave [reason]", NULL);
   purple_cmd_register("matrix_sticker", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_sticker, "matrix_sticker <url>", NULL);
+  purple_cmd_register("matrix_sticker_search", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_sticker_search, "matrix_sticker_search <term>", NULL);
   purple_cmd_register("matrix_nick", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_nick, "matrix_nick <name>", NULL);
   purple_cmd_register("matrix_avatar", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_avatar, "matrix_avatar <path>", NULL);
   purple_cmd_register("matrix_reply", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_reply, "matrix_reply <msg>", NULL);
@@ -499,6 +535,7 @@ void register_matrix_commands(PurplePlugin *plugin) {
   purple_cmd_register("matrix_redact", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_redact, "matrix_redact [reason]", NULL);
   purple_cmd_register("matrix_history", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_history, "matrix_history", NULL);
   purple_cmd_register("matrix_preview_room", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_preview_room, "matrix_preview_room <id>", NULL);
+  purple_cmd_register("matrix_my_profile", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_my_profile, "matrix_my_profile", NULL);
   purple_cmd_register("matrix_set_history_page_size", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_history_page_size, "matrix_set_history_page_size <n>", NULL);
   purple_cmd_register("matrix_set_auto_fetch_history", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_auto_fetch_history, "matrix_set_auto_fetch_history <on|off>", NULL);
   purple_cmd_register("matrix_create_room", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_create_room, "matrix_create_room <name>", NULL);
@@ -511,6 +548,7 @@ void register_matrix_commands(PurplePlugin *plugin) {
   purple_cmd_register("matrix_ignore", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_ignore, "matrix_ignore <user>", NULL);
   purple_cmd_register("matrix_power_levels", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_power_levels, "matrix_power_levels", NULL);
   purple_cmd_register("matrix_set_power_level", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_power_level, "matrix_set_power_level <user> <level>", NULL);
+  purple_cmd_register("matrix_set_permission", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_permission, "matrix_set_permission <event_type> <level>", NULL);
   purple_cmd_register("matrix_set_name", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_name, "matrix_set_name <name>", NULL);
   purple_cmd_register("matrix_set_topic", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_topic, "matrix_set_topic <topic>", NULL);
   purple_cmd_register("matrix_alias_create", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_alias_create, "matrix_alias_create <alias>", NULL);
@@ -519,6 +557,9 @@ void register_matrix_commands(PurplePlugin *plugin) {
   purple_cmd_register("matrix_export_keys", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_export_keys, "matrix_export_keys <path> <pass>", NULL);
   purple_cmd_register("matrix_bulk_redact", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_bulk_redact, "matrix_bulk_redact <count> [reason]", NULL);
   purple_cmd_register("matrix_knock", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_knock, "matrix_knock <id> [reason]", NULL);
+  purple_cmd_register("matrix_join_rule", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_join_rule, "matrix_join_rule <public|invite|knock|restricted>", NULL);
+  purple_cmd_register("matrix_guest_access", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_guest_access, "matrix_guest_access <allow|forbid>", NULL);
+  purple_cmd_register("matrix_history_visibility", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_history_visibility, "matrix_history_visibility <world_readable|shared|invited|joined>", NULL);
   purple_cmd_register("matrix_set_room_avatar", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_room_avatar, "matrix_set_room_avatar <path>", NULL);
   purple_cmd_register("matrix_set_separate_threads", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_separate_threads, "matrix_set_separate_threads <on|off>", NULL);
   purple_cmd_register("matrix_unban", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_unban, "matrix_unban <user> [reason]", NULL);

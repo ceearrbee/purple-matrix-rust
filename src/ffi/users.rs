@@ -247,6 +247,23 @@ pub extern "C" fn purple_matrix_rust_get_user_info(account_user_id: *const c_cha
         });
     });
 }
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_get_my_profile(user_id: *const c_char) {
+    if user_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            if let Ok(profile) = client.account().fetch_user_profile().await {
+                 let display_name = profile.get("displayname").and_then(|v| v.as_str()).unwrap_or("N/A");
+                 let avatar_url = profile.get("avatar_url").and_then(|v| v.as_str()).unwrap_or("N/A");
+                 let msg = format!("<b>My Profile</b>:<br/>Display Name: {}<br/>Avatar URL: {}<br/>User ID: {}", display_name, avatar_url, user_id_str);
+                 crate::ffi::send_system_message(&user_id_str, &msg);
+            }
+        });
+    });
+}
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_ignore_user(account_user_id: *const c_char, target_user_id: *const c_char) {
     if account_user_id.is_null() || target_user_id.is_null() { return; }

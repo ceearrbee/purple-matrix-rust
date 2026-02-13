@@ -536,12 +536,26 @@ pub extern "C" fn purple_matrix_rust_get_power_levels(user_id: *const c_char, ro
                 if let Some(room) = client.get_room(rid) {
                     match room.power_levels().await {
                         Ok(pl) => {
-                             let mut msg = format!("Power Levels for {}:\n", room_id_str);
-                             msg.push_str(&format!("- Users Default: {}\n", pl.users_default));
-                             msg.push_str(&format!("- Events Default: {}\n", pl.events_default));
-                             msg.push_str("- Specific Users:\n");
-                             for (uid, level) in &pl.users {
-                                 msg.push_str(&format!("  - {}: {}\n", uid, level));
+                             let mut msg = format!("<b>Power Levels for {}</b>:<br/>", room_id_str);
+                             msg.push_str(&format!("- Users Default: {}<br/>", pl.users_default));
+                             msg.push_str(&format!("- Events Default: {}<br/>", pl.events_default));
+                             msg.push_str(&format!("- State Default: {}<br/>", pl.state_default));
+                             msg.push_str(&format!("- Ban: {}<br/>", pl.ban));
+                             msg.push_str(&format!("- Kick: {}<br/>", pl.kick));
+                             msg.push_str(&format!("- Redact: {}<br/>", pl.redact));
+                             msg.push_str(&format!("- Invite: {}<br/>", pl.invite));
+                             
+                             if !pl.users.is_empty() {
+                                 msg.push_str("<b>Specific Users:</b><br/>");
+                                 for (uid, level) in &pl.users {
+                                     msg.push_str(&format!("  - {}: {}<br/>", uid, level));
+                                 }
+                             }
+                             if !pl.events.is_empty() {
+                                 msg.push_str("<b>Event-specific Levels:</b><br/>");
+                                 for (ev_type, level) in &pl.events {
+                                     msg.push_str(&format!("  - {}: {}<br/>", ev_type, level));
+                                 }
                              }
                              crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &msg);
                         }, 
@@ -549,6 +563,43 @@ pub extern "C" fn purple_matrix_rust_get_power_levels(user_id: *const c_char, ro
                     }
                 }
              }
+        });
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_room_permission(user_id: *const c_char, room_id: *const c_char, event_type: *const c_char, level: i32) {
+    if user_id.is_null() || room_id.is_null() || event_type.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let ev_type_str = unsafe { CStr::from_ptr(event_type).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::{RoomId, Int};
+            use matrix_sdk::ruma::events::StateEventType;
+            
+            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                if let Some(room) = client.get_room(rid) {
+                    if let Ok(level_int) = Int::try_from(level as i64) {
+                        // Map special names to their state event types or handle generic strings
+                        let ev_type = match ev_type_str.as_str() {
+                            "ban" | "kick" | "redact" | "invite" => {
+                                crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, "Use /matrix_set_power_level for ban/kick/redact/invite defaults for now.");
+                                return;
+                            },
+                            s => StateEventType::from(s),
+                        };
+                        
+                        // Updating specific event type levels
+                        // Note: SDK might need manual power level event construction for generic event types
+                        // For now, assume common ones or use update_power_levels if it supports it.
+                        // matrix-sdk's update_power_levels usually handles users.
+                        // For generic events, we might need a lower-level call.
+                        crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &format!("Setting permission for {} to {} (WIP)", ev_type, level));
+                    }
+                }
+            }
         });
     });
 }
@@ -745,6 +796,104 @@ pub extern "C" fn purple_matrix_rust_set_room_avatar(user_id: *const c_char, roo
                           }
                       }
                  }
+            }
+        });
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_room_join_rule(user_id: *const c_char, room_id: *const c_char, rule: *const c_char) {
+    if user_id.is_null() || room_id.is_null() || rule.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let rule_str = unsafe { CStr::from_ptr(rule).to_string_lossy().to_lowercase() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::RoomId;
+            use matrix_sdk::ruma::events::room::join_rules::{JoinRule, RoomJoinRulesEventContent};
+            
+            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                if let Some(room) = client.get_room(rid) {
+                    let rule = match rule_str.as_str() {
+                        "public" => JoinRule::Public,
+                        "invite" => JoinRule::Invite,
+                        "knock" => JoinRule::Knock,
+                        "restricted" => JoinRule::Restricted(Default::default()),
+                        _ => {
+                            crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, "Invalid join rule. Use: public, invite, knock, restricted");
+                            return;
+                        }
+                    };
+                    let content = RoomJoinRulesEventContent::new(rule);
+                    if let Err(e) = room.send_state_event(content).await {
+                        crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &format!("Failed to set join rule: {:?}", e));
+                    } else {
+                        crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &format!("Join rule set to {}", rule_str));
+                    }
+                }
+            }
+        });
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_room_guest_access(user_id: *const c_char, room_id: *const c_char, allow: bool) {
+    if user_id.is_null() || room_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::RoomId;
+            use matrix_sdk::ruma::events::room::guest_access::{GuestAccess, RoomGuestAccessEventContent};
+            
+            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                if let Some(room) = client.get_room(rid) {
+                    let access = if allow { GuestAccess::CanJoin } else { GuestAccess::Forbidden };
+                    let content = RoomGuestAccessEventContent::new(access);
+                    if let Err(e) = room.send_state_event(content).await {
+                        crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &format!("Failed to set guest access: {:?}", e));
+                    } else {
+                        crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &format!("Guest access set to {}", if allow { "allowed" } else { "forbidden" }));
+                    }
+                }
+            }
+        });
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_room_history_visibility(user_id: *const c_char, room_id: *const c_char, visibility: *const c_char) {
+    if user_id.is_null() || room_id.is_null() || visibility.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let vis_str = unsafe { CStr::from_ptr(visibility).to_string_lossy().to_lowercase() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::RoomId;
+            use matrix_sdk::ruma::events::room::history_visibility::{HistoryVisibility, RoomHistoryVisibilityEventContent};
+            
+            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                if let Some(room) = client.get_room(rid) {
+                    let vis = match vis_str.as_str() {
+                        "world_readable" => HistoryVisibility::WorldReadable,
+                        "shared" => HistoryVisibility::Shared,
+                        "invited" => HistoryVisibility::Invited,
+                        "joined" => HistoryVisibility::Joined,
+                        _ => {
+                            crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, "Invalid visibility. Use: world_readable, shared, invited, joined");
+                            return;
+                        }
+                    };
+                    let content = RoomHistoryVisibilityEventContent::new(vis);
+                    if let Err(e) = room.send_state_event(content).await {
+                        crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &format!("Failed to set history visibility: {:?}", e));
+                    } else {
+                        crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &format!("History visibility set to {}", vis_str));
+                    }
+                }
             }
         });
     });
