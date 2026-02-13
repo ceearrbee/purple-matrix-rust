@@ -65,8 +65,12 @@ static gboolean process_room_cb(gpointer data) {
   MatrixRoomData *d = (MatrixRoomData *)data;
   PurpleAccount *account = find_matrix_account();
   if (d->room_id && strchr(d->room_id, '|')) {
-    g_free(d->room_id); g_free(d->name); g_free(d->group_name); g_free(d->avatar_url);
-    if (d->topic) g_free(d->topic);
+    g_free(d->room_id);
+    g_free(d->name);
+    g_free(d->group_name);
+    g_free(d->avatar_url);
+    if (d->topic)
+      g_free(d->topic);
     g_free(d);
     return FALSE;
   }
@@ -107,8 +111,13 @@ static gboolean process_room_cb(gpointer data) {
     }
     if (chat && d->name && strlen(d->name) > 0) purple_blist_alias_chat(chat, d->name);
   }
-  g_free(target_group_name); g_free(d->room_id); g_free(d->name); g_free(d->group_name); g_free(d->avatar_url);
-  if (d->topic) g_free(d->topic);
+  g_free(target_group_name);
+  g_free(d->room_id);
+  g_free(d->name);
+  g_free(d->group_name);
+  g_free(d->avatar_url);
+  if (d->topic)
+    g_free(d->topic);
   g_free(d);
   return FALSE;
 }

@@ -72,9 +72,19 @@ char *matrix_get_chat_name(GHashTable *components) {
 }
 
 guint32 get_history_page_size(PurpleAccount *account) {
+
   const char *raw = purple_account_get_string(account, "history_page_size", "50");
+
   long n = raw ? strtol(raw, NULL, 10) : 50;
-  if (n < 1) n = 1;
-  if (n > 500) n = 500;
+
+  if (n < 1)
+
+    n = 1;
+
+  if (n > 500)
+
+    n = 500;
+
   return (guint32)n;
+
 }
