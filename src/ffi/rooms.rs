@@ -525,9 +525,6 @@ pub extern "C" fn purple_matrix_rust_set_room_tag(user_id: *const c_char, room_i
 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_get_power_levels(user_id: *const c_char, room_id: *const c_char) {
-    // Placeholder: Fetch and print/return power levels.
-    // Since we don't have a callback for generic text return, maybe just log or chat?
-    // Implementation skipped unless required. Logs info.
     if user_id.is_null() || room_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
     let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
@@ -539,7 +536,14 @@ pub extern "C" fn purple_matrix_rust_get_power_levels(user_id: *const c_char, ro
                 if let Some(room) = client.get_room(rid) {
                     match room.power_levels().await {
                         Ok(pl) => {
-                             log::info!("Power Levels for {}: {:?}", room_id_str, pl);
+                             let mut msg = format!("Power Levels for {}:\n", room_id_str);
+                             msg.push_str(&format!("- Users Default: {}\n", pl.users_default));
+                             msg.push_str(&format!("- Events Default: {}\n", pl.events_default));
+                             msg.push_str("- Specific Users:\n");
+                             for (uid, level) in &pl.users {
+                                 msg.push_str(&format!("  - {}: {}\n", uid, level));
+                             }
+                             crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &msg);
                         }, 
                         Err(e) => log::error!("Failed to get power levels: {:?}", e),
                     }
@@ -550,7 +554,7 @@ pub extern "C" fn purple_matrix_rust_get_power_levels(user_id: *const c_char, ro
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_set_power_level(user_id: *const c_char, room_id: *const c_char, target_user: *const c_char, level: i32) {
+pub extern "C" fn purple_matrix_rust_set_power_level(user_id: *const c_char, room_id: *const c_char, target_user: *const c_char, level: i64) {
     if user_id.is_null() || room_id.is_null() || target_user.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
     let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
@@ -561,11 +565,8 @@ pub extern "C" fn purple_matrix_rust_set_power_level(user_id: *const c_char, roo
             use matrix_sdk::ruma::{RoomId, UserId};
              if let (Ok(rid), Ok(uid)) = (<&RoomId>::try_from(room_id_str.as_str()), <&UserId>::try_from(target_user_str.as_str())) {
                 if let Some(room) = client.get_room(rid) {
-                   // Requires state event update for m.room.power_levels
-                   // This is complex helper in SDK or manual state event
-                   // SDK has room.update_power_level_for_user(user_id, level)
                    use matrix_sdk::ruma::Int;
-                    if let Ok(level_int) =  Int::try_from(level as i64) {
+                    if let Ok(level_int) =  Int::try_from(level) {
                        if let Err(e) = room.update_power_levels(vec![(&uid, level_int)]).await {
                             log::error!("Failed to update power level: {:?}", e);
                        } else {
@@ -621,32 +622,23 @@ pub extern "C" fn purple_matrix_rust_set_room_topic(user_id: *const c_char, room
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_report_content(user_id: *const c_char, room_id: *const c_char, event_id: *const c_char, score: i32, reason: *const c_char) {
+pub extern "C" fn purple_matrix_rust_report_content(user_id: *const c_char, room_id: *const c_char, event_id: *const c_char, reason: *const c_char) {
     if user_id.is_null() || room_id.is_null() || event_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
     let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
     let event_id_str = unsafe { CStr::from_ptr(event_id).to_string_lossy().into_owned() };
-    let _reason_str = if reason.is_null() { String::new() } else { unsafe { CStr::from_ptr(reason).to_string_lossy().into_owned() } };
+    let reason_str = if reason.is_null() { None } else { Some(unsafe { CStr::from_ptr(reason).to_string_lossy().into_owned() }) };
 
     with_client(&user_id_str.clone(), |client| {
         RUNTIME.spawn(async move {
              use matrix_sdk::ruma::{RoomId, EventId};
-             use matrix_sdk::ruma::api::client::room::report_content::v3::Request as ReportRequest;
-             use matrix_sdk::ruma::Int;
-
-              if let (Ok(rid), Ok(eid)) = (<&RoomId>::try_from(room_id_str.as_str()), <&EventId>::try_from(event_id_str.as_str())) {
-                   
-                   let reason_opt = if _reason_str.is_empty() { None } else { Some(_reason_str) };
-                   let score_int = Int::try_from(score as i64).ok();
-                   
-                   let request = ReportRequest::new(rid.to_owned(), eid.to_owned(), score_int, reason_opt);
-
-                   if let Err(e) = client.send(request).await {
+             if let (Ok(rid), Ok(eid)) = (<&RoomId>::try_from(room_id_str.as_str()), <&EventId>::try_from(event_id_str.as_str())) {
+                 if let Some(room) = client.get_room(rid) {
+                    if let Err(e) = room.report_content(eid.to_owned(), None, reason_str).await {
                         log::error!("Failed to report content: {:?}", e);
-                   } else {
-                        log::info!("Content reported successfully.");
-                   }
-              }
+                    }
+                 }
+             }
         });
     });
 }
@@ -664,8 +656,6 @@ pub extern "C" fn purple_matrix_rust_set_room_mute_state(user_id: *const c_char,
             if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
                 let settings = client.notification_settings().await;
                 
-                // Muted = MentionsAndKeywordsOnly
-                // Unmuted = AllMessages
                 let mode = if muted {
                     matrix_sdk::notification_settings::RoomNotificationMode::MentionsAndKeywordsOnly
                 } else {
@@ -676,8 +666,6 @@ pub extern "C" fn purple_matrix_rust_set_room_mute_state(user_id: *const c_char,
 
                 if let Err(e) = settings.set_room_notification_mode(rid, mode).await {
                      log::error!("Failed to set room notification mode: {:?}", e);
-                } else {
-                     log::info!("Room notification mode updated successfully.");
                 }
             }
         });
@@ -699,21 +687,11 @@ pub extern "C" fn purple_matrix_rust_knock(user_id: *const c_char, room_id_or_al
             if let Ok(rid) = <&RoomId>::try_from(id_or_alias.as_str()) {
                 if let Err(e) = client.knock(rid.to_owned().into(), reason_str, vec![]).await {
                     log::error!("Failed to knock on room: {:?}", e);
-                    let msg = format!("Failed to knock on room: {:?}", e);
-                    crate::ffi::send_system_message(&user_id_str, &msg);
-                } else {
-                    log::info!("Knocked on room successfully");
                 }
             } else if let Ok(alias) = <&RoomAliasId>::try_from(id_or_alias.as_str()) {
                  if let Err(e) = client.knock(alias.to_owned().into(), reason_str, vec![]).await {
                     log::error!("Failed to knock on room: {:?}", e);
-                    let msg = format!("Failed to knock on room: {:?}", e);
-                    crate::ffi::send_system_message(&user_id_str, &msg);
-                } else {
-                    log::info!("Knocked on room successfully");
                 }
-            } else {
-                log::error!("Invalid Room ID or Alias for knock: {}", id_or_alias);
             }
         });
     });
@@ -736,10 +714,6 @@ pub extern "C" fn purple_matrix_rust_unban_user(account_user_id: *const c_char, 
                  if let Some(room) = client.get_room(rid) {
                     if let Err(e) = room.unban_user(uid, reason_str.as_deref()).await {
                         log::error!("Failed to unban user: {:?}", e);
-                        let msg = format!("Failed to unban user: {:?}", e);
-                        crate::ffi::send_system_message(&user_id_str, &msg);
-                    } else {
-                        log::info!("Unbanned user successfully");
                     }
                  }
              }

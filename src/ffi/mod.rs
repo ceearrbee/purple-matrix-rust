@@ -163,10 +163,13 @@ pub extern "C" fn purple_matrix_rust_set_update_buddy_callback(cb: UpdateBuddyCa
 }
 
 pub fn send_system_message(_user_id: &str, msg: &str) {
+    send_system_message_to_room(_user_id, "System", msg);
+}
+
+pub fn send_system_message_to_room(_user_id: &str, room_id: &str, msg: &str) {
     let c_sender = std::ffi::CString::new("System").unwrap_or_default();
     let c_body = std::ffi::CString::new(msg).unwrap_or_default();
-    // We use "System" as the room_id effectively acting as a console
-    let c_room_id = std::ffi::CString::new("System").unwrap_or_default();
+    let c_room_id = std::ffi::CString::new(room_id).unwrap_or_default();
     
     let guard = MSG_CALLBACK.lock().unwrap();
     if let Some(cb) = *guard {

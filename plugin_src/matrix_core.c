@@ -64,6 +64,16 @@ static PurplePluginProtocolInfo prpl_info = {
     .struct_size = sizeof(PurplePluginProtocolInfo)
 };
 
+static void conversation_displayed_cb(PurpleConversation *conv) {
+  PurpleAccount *account = purple_conversation_get_account(conv);
+  if (strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
+    const char *last_id = purple_conversation_get_data(conv, "last_event_id");
+    if (last_id) {
+      purple_matrix_rust_send_read_receipt(purple_account_get_username(account), purple_conversation_get_name(conv), last_id);
+    }
+  }
+}
+
 static void conversation_created_cb(PurpleConversation *conv) {
   PurpleAccount *account = purple_conversation_get_account(conv);
   if (strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
@@ -94,6 +104,8 @@ static gboolean plugin_load(PurplePlugin *plugin) {
 
   purple_signal_connect(purple_conversations_get_handle(), "conversation-created",
                         plugin, PURPLE_CALLBACK(conversation_created_cb), NULL);
+  purple_signal_connect(purple_conversations_get_handle(), "conversation-displayed",
+                        plugin, PURPLE_CALLBACK(conversation_displayed_cb), NULL);
 
   return TRUE;
 }

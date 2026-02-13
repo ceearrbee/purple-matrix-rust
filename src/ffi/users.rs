@@ -247,42 +247,6 @@ pub extern "C" fn purple_matrix_rust_get_user_info(account_user_id: *const c_cha
         });
     });
 }
- 
-#[no_mangle]
-pub extern "C" fn purple_matrix_rust_search_users(user_id: *const c_char, search_term: *const c_char) {
-    if user_id.is_null() || search_term.is_null() { return; }
-    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    let term_str = unsafe { CStr::from_ptr(search_term).to_string_lossy().into_owned() };
-    
-    log::info!("Searching users: {}", term_str);
-
-    with_client(&user_id_str.clone(), |client| {
-        
-        RUNTIME.spawn(async move {
-            use matrix_sdk::ruma::api::client::user_directory::search_users::v3::Request as UserSearchRequest;
-            
-            let mut request = UserSearchRequest::new(term_str);
-            request.limit = 50u32.into();
-
-            match client.send(request).await {
-                Ok(response) => {
-                    log::info!("Found {} users", response.results.len());
-                    // Reuse RoomList callback for now or define a new one?
-                    // The C side expects room info. We might need a USER_SEARCH_CALLBACK.
-                    // For now, let's just log as we don't have a callback defined in C side for this yet (based on provided code).
-                    // Or maybe we reuse CHAT_USER_CALLBACK if appropriate context?
-                    // Assuming this feature is WIP or needs callback.
-                    // Let's check `ffi.rs`. `CHAT_USER_CALLBACK` is `(room_id, user_id, ...)`
-                    
-                    // Implementing "Add Buddy" search via Room List callback is weird.
-                    // Leaving implementation as log-only until C side support is confirmed or I find a callback.
-                },
-                Err(e) => log::error!("Failed to search users: {:?}", e),
-            }
-        });
-    });
-}
-
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_ignore_user(account_user_id: *const c_char, target_user_id: *const c_char) {
     if account_user_id.is_null() || target_user_id.is_null() { return; }
