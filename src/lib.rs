@@ -22,6 +22,8 @@ pub(crate) static CLIENTS: Lazy<Mutex<std::collections::HashMap<String, Client>>
 pub(crate) static HISTORY_FETCHED_ROOMS: Lazy<Mutex<std::collections::HashSet<String>>> = Lazy::new(|| Mutex::new(std::collections::HashSet::new()));
 pub(crate) static PAGINATION_TOKENS: Lazy<Mutex<std::collections::HashMap<String, String>>> = Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
 pub(crate) static DATA_PATH: Lazy<Mutex<Option<std::path::PathBuf>>> = Lazy::new(|| Mutex::new(None));
+// event_id -> { emoji -> count }
+pub(crate) static REACTIONS: Lazy<Mutex<std::collections::HashMap<String, std::collections::HashMap<String, usize>>>> = Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
 
 pub(crate) fn with_client<F, R>(user_id: &str, f: F) -> Option<R>
 where

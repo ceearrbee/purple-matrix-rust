@@ -73,6 +73,12 @@ static PurpleCmdRet cmd_set_room_avatar(PurpleConversation *conv, const gchar *c
   return PURPLE_CMD_RET_OK;
 }
 
+static PurpleCmdRet cmd_upgrade_room(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  if (!args[0]) return PURPLE_CMD_RET_FAILED;
+  purple_matrix_rust_upgrade_room(purple_account_get_username(purple_conversation_get_account(conv)), purple_conversation_get_name(conv), args[0]);
+  return PURPLE_CMD_RET_OK;
+}
+
 static PurpleCmdRet cmd_unban(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
   if (!args[0]) return PURPLE_CMD_RET_FAILED;
   purple_matrix_rust_unban_user(purple_account_get_username(purple_conversation_get_account(conv)), purple_conversation_get_name(conv), args[0], args[1]);
@@ -351,6 +357,45 @@ static PurpleCmdRet cmd_knock(PurpleConversation *conv, const gchar *cmd, gchar 
   return PURPLE_CMD_RET_OK;
 }
 
+static void sticker_action_cb(void *user_data, PurpleRequestFields *fields) {
+  char *room_id = (char *)user_data;
+  PurpleRequestField *f = purple_request_fields_get_field(fields, "sticker_idx");
+  int idx = purple_request_field_choice_get_value(f);
+  GList *urls = (GList *)purple_request_field_get_ui_data(f);
+  const char *url = (const char *)g_list_nth_data(urls, idx);
+  if (url) {
+    purple_matrix_rust_send_sticker(purple_account_get_username(find_matrix_account()), room_id, url);
+  }
+  g_free(room_id);
+}
+
+static void sticker_cb(const char *shortcode, const char *body, const char *url, void *user_data) {
+  PurpleRequestField *f = (PurpleRequestField *)user_data;
+  char *lbl = g_strdup_printf("%s (%s)", body, shortcode);
+  purple_request_field_choice_add(f, lbl);
+  GList *urls = (GList *)purple_request_field_get_ui_data(f);
+  urls = g_list_append(urls, g_strdup(url));
+  purple_request_field_set_ui_data(f, urls);
+  g_free(lbl);
+}
+
+static void sticker_done_cb(void *user_data) {
+  // Population finished
+}
+
+static PurpleCmdRet cmd_sticker_list(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  PurpleRequestFields *fields = purple_request_fields_new();
+  PurpleRequestFieldGroup *group = purple_request_field_group_new(NULL);
+  purple_request_fields_add_group(fields, group);
+  PurpleRequestField *f = purple_request_field_choice_new("sticker_idx", "Select Sticker", 0);
+  purple_request_field_group_add_field(group, f);
+  
+  purple_matrix_rust_list_stickers_in_pack(purple_account_get_username(purple_conversation_get_account(conv)), "im.ponies.user_defined_sticker_pack", sticker_cb, sticker_done_cb, f);
+  
+  purple_request_fields(purple_conversation_get_account(conv), "Stickers", "Your Stickers", "Choose a sticker to send", fields, "Send", G_CALLBACK(sticker_action_cb), "Cancel", NULL, purple_conversation_get_account(conv), NULL, NULL, g_strdup(purple_conversation_get_name(conv)));
+  return PURPLE_CMD_RET_OK;
+}
+
 static PurpleCmdRet cmd_set_join_rule(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
   if (!args[0]) return PURPLE_CMD_RET_FAILED;
   purple_matrix_rust_set_room_join_rule(purple_account_get_username(purple_conversation_get_account(conv)), purple_conversation_get_name(conv), args[0]);
@@ -550,7 +595,8 @@ void register_matrix_commands(PurplePlugin *plugin) {
   purple_cmd_register("matrix_threads", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_list_threads, "matrix_threads: List active threads in the current room.", NULL);
   purple_cmd_register("matrix_leave", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_leave, "matrix_leave [reason]: Leave the current room.", NULL);
   purple_cmd_register("matrix_sticker", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_sticker, "matrix_sticker <url>: Send a sticker from an MXC or file URL.", NULL);
-  purple_cmd_register("matrix_sticker_search", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_sticker_search, "matrix_sticker_search <term>: Search for stickers (WIP).", NULL);
+  purple_cmd_register("matrix_sticker_list", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_sticker_list, "matrix_sticker_list: Show a list of stickers to send.", NULL);
+  purple_cmd_register("matrix_sticker_search", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_sticker_search, "matrix_sticker_search <term>: Search for stickers.", NULL);
   purple_cmd_register("matrix_nick", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_nick, "matrix_nick <name>: Set your global Matrix display name.", NULL);
   purple_cmd_register("matrix_avatar", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_avatar, "matrix_avatar <path>: Set your global Matrix avatar from a local file.", NULL);
   purple_cmd_register("matrix_reply", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_reply, "matrix_reply <msg>: Reply to the last received message.", NULL);
@@ -578,6 +624,7 @@ void register_matrix_commands(PurplePlugin *plugin) {
   purple_cmd_register("matrix_set_history_page_size", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_history_page_size, "matrix_set_history_page_size <n>: Set lines per history fetch.", NULL);
   purple_cmd_register("matrix_set_auto_fetch_history", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_auto_fetch_history, "matrix_set_auto_fetch_history <on|off>: Toggle auto-history on chat open.", NULL);
   purple_cmd_register("matrix_create_room", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_create_room, "matrix_create_room <name>: Create a new private Matrix room.", NULL);
+  purple_cmd_register("matrix_upgrade_room", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_upgrade_room, "matrix_upgrade_room <version>: Upgrade the current room to a new version.", NULL);
   purple_cmd_register("matrix_public_rooms", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_public_rooms, "matrix_public_rooms [term]: Search for public rooms on the homeserver.", NULL);
   purple_cmd_register("matrix_user_search", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_user_search, "matrix_user_search <term>: Search the global user directory.", NULL);
   purple_cmd_register("matrix_kick", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_kick, "matrix_kick <user> [reason]: Kick a user from the current room.", NULL);

@@ -38,6 +38,8 @@ extern void purple_matrix_rust_change_password(const char *user_id, const char *
 extern void purple_matrix_rust_add_buddy(const char *user_id, const char *buddy_id);
 extern void purple_matrix_rust_remove_buddy(const char *user_id, const char *buddy_id);
 extern void purple_matrix_rust_set_idle(const char *user_id, int seconds);
+extern void purple_matrix_rust_list_sticker_packs(const char *user_id, void (*cb)(const char *, const char *, void *), void (*done_cb)(void *), void *user_data);
+extern void purple_matrix_rust_list_stickers_in_pack(const char *user_id, const char *pack_id, void (*cb)(const char *, const char *, const char *, void *), void (*done_cb)(void *), void *user_data);
 extern void purple_matrix_rust_send_sticker(const char *user_id, const char *room_id, const char *url);
 extern void purple_matrix_rust_unignore_user(const char *user_id, const char *ignored_user_id);
 extern void purple_matrix_rust_set_avatar_bytes(const char *user_id, const unsigned char *data, size_t len);
@@ -84,6 +86,7 @@ extern void purple_matrix_rust_bulk_redact(const char *user_id, const char *room
 extern void purple_matrix_rust_knock(const char *user_id, const char *room_id_or_alias, const char *reason);
 extern void purple_matrix_rust_unban_user(const char *user_id, const char *room_id, const char *target_user_id, const char *reason);
 extern void purple_matrix_rust_set_room_avatar(const char *user_id, const char *room_id, const char *filename);
+extern void purple_matrix_rust_upgrade_room(const char *user_id, const char *room_id, const char *new_version);
 extern void purple_matrix_rust_set_room_join_rule(const char *user_id, const char *room_id, const char *rule);
 extern void purple_matrix_rust_set_room_guest_access(const char *user_id, const char *room_id, bool allow);
 extern void purple_matrix_rust_set_room_history_visibility(const char *user_id, const char *room_id, const char *visibility);

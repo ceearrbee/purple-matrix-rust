@@ -6,6 +6,7 @@ pub mod discovery;
 pub mod polls;
 pub mod threads;
 pub mod aliases;
+pub mod stickers;
 
 use std::os::raw::c_char;
 use std::sync::Mutex;

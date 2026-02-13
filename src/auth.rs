@@ -204,7 +204,20 @@ async fn build_client(homeserver: &str, data_path: &PathBuf) -> Result<Client, m
     builder.sqlite_store(data_path, None).build().await
 }
 
-fn write_session_json_secure(path: &std::path::Path, json: &str) -> std::io::Result<()> {
+fn get_keyring_entry(username: &str) -> keyring::Entry {
+    keyring::Entry::new("purple-matrix-rust", username).unwrap()
+}
+
+fn write_session_json_secure(path: &std::path::Path, json: &str, username: &str) -> std::io::Result<()> {
+    // 1. Save to keyring
+    let entry = get_keyring_entry(username);
+    if let Err(e) = entry.set_password(json) {
+        log::warn!("Failed to save session to keyring: {:?}", e);
+    } else {
+        log::info!("Session saved securely to keyring.");
+    }
+
+    // 2. Save a dummy/metadata file to the data dir so we know a session exists
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -212,7 +225,26 @@ fn write_session_json_secure(path: &std::path::Path, json: &str) -> std::io::Res
         opts.mode(0o600);
     }
     let mut file = opts.open(path)?;
-    file.write_all(json.as_bytes())
+    file.write_all(b"{\"keyring\": true}")
+}
+
+fn load_session_json_secure(path: &std::path::Path, username: &str) -> Option<String> {
+    // 1. Try to load from keyring
+    let entry = get_keyring_entry(username);
+    if let Ok(json) = entry.get_password() {
+        log::info!("Session loaded from keyring.");
+        return Some(json);
+    }
+
+    // 2. Fallback to file (for migration or if keyring failed)
+    if path.exists() {
+        if let Ok(json) = std::fs::read_to_string(path) {
+            if !json.contains("\"keyring\": true") {
+                 return Some(json);
+            }
+        }
+    }
+    None
 }
 
 fn safe_wipe_data_dir(path: &std::path::Path) {
@@ -262,19 +294,17 @@ async fn perform_login(username: String, password: String, homeserver: String, d
     log::info!("Client built successfully. Homeserver: {}", client.homeserver());
 
     // 2. Check existing session
-    // Attempt to load from session.json
+    // Attempt to load from secure storage
     {
          let session_path = data_path.join("session.json");
-         if session_path.exists() {
-              if let Ok(json) = std::fs::read_to_string(&session_path) {
-                  if let Ok(saved) = serde_json::from_str::<SavedSession>(&json) {
+         if let Some(json) = load_session_json_secure(&session_path, &username) {
+              if let Ok(saved) = serde_json::from_str::<SavedSession>(&json) {
                        log::info!("Found saved session for {}, restoring...", saved.user_id);
                        
                        use matrix_sdk::authentication::matrix::MatrixSession;
                        use matrix_sdk::authentication::SessionTokens; 
                        use matrix_sdk::ruma::{UserId, DeviceId};
                        
-                       // Construct MatrixSession
                        if let Ok(u) = <&UserId>::try_from(saved.user_id.as_str()) {
                            let d = <&DeviceId>::from(saved.device_id.as_str()); {
                                let session = MatrixSession {
@@ -288,12 +318,11 @@ async fn perform_login(username: String, password: String, homeserver: String, d
                                    },
                                };
                                
-                               // RoomLoadSettings is required in 0.16.0
                                let load_settings = matrix_sdk::store::RoomLoadSettings::default(); 
                                
                                if let Err(e) = client.matrix_auth().restore_session(session, load_settings).await {
-                                   log::error!("Failed to restore session from file: {:?}", e);
-                                   let _ = std::fs::remove_file(&session_path);
+                                   log::error!("Failed to restore session: {:?}", e);
+                                   // Don't delete metadata yet, maybe it was a transient error.
                                } else {
                                    log::info!("Session successfully restored!");
                                    finish_login_success(client).await;
@@ -301,7 +330,6 @@ async fn perform_login(username: String, password: String, homeserver: String, d
                                }
                            }
                        }
-                  }
               }
          }
     }
@@ -364,9 +392,11 @@ struct SavedSession {
 }
 
 async fn finish_login_success(client: Client) {
+    let username = client.user_id().map(|u| u.to_string()).unwrap_or_default();
+    
     // 1. Persist Session
     if let Some(session) = client.session() {
-         let user_id = client.user_id().map(|u| u.to_string()).unwrap_or_default();
+         let user_id = username.clone();
          let device_id = client.device_id().map(|d| d.to_string()).unwrap_or_default();
          let access_token = session.access_token().to_string();
          let refresh_token = session.get_refresh_token().map(|t: &str| t.to_string());
@@ -378,7 +408,6 @@ async fn finish_login_success(client: Client) {
              refresh_token,
          };
          
-         // data_path logic needs to be robust. using DATA_PATH global.
          let path_opt = {
               let guard = DATA_PATH.lock().unwrap();
               guard.clone()
@@ -387,10 +416,10 @@ async fn finish_login_success(client: Client) {
          if let Some(mut path) = path_opt {
              path.push("session.json");
              if let Ok(json) = serde_json::to_string(&data) {
-                 if let Err(e) = write_session_json_secure(&path, &json) {
-                     log::error!("Failed to save session.json: {:?}", e);
+                 if let Err(e) = write_session_json_secure(&path, &json, &username) {
+                     log::error!("Failed to save session securely: {:?}", e);
                  } else {
-                     log::info!("Session successfully saved to {:?}", path);
+                     log::info!("Session successfully saved securely.");
                  }
              }
          }

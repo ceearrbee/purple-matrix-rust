@@ -17,7 +17,26 @@ pub async fn handle_reaction(event: SyncReactionEvent, room: Room) {
         
         let room_id = room.room_id().as_str();
         let emoji = &original_event.content.relates_to.key;
+        let target_event_id = original_event.content.relates_to.event_id.as_str();
         
+        // Update global reaction map
+        {
+            let mut guard = crate::REACTIONS.lock().unwrap();
+            let event_reactions = guard.entry(target_event_id.to_string()).or_default();
+            let count = event_reactions.entry(emoji.clone()).or_insert(0);
+            *count += 1;
+            
+            let mut summary: Vec<String> = event_reactions.iter().map(|(e, c)| format!("{} {}", e, c)).collect();
+            summary.sort();
+            let summary_str = summary.join(", ");
+            
+            log::info!("Reaction update for {}: {}", target_event_id, summary_str);
+            
+            // Notify UI via a notice indicating reaction summary
+            let update_msg = format!("<span style=\"color: #888; font-size: 85%; font-style: italic;\">Reactions: {}</span>", summary_str);
+            crate::ffi::send_system_message_to_room(room.client().user_id().map(|u| u.as_str()).unwrap_or(""), room_id, &update_msg);
+        }
+
         // Use italics and grey color for reactions to make them less intrusive
         let body = format!("<span style=\"color: #888; font-style: italic;\">* {} reacted with {}</span>", crate::escape_html(&sender_display), emoji);
         log::info!("Reaction in {}: {} -> {}", room_id, sender_display, emoji);
