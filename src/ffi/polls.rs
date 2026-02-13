@@ -72,7 +72,28 @@ pub extern "C" fn purple_matrix_rust_poll_vote(user_id: *const c_char, room_id: 
                           // Compiler indicated deserialize returns AnySyncTimelineEvent
                           if let Ok(AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::PollStart(SyncMessageLikeEvent::Original(poll_ev)))) = event.raw().deserialize() {
                                let content = poll_ev.content;
-                               log::warn!("Poll voting by index not implemented (needs poll def fetch). Index: {}", option_index);
+                               // Get answers from poll definition
+                               // Depending on whether it's start or start_v1 (legacy/MSC3381 vs Extensible)
+                               // SDK 0.16 likely uses MSC3381 style primarily
+                               if let Some(answer) = content.poll.answers.into_iter().nth(option_index as usize) {
+                                   let answer_id = &answer.id;
+                                   
+                                   use matrix_sdk::ruma::events::poll::response::PollResponseEventContent;
+                                   use matrix_sdk::ruma::events::AnyMessageLikeEventContent;
+                                   
+                                   // Create response
+                                   // Note: PollResponseEventContent::new takes the answers list (Vec<String>) and the poll_id (event_id)
+                                   let response = PollResponseEventContent::new(vec![answer_id.clone()].into(), eid.to_owned());
+                                   let msg_content = AnyMessageLikeEventContent::PollResponse(response);
+                                   
+                                   if let Err(e) = room.send(msg_content).await {
+                                       log::error!("Failed to send vote: {:?}", e);
+                                   } else {
+                                       log::info!("Voted for option {} in poll {}", option_index, poll_id_str);
+                                   }
+                               } else {
+                                   log::error!("Invalid option index {} for poll {}", option_index, poll_id_str);
+                               }
                           }
                      }
                 }
