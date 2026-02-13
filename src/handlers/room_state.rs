@@ -2,7 +2,7 @@ use matrix_sdk::ruma::events::room::topic::SyncRoomTopicEvent;
 use matrix_sdk::ruma::events::room::member::{SyncRoomMemberEvent, StrippedRoomMemberEvent, MembershipState};
 use matrix_sdk::{Room, Client};
 use std::ffi::CString;
-use crate::ffi::{MSG_CALLBACK, ROOM_JOINED_CALLBACK, INVITE_CALLBACK, CHAT_TOPIC_CALLBACK, CHAT_USER_CALLBACK, UPDATE_BUDDY_CALLBACK};
+use crate::ffi::{MSG_CALLBACK, ROOM_JOINED_CALLBACK, ROOM_LEFT_CALLBACK, INVITE_CALLBACK, CHAT_TOPIC_CALLBACK, CHAT_USER_CALLBACK, UPDATE_BUDDY_CALLBACK};
 
 pub async fn handle_room_topic(event: SyncRoomTopicEvent, room: Room) {
     if let Some(original_event) = event.as_original() {
@@ -73,6 +73,16 @@ pub async fn handle_room_member(event: SyncRoomMemberEvent, room: Room, client: 
                         let guard = INVITE_CALLBACK.lock().unwrap();
                         if let Some(cb) = *guard {
                             cb(c_room_id.as_ptr(), c_inviter.as_ptr());
+                        }
+                    }
+                 },
+                 MembershipState::Leave | MembershipState::Ban => {
+                    let room_id = room.room_id().as_str();
+                    log::info!("User left room: {} - Emitting Callback", room_id);
+                    if let Ok(c_room_id) = CString::new(room_id) {
+                        let guard = ROOM_LEFT_CALLBACK.lock().unwrap();
+                        if let Some(cb) = *guard {
+                            cb(c_room_id.as_ptr());
                         }
                     }
                  },

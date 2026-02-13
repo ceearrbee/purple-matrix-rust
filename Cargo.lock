@@ -2709,6 +2709,7 @@ dependencies = [
  "log",
  "matrix-sdk",
  "matrix-sdk-base",
+ "matrix-sdk-crypto",
  "mime_guess",
  "once_cell",
  "pulldown-cmark 0.9.6",

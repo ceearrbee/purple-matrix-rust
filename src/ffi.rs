@@ -20,6 +20,7 @@ pub type VerificationEmojiCallback = extern "C" fn(*const c_char, *const c_char,
 pub type ShowVerificationQrCallback = extern "C" fn(*const c_char, *const c_char);
 pub type ReadMarkerCallback = extern "C" fn(*const c_char, *const c_char, *const c_char);
 pub type RoomPreviewCallback = extern "C" fn(*const c_char, *const c_char);
+pub type RoomLeftCallback = extern "C" fn(*const c_char);
 pub type StickerPackCallback = extern "C" fn(*const c_char, *const c_char, *mut std::ffi::c_void);
 pub type StickerCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *mut std::ffi::c_void);
 pub type StickerDoneCallback = extern "C" fn(*mut std::ffi::c_void);
@@ -28,18 +29,19 @@ pub type StickerDoneCallback = extern "C" fn(*mut std::ffi::c_void);
 pub static MSG_CALLBACK: Lazy<Mutex<Option<MsgCallback>>> = Lazy::new(|| Mutex::new(None));
 pub static TYPING_CALLBACK: Lazy<Mutex<Option<TypingCallback>>> = Lazy::new(|| Mutex::new(None));
 pub static ROOM_JOINED_CALLBACK: Lazy<Mutex<Option<RoomJoinedCallback>>> = Lazy::new(|| Mutex::new(None));
-pub static INVITE_CALLBACK: Mutex<Option<InviteCallback>> = Mutex::new(None);
-pub static SAS_REQUEST_CALLBACK: Mutex<Option<VerificationRequestCallback>> = Mutex::new(None);
-pub static SAS_HAVE_EMOJI_CALLBACK: Mutex<Option<VerificationEmojiCallback>> = Mutex::new(None);
-pub static SHOW_VERIFICATION_QR_CALLBACK: Mutex<Option<ShowVerificationQrCallback>> = Mutex::new(None);
+pub static INVITE_CALLBACK: Lazy<Mutex<Option<InviteCallback>>> = Lazy::new(|| Mutex::new(None));
+pub static SAS_REQUEST_CALLBACK: Lazy<Mutex<Option<VerificationRequestCallback>>> = Lazy::new(|| Mutex::new(None));
+pub static SAS_HAVE_EMOJI_CALLBACK: Lazy<Mutex<Option<VerificationEmojiCallback>>> = Lazy::new(|| Mutex::new(None));
+pub static SHOW_VERIFICATION_QR_CALLBACK: Lazy<Mutex<Option<ShowVerificationQrCallback>>> = Lazy::new(|| Mutex::new(None));
 pub static UPDATE_BUDDY_CALLBACK: Lazy<Mutex<Option<UpdateBuddyCallback>>> = Lazy::new(|| Mutex::new(None));
 pub static PRESENCE_CALLBACK: Lazy<Mutex<Option<PresenceCallback>>> = Lazy::new(|| Mutex::new(None));
 pub static CHAT_TOPIC_CALLBACK: Lazy<Mutex<Option<ChatTopicCallback>>> = Lazy::new(|| Mutex::new(None));
 pub static CHAT_USER_CALLBACK: Lazy<Mutex<Option<ChatUserCallback>>> = Lazy::new(|| Mutex::new(None));
-pub static SSO_CALLBACK: Mutex<Option<SsoCallback>> = Mutex::new(None);
-pub static CONNECTED_CALLBACK: Mutex<Option<ConnectedCallback>> = Mutex::new(None);
-pub static LOGIN_FAILED_CALLBACK: Mutex<Option<LoginFailedCallback>> = Mutex::new(None);
-pub static READ_MARKER_CALLBACK: Mutex<Option<ReadMarkerCallback>> = Mutex::new(None);
+pub static SSO_CALLBACK: Lazy<Mutex<Option<SsoCallback>>> = Lazy::new(|| Mutex::new(None));
+pub static CONNECTED_CALLBACK: Lazy<Mutex<Option<ConnectedCallback>>> = Lazy::new(|| Mutex::new(None));
+pub static LOGIN_FAILED_CALLBACK: Lazy<Mutex<Option<LoginFailedCallback>>> = Lazy::new(|| Mutex::new(None));
+pub static READ_MARKER_CALLBACK: Lazy<Mutex<Option<ReadMarkerCallback>>> = Lazy::new(|| Mutex::new(None));
+pub static ROOM_LEFT_CALLBACK: Lazy<Mutex<Option<RoomLeftCallback>>> = Lazy::new(|| Mutex::new(None));
 pub static ROOM_PREVIEW_CALLBACK: Lazy<Mutex<Option<RoomPreviewCallback>>> = Lazy::new(|| Mutex::new(None));
 
 #[no_mangle]
@@ -134,6 +136,12 @@ pub extern "C" fn purple_matrix_rust_set_show_user_info_callback(cb: ShowUserInf
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_set_read_marker_callback(cb: ReadMarkerCallback) {
     let mut guard = READ_MARKER_CALLBACK.lock().unwrap();
+    *guard = Some(cb);
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_room_left_callback(cb: RoomLeftCallback) {
+    let mut guard = ROOM_LEFT_CALLBACK.lock().unwrap();
     *guard = Some(cb);
 }
 

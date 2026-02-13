@@ -1,96 +1,20 @@
-use crate::with_client;
-use crate::RUNTIME;
-use matrix_sdk::ruma::api::client::backup::get_latest_backup_info;
-use ruma::api::client::ErrorKind as ApiErrorKind;
+use crate::{ffi, with_client, RUNTIME};
 use matrix_sdk::Client;
-use matrix_sdk::encryption::backups::keys::decryption::{BackupDecryptionKey, DecodeError};
-use crate::ffi;
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
-fn parse_backup_key(input: &str) -> Result<BackupDecryptionKey, DecodeError> {
-    BackupDecryptionKey::from_base58(input).or_else(|_| BackupDecryptionKey::from_base64(input))
-}
+async fn restore_keys_from_backup(_client: Client, user_id: String, recovery_key: String) {
+    log::warn!(
+        "Key backup restoration requested for {} but the feature is currently unavailable.",
+        user_id
+    );
 
-async fn restore_keys_from_backup(
-    client: Client,
-    user_id: String,
-    recovery_key: String,
-) {
-    let mut msg = "Key backup restored successfully.".to_string();
-
-    match parse_backup_key(&recovery_key) {
-        Ok(decryption_key) => {
-            let version_opt = match client
-                .send(get_latest_backup_info::v3::Request::new())
-                .await
-            {
-                Ok(resp) => Some(resp.version),
-                Err(e) => {
-                    if let Some(kind) = e.client_api_error_kind() {
-                        if kind == &ApiErrorKind::NotFound {
-                            None
-                        } else {
-                            msg =
-                                format!("Unable to inspect backups: {:?}. Please retry later.", e);
-                            crate::ffi::send_system_message(&user_id, &msg);
-                            return;
-                        }
-                    } else {
-                        msg =
-                            format!("Unable to inspect backups: {:?}. Please retry later.", e);
-                        crate::ffi::send_system_message(&user_id, &msg);
-                        return;
-                    }
-                }
-            };
-
-            if let Some(version) = version_opt {
-                match client.olm_machine().await {
-                    Some(olm_machine) => {
-                        if let Err(e) = olm_machine
-                            .backup_machine()
-                            .save_decryption_key(Some(decryption_key.clone()), Some(version.clone()))
-                            .await
-                        {
-                            msg = format!("Failed to persist backup key locally: {:?}", e);
-                        } else {
-                            let joined_rooms = client.joined_rooms();
-                            let backups = client.encryption().backups();
-                            let mut count = 0;
-                            for room in joined_rooms {
-                                if let Err(e) =
-                                    backups.download_room_keys_for_room(room.room_id()).await
-                                {
-                                    log::error!(
-                                        "Failed to download keys for {}: {:?}",
-                                        room.room_id(),
-                                        e
-                                    );
-                                } else {
-                                    count += 1;
-                                }
-                            }
-                            msg = format!(
-                                "Downloaded room keys from backup for {} rooms (version {}).",
-                                count, version
-                            );
-                        }
-                    }
-                    None => {
-                        msg = "Unable to access encryption storage to save backup key.".to_string();
-                    }
-                }
-            } else {
-                msg = "No key backup found on the server for this account.".to_string();
-            }
-        }
-        Err(e) => {
-            msg = format!("Invalid recovery key: {}", e);
-        }
+    if !recovery_key.is_empty() {
+        log::debug!("Received recovery key (first 8 chars): {}", &recovery_key[..8.min(recovery_key.len())]);
     }
 
-    ffi::send_system_message(&user_id, &msg);
+    let msg = "Key backup restoration is not supported in this build. Use a full Matrix client to restore keys.";
+    ffi::send_system_message(&user_id, msg);
 }
 
 // Callback for reporting backup status/recovery key?
