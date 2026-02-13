@@ -86,7 +86,7 @@ Right-clicking a chat or buddy provides Matrix-specific actions.
 | Files | ✅ Done | Downloads to temp and provides links. |
 | Audio/Voice | ✅ Done | Duration shown, clickable file link. |
 | Location | ✅ Done | Text description + OpenStreetMap link. |
-| Stickers | ⚠️ Partial | Sending works via URL; search is stubbed. |
+| Stickers | ✅ Done | Search (/matrix_sticker_search) and List (/matrix_sticker_list) fully implemented. |
 
 ### Encryption & Security
 | Feature | Status | Notes |
@@ -95,7 +95,8 @@ Right-clicking a chat or buddy provides Matrix-specific actions.
 | SAS Verification | ✅ Done | Interactive Accept/Match/Mismatch dialogs. |
 | QR Code | ✅ Done | Renders QR as Base64 HTML in a popup. |
 | Key Backup | ✅ Done | Check status and Restore via command. |
-| Cross-Signing | ✅ Done | Bootstrap command implemented. |
+| Cross-Signing | ✅ Done | Bootstrap with optional password for UIAA. |
+| Secure Storage | ✅ Done | Tokens stored in system keyring (Secret Service). |
 
 ### Administration
 | Feature | Status | Notes |
@@ -115,14 +116,16 @@ Right-clicking a chat or buddy provides Matrix-specific actions.
 *   **Reaction Aggregation:** Reactions are shown as system notices. A better approach would be a small footer under the original message (requires UI hacks).
 
 ### 3.2. Missing Spec Parts
-*   **VoIP:** Not implemented (as requested).
-*   **Sticker Search:** Needs integration with a sticker pack API or account data index.
-*   **Recursive Spaces:** Current implementation finds the *immediate* canonical parent. Deeply nested space trees might still look flat.
+| Feature | Status | Notes |
+| :--- | :--- | :--- |
+| VoIP | ❌ Skip | Out of scope for this plugin. |
+| Read-by Lists | ⚠️ Partial | `/matrix_who_read` command (Placeholder). |
+| Push Rules | ✅ Done | Full evaluation of highlights via Raw events. |
 
 ### 3.3. Performance & Polish
-*   **Credential Storage:** Access tokens are currently saved in `accounts.xml` (plain text). Integration with `libsecret` is recommended.
-*   **Large History:** fetching 500+ messages at once can freeze the UI thread briefly. Batching the C-side population is needed.
-*   **Media Cache:** Temp files are cleaned on init, but a long-running session will accumulate files in `/tmp`.
+*   **Credential Storage:** Access tokens are stored securely in the system keyring.
+*   **Large History:** Batching implemented (50ms delay every 10 messages) to prevent UI thread congestion.
+*   **Recursive Spaces:** Implemented recursive canonical parent discovery for buddy list grouping.
 
 ---
 
