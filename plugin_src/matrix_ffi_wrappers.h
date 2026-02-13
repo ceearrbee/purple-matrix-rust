@@ -64,6 +64,8 @@ extern void purple_matrix_rust_resync_recent_history(const char *user_id, const 
 extern void purple_matrix_rust_resync_recent_history_with_limit(const char *user_id, const char *room_id, guint32 limit);
 extern void purple_matrix_rust_preview_room(const char *user_id, const char *room_id_or_alias, const char *output_room_id);
 extern void purple_matrix_rust_who_read(const char *user_id, const char *room_id);
+extern void purple_matrix_rust_mark_unread(const char *user_id, const char *room_id, gboolean unread);
+extern void purple_matrix_rust_login_with_qr(const char *homeserver, const char *data_dir);
 extern void purple_matrix_rust_fetch_history_with_limit(const char *user_id, const char *room_id, guint32 limit);
 extern void purple_matrix_rust_create_room(const char *user_id, const char *name, const char *topic, bool is_public);
 extern void purple_matrix_rust_search_public_rooms(const char *user_id, const char *search_term, const char *output_room_id);
@@ -93,6 +95,8 @@ extern void purple_matrix_rust_set_room_join_rule(const char *user_id, const cha
 extern void purple_matrix_rust_set_room_guest_access(const char *user_id, const char *room_id, bool allow);
 extern void purple_matrix_rust_set_room_history_visibility(const char *user_id, const char *room_id, const char *visibility);
 extern void purple_matrix_rust_set_room_mute_state(const char *user_id, const char *room_id, bool muted);
+extern void purple_matrix_rust_get_server_info(const char *user_id);
+extern void purple_matrix_rust_get_supported_versions(const char *user_id);
 extern void purple_matrix_rust_destroy_session(const char *user_id);
 // New callbacks
 extern void purple_matrix_rust_init_connected_cb(void (*cb)(void));

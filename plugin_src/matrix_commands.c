@@ -253,6 +253,29 @@ static PurpleCmdRet cmd_who_read(PurpleConversation *conv, const gchar *cmd, gch
   return PURPLE_CMD_RET_OK;
 }
 
+static PurpleCmdRet cmd_mark_unread(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  gboolean unread = TRUE;
+  if (args[0] && (g_ascii_strcasecmp(args[0], "off") == 0 || strcmp(args[0], "0") == 0)) unread = FALSE;
+  purple_matrix_rust_mark_unread(purple_account_get_username(purple_conversation_get_account(conv)), purple_conversation_get_name(conv), unread);
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_qr_login(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  PurpleAccount *acc = purple_conversation_get_account(conv);
+  purple_matrix_rust_login_with_qr(purple_account_get_string(acc, "homeserver", "matrix.org"), purple_user_dir());
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_server_info(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  purple_matrix_rust_get_server_info(purple_account_get_username(purple_conversation_get_account(conv)));
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_supported_versions(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  purple_matrix_rust_get_supported_versions(purple_account_get_username(purple_conversation_get_account(conv)));
+  return PURPLE_CMD_RET_OK;
+}
+
 static PurpleCmdRet cmd_my_profile(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
   purple_matrix_rust_get_my_profile(purple_account_get_username(purple_conversation_get_account(conv)));
   return PURPLE_CMD_RET_OK;
@@ -630,6 +653,10 @@ void register_matrix_commands(PurplePlugin *plugin) {
   purple_cmd_register("matrix_history", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_history, "matrix_history: Fetch the next page of back-history for this room.", NULL);
   purple_cmd_register("matrix_preview_room", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_preview_room, "matrix_preview_room <id>: Get metadata/summary for a room ID or alias.", NULL);
   purple_cmd_register("matrix_who_read", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_who_read, "matrix_who_read: Show who has read the latest message in this room.", NULL);
+  purple_cmd_register("matrix_mark_unread", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_mark_unread, "matrix_mark_unread <on|off>: Manually mark a room as unread (MSC3958).", NULL);
+  purple_cmd_register("matrix_qr_login", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_qr_login, "matrix_qr_login: Start a QR code login flow (MSC4108).", NULL);
+  purple_cmd_register("matrix_server_info", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_server_info, "matrix_server_info: Show detailed server info and MSC capabilities.", NULL);
+  purple_cmd_register("matrix_supported_versions", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_supported_versions, "matrix_supported_versions: Show supported Matrix versions by the server.", NULL);
   purple_cmd_register("matrix_my_profile", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_my_profile, "matrix_my_profile: Display your own Matrix profile information.", NULL);
   purple_cmd_register("matrix_set_history_page_size", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_history_page_size, "matrix_set_history_page_size <n>: Set lines per history fetch.", NULL);
   purple_cmd_register("matrix_set_auto_fetch_history", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_auto_fetch_history, "matrix_set_auto_fetch_history <on|off>: Toggle auto-history on chat open.", NULL);

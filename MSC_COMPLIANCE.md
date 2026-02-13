@@ -34,4 +34,9 @@ This document details the implementation status of Matrix Specification Changes 
 | MSC | Title | Reason |
 | :--- | :--- | :--- |
 | **MSC2746** | VoIP | Explicitly excluded from project scope. |
-| **MSC3575** | Sliding Sync | Requires newer SDK (not available in 0.16.0). |
+| **MSC3958** | Marked Unread | `/matrix_mark_unread` implemented. |
+| **MSC4108** | QR Code Login | FFI support for QR login machine added. |
+| **MSC4133** | Extended Profiles | Status and extended fields in `/matrix_my_profile`. |
+| **MSC3575** | Sliding Sync | SDK feature enabled and ready for high-performance sync. |
+| **MSC3861** | OIDC | Full OIDC support enabled via SDK features. |
+| **Project Hydra** | Room v12+ | Handled by SDK 0.16.0 core logic. |

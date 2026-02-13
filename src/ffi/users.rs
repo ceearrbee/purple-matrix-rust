@@ -258,7 +258,11 @@ pub extern "C" fn purple_matrix_rust_get_my_profile(user_id: *const c_char) {
             if let Ok(profile) = client.account().fetch_user_profile().await {
                  let display_name = profile.get("displayname").and_then(|v| v.as_str()).unwrap_or("N/A");
                  let avatar_url = profile.get("avatar_url").and_then(|v| v.as_str()).unwrap_or("N/A");
-                 let msg = format!("<b>My Profile</b>:<br/>Display Name: {}<br/>Avatar URL: {}<br/>User ID: {}", display_name, avatar_url, user_id_str);
+                 
+                 // MSC4133: Check for extended fields like "m.social_links" or "m.status" if available
+                 let status = profile.get("m.status").and_then(|v| v.as_str()).unwrap_or("None");
+                 
+                 let msg = format!("<b>My Profile</b>:<br/>Display Name: {}<br/>Avatar URL: {}<br/>Status: {}<br/>User ID: {}", display_name, avatar_url, status, user_id_str);
                  crate::ffi::send_system_message(&user_id_str, &msg);
             }
         });

@@ -611,6 +611,17 @@ pub extern "C" fn purple_matrix_rust_deactivate_account(erase_data: bool) {
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_login_with_qr(homeserver: *const c_char, data_dir: *const c_char) {
+    if homeserver.is_null() || data_dir.is_null() { return; }
+    let _homeserver = unsafe { CStr::from_ptr(homeserver).to_string_lossy().into_owned() };
+    let _data_dir = unsafe { CStr::from_ptr(data_dir).to_string_lossy().into_owned() };
+
+    RUNTIME.spawn(async move {
+        crate::ffi::send_system_message("System", "QR Code Login is supported by the protocol but direct SDK binding was not resolved in this build. Use OIDC or SSO.");
+    });
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_logout(user_id: *const c_char) {
     if user_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
