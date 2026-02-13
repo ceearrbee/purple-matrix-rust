@@ -180,7 +180,7 @@ static PurpleCmdRet cmd_poll_create(PurpleConversation *conv, const gchar *cmd, 
 static PurpleCmdRet cmd_poll_vote(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
   const char *last_id = purple_conversation_get_data(conv, "last_event_id");
   if (!last_id) return PURPLE_CMD_RET_FAILED;
-  purple_matrix_rust_poll_vote(purple_account_get_username(purple_conversation_get_account(conv)), purple_conversation_get_name(conv), last_id, "Unknown", args[0]);
+  purple_matrix_rust_poll_vote(purple_account_get_username(purple_conversation_get_account(conv)), purple_conversation_get_name(conv), last_id, atoll(args[0]));
   return PURPLE_CMD_RET_OK;
 }
 
@@ -250,29 +250,6 @@ static PurpleCmdRet cmd_preview_room(PurpleConversation *conv, const gchar *cmd,
 
 static PurpleCmdRet cmd_who_read(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
   purple_matrix_rust_who_read(purple_account_get_username(purple_conversation_get_account(conv)), purple_conversation_get_name(conv));
-  return PURPLE_CMD_RET_OK;
-}
-
-static PurpleCmdRet cmd_mark_unread(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
-  gboolean unread = TRUE;
-  if (args[0] && (g_ascii_strcasecmp(args[0], "off") == 0 || strcmp(args[0], "0") == 0)) unread = FALSE;
-  purple_matrix_rust_mark_unread(purple_account_get_username(purple_conversation_get_account(conv)), purple_conversation_get_name(conv), unread);
-  return PURPLE_CMD_RET_OK;
-}
-
-static PurpleCmdRet cmd_qr_login(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
-  PurpleAccount *acc = purple_conversation_get_account(conv);
-  purple_matrix_rust_login_with_qr(purple_account_get_string(acc, "homeserver", "matrix.org"), purple_user_dir());
-  return PURPLE_CMD_RET_OK;
-}
-
-static PurpleCmdRet cmd_server_info(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
-  purple_matrix_rust_get_server_info(purple_account_get_username(purple_conversation_get_account(conv)));
-  return PURPLE_CMD_RET_OK;
-}
-
-static PurpleCmdRet cmd_supported_versions(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
-  purple_matrix_rust_get_supported_versions(purple_account_get_username(purple_conversation_get_account(conv)));
   return PURPLE_CMD_RET_OK;
 }
 
@@ -389,6 +366,29 @@ static PurpleCmdRet cmd_knock(PurpleConversation *conv, const gchar *cmd, gchar 
   return PURPLE_CMD_RET_OK;
 }
 
+static PurpleCmdRet cmd_mark_unread(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  gboolean unread = TRUE;
+  if (args[0] && (g_ascii_strcasecmp(args[0], "off") == 0 || strcmp(args[0], "0") == 0)) unread = FALSE;
+  purple_matrix_rust_mark_unread(purple_account_get_username(purple_conversation_get_account(conv)), purple_conversation_get_name(conv), unread);
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_qr_login(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  PurpleAccount *acc = purple_conversation_get_account(conv);
+  purple_matrix_rust_login_with_qr(purple_account_get_string(acc, "homeserver", "https://matrix.org"), purple_user_dir());
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_server_info(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  purple_matrix_rust_get_server_info(purple_account_get_username(purple_conversation_get_account(conv)));
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_supported_versions(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  purple_matrix_rust_get_supported_versions(purple_account_get_username(purple_conversation_get_account(conv)));
+  return PURPLE_CMD_RET_OK;
+}
+
 static void sticker_action_cb(void *user_data, PurpleRequestFields *fields) {
   char *room_id = (char *)user_data;
   PurpleRequestField *f = purple_request_fields_get_field(fields, "sticker_idx");
@@ -496,9 +496,8 @@ static void free_poll_list_item(gpointer data) { PollListItem *i = (PollListItem
 static void free_poll_list_glist(gpointer data) { g_list_free_full((GList *)data, free_poll_list_item); }
 static void poll_vote_action_cb(void *user_data, PurpleRequestFields *fields) {
   PollVoteContext *ctx = (PollVoteContext *)user_data; int idx = purple_request_field_choice_get_value(purple_request_fields_get_field(fields, "option_idx"));
-  char **opts = g_strsplit(ctx->options_str, "|", -1); int cnt = 0; while (opts[cnt]) cnt++;
-  if (idx >= 0 && idx < cnt) { char *opt = opts[idx]; char *crt = strchr(opt, '^'); purple_matrix_rust_poll_vote(purple_account_get_username(find_matrix_account()), ctx->room_id, ctx->event_id, "ignored", crt ? opt : opt); }
-  g_strfreev(opts); g_free(ctx->room_id); g_free(ctx->event_id); g_free(ctx->options_str); g_free(ctx);
+  if (idx >= 0) { purple_matrix_rust_poll_vote(purple_account_get_username(find_matrix_account()), ctx->room_id, ctx->event_id, (guint64)idx); }
+  g_free(ctx->room_id); g_free(ctx->event_id); g_free(ctx->options_str); g_free(ctx);
 }
 static void show_vote_ui_cb(void *user_data, PurpleRequestFields *fields) {
   PollDisplayContext *ctx = (PollDisplayContext *)user_data; int idx = purple_request_field_choice_get_value(purple_request_fields_get_field(fields, "poll_id"));
@@ -550,10 +549,8 @@ static void menu_action_user_info_cb(PurpleBlistNode *node, gpointer data) {
   PurpleBuddy *buddy = (PurpleBuddy *)node;
   purple_matrix_rust_get_user_info(purple_account_get_username(purple_buddy_get_account(buddy)), purple_buddy_get_name(buddy)); 
 }
+
 static void menu_action_mark_read_cb(PurpleBlistNode *node, gpointer data) { purple_matrix_rust_send_read_receipt(purple_account_get_username(purple_chat_get_account((PurpleChat *)node)), g_hash_table_lookup(purple_chat_get_components((PurpleChat *)node), "room_id"), NULL); }
-static void menu_action_my_profile_cb(PurpleBlistNode *node, gpointer data) { purple_matrix_rust_get_my_profile(purple_account_get_username(find_matrix_account())); }
-static void menu_action_enable_backup_cb(gpointer data) { purple_matrix_rust_enable_key_backup(purple_account_get_username(find_matrix_account())); }
-static void menu_action_bootstrap_crypto_cb(gpointer data) { purple_matrix_rust_bootstrap_cross_signing(purple_account_get_username(find_matrix_account())); }
 
 static void menu_action_e2ee_status_cb(PurpleBlistNode *node, gpointer data) { 
   PurpleChat *chat = (PurpleChat *)node; 
@@ -615,8 +612,8 @@ GList *blist_node_menu_cb(PurpleBlistNode *node) {
 
 static void action_reconnect_cb(PurplePluginAction *action) { PurpleAccount *account = find_matrix_account(); if (account) matrix_login(account); }
 static void action_my_profile_cb(PurplePluginAction *action) { purple_matrix_rust_get_my_profile(purple_account_get_username(find_matrix_account())); }
-static void action_enable_backup_cb(PurplePluginAction *action) { menu_action_enable_backup_cb(NULL); }
-static void action_bootstrap_crypto_cb(PurplePluginAction *action) { menu_action_bootstrap_crypto_cb(NULL); }
+static void action_enable_backup_cb(PurplePluginAction *action) { purple_matrix_rust_enable_key_backup(purple_account_get_username(find_matrix_account())); }
+static void action_bootstrap_crypto_cb(PurplePluginAction *action) { purple_matrix_rust_bootstrap_cross_signing(purple_account_get_username(find_matrix_account())); }
 
 static void create_room_dialog_cb(void *user_data, PurpleRequestFields *fields) {
   const char *name = purple_request_fields_get_string(fields, "name");
@@ -717,8 +714,8 @@ void register_matrix_commands(PurplePlugin *plugin) {
   purple_cmd_register("matrix_reset_cross_signing", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_reset_cross_signing, "matrix_reset_cross_signing [password]: Bootstrap or reset cross-signing keys.", NULL);
   purple_cmd_register("matrix_recover_keys", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_recover_keys, "matrix_recover_keys <passphrase>: Recover E2EE secrets from storage.", NULL);
   purple_cmd_register("matrix_restore_backup", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_restore_backup, "matrix_restore_backup <security_key>: Restore keys from server backup.", NULL);
-  purple_cmd_register("matrix_read_receipt", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_read_receipt, "matrix_read_receipt: Manually send a read receipt for the last message.", NULL);
   purple_cmd_register("matrix_react", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_react, "matrix_react <emoji>: React to the last received message.", NULL);
+  purple_cmd_register("matrix_redact", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_redact, "matrix_redact [reason]: Redact the last received message.", NULL);
   purple_cmd_register("matrix_read_receipt", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_read_receipt, "matrix_read_receipt: Manually send a read receipt for the last message.", NULL);
   purple_cmd_register("matrix_history", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_history, "matrix_history: Fetch the next page of back-history for this room.", NULL);
   purple_cmd_register("matrix_preview_room", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_preview_room, "matrix_preview_room <id>: Get metadata/summary for a room ID or alias.", NULL);

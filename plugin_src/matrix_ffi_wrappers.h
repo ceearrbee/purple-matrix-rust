@@ -33,7 +33,7 @@ extern void purple_matrix_rust_recover_keys(const char *user_id, const char *pas
 extern void purple_matrix_rust_logout(const char *user_id);
 extern void purple_matrix_rust_send_location(const char *user_id, const char *room_id, const char *body, const char *geo_uri);
 extern void purple_matrix_rust_poll_create(const char *user_id, const char *room_id, const char *question, const char *options);
-extern void purple_matrix_rust_poll_vote(const char *user_id, const char *room_id, const char *poll_event_id, const char *option_text, const char *selection_index_str);
+extern void purple_matrix_rust_poll_vote(const char *user_id, const char *room_id, const char *poll_event_id, guint64 selection_index);
 extern void purple_matrix_rust_poll_end(const char *user_id, const char *room_id, const char *poll_event_id);
 extern void purple_matrix_rust_change_password(const char *user_id, const char *old_pw, const char *new_pw);
 extern void purple_matrix_rust_add_buddy(const char *user_id, const char *buddy_id);
