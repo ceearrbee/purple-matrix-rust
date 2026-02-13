@@ -244,12 +244,6 @@ void show_verification_qr_cb(const char *user_id, const char *html_data) {
   g_idle_add(process_qr_cb, d);
 }
 
-static void action_reconnect_cb(PurplePluginAction *action) { PurpleAccount *account = purple_connection_get_account((PurpleConnection *)action->context); if (account) matrix_login(account); }
-GList *matrix_actions(PurplePlugin *plugin, gpointer context) {
-  GList *l = NULL; l = g_list_append(l, purple_plugin_action_new("Reconnect", action_reconnect_cb));
-  return l;
-}
-
 void matrix_init_sso_callbacks(void) {
   purple_matrix_rust_init_sso_cb(sso_url_cb);
   purple_matrix_rust_init_connected_cb(connected_cb);

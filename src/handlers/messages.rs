@@ -100,7 +100,18 @@ pub async fn handle_room_message(event: SyncRoomMessageEvent, room: Room) {
             final_body = crate::html_fmt::style_edit(&final_body);
         }
         
-        log::info!("Received msg from {} in {}: {}", sender, room_id, final_body);
+        // Evaluate Highlights (Simple Mentions)
+        let mut is_highlight = false;
+        if let Some(me) = room.client().user_id() {
+            if ev.sender != me {
+                let my_id = me.as_str();
+                if final_body.contains(my_id) {
+                    is_highlight = true;
+                }
+            }
+        }
+
+        log::info!("Received msg from {} in {}: {} (Highlight: {})", sender, room_id, final_body, is_highlight);
 
         let c_sender = CString::new(sender).unwrap_or_default();
         let c_body = CString::new(final_body).unwrap_or_default();
@@ -120,6 +131,9 @@ pub async fn handle_room_message(event: SyncRoomMessageEvent, room: Room) {
             } else {
                 c_thread_id.as_ptr()
             };
+            // Note: C side doesn't have a highlight flag in callback yet. 
+            // We should ideally expand the callback or use a special sender prefix?
+            // For now, let's keep it as is, but we could add a "[Highlight]" prefix if needed.
             cb(c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), thread_ptr, c_event_id.as_ptr(), timestamp);
         }
     }
