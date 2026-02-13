@@ -29,6 +29,35 @@ pub extern "C" fn purple_matrix_rust_bootstrap_cross_signing(user_id: *const c_c
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_bootstrap_cross_signing_with_password(user_id: *const c_char, password: *const c_char) {
+    if user_id.is_null() || password.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let password_str = unsafe { CStr::from_ptr(password).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::api::client::uiaa::{AuthData, Password, UserIdentifier};
+            let auth_data = if let Some(uid) = client.user_id() {
+                 Some(AuthData::Password(Password::new(
+                     UserIdentifier::UserIdOrLocalpart(uid.to_string()),
+                     password_str.clone()
+                 )))
+            } else {
+                 None
+            };
+
+            if let Err(e) = client.encryption().bootstrap_cross_signing(auth_data).await {
+                 log::error!("Failed to bootstrap cross signing with password: {:?}", e);
+                 crate::ffi::send_system_message(&user_id_str, &format!("Failed to bootstrap cross-signing with password: {:?}", e));
+            } else {
+                 log::info!("Bootstrap cross signing successful.");
+                 crate::ffi::send_system_message(&user_id_str, "Cross-signing bootstrapped successfully with password.");
+            }
+        });
+    });
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_verify_user(user_id: *const c_char, target_user_id: *const c_char) {
     if user_id.is_null() || target_user_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };

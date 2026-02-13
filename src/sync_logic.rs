@@ -211,7 +211,7 @@ pub async fn fetch_room_history_logic_with_limit(client: Client, room_id: String
                      crate::PAGINATION_TOKENS.lock().unwrap().insert(room_id.clone(), end.clone());
                  }
 
-                 for timeline_event in messages.chunk.iter().rev() {
+                 for (i, timeline_event) in messages.chunk.iter().rev().enumerate() {
                      if let Ok(event) = timeline_event.raw().deserialize() {
                          if let AnySyncTimelineEvent::MessageLike(matrix_sdk::ruma::events::AnySyncMessageLikeEvent::RoomMessage(msg_event)) = event {
                                let ev = msg_event.as_original();
@@ -236,9 +236,16 @@ pub async fn fetch_room_history_logic_with_limit(client: Client, room_id: String
                                    let c_event_id = CString::new(ev.event_id.as_str()).unwrap_or_default();
                                    
                                    let timestamp: u64 = ev.origin_server_ts.0.into();
-                                   let guard = MSG_CALLBACK.lock().unwrap();
-                                   if let Some(cb) = *guard {
-                                       cb(c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), c_thread_id.as_ptr(), c_event_id.as_ptr(), timestamp);
+                                   {
+                                       let guard = MSG_CALLBACK.lock().unwrap();
+                                       if let Some(cb) = *guard {
+                                           cb(c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), c_thread_id.as_ptr(), c_event_id.as_ptr(), timestamp);
+                                       }
+                                   }
+                                   
+                                   // Batching: sleep every 10 messages to let UI breathe
+                                   if i > 0 && i % 10 == 0 {
+                                       tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                                    }
                                }
                          }

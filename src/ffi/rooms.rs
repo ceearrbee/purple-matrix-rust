@@ -766,6 +766,19 @@ pub extern "C" fn purple_matrix_rust_unban_user(account_user_id: *const c_char, 
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_who_read(user_id: *const c_char, room_id: *const c_char) {
+    if user_id.is_null() || room_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, "Who-read info is not yet implemented in this build.");
+        });
+    });
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_upgrade_room(user_id: *const c_char, room_id: *const c_char, new_version: *const c_char) {
     if user_id.is_null() || room_id.is_null() || new_version.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };

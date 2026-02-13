@@ -201,7 +201,11 @@ static PurpleCmdRet cmd_e2ee_status(PurpleConversation *conv, const gchar *cmd, 
 }
 
 static PurpleCmdRet cmd_reset_cross_signing(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
-  purple_matrix_rust_bootstrap_cross_signing(purple_account_get_username(purple_conversation_get_account(conv)));
+  if (args[0] && *args[0]) {
+    purple_matrix_rust_bootstrap_cross_signing_with_password(purple_account_get_username(purple_conversation_get_account(conv)), args[0]);
+  } else {
+    purple_matrix_rust_bootstrap_cross_signing(purple_account_get_username(purple_conversation_get_account(conv)));
+  }
   return PURPLE_CMD_RET_OK;
 }
 
@@ -241,6 +245,11 @@ static PurpleCmdRet cmd_history(PurpleConversation *conv, const gchar *cmd, gcha
 
 static PurpleCmdRet cmd_preview_room(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
   if (args[0]) purple_matrix_rust_preview_room(purple_account_get_username(purple_conversation_get_account(conv)), args[0], "Matrix Preview");
+  return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_who_read(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  purple_matrix_rust_who_read(purple_account_get_username(purple_conversation_get_account(conv)), purple_conversation_get_name(conv));
   return PURPLE_CMD_RET_OK;
 }
 
@@ -612,7 +621,7 @@ void register_matrix_commands(PurplePlugin *plugin) {
   purple_cmd_register("matrix_poll_end", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_poll_end, "matrix_poll_end: Close the latest poll in this room.", NULL);
   purple_cmd_register("matrix_verify", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_verify, "matrix_verify <user_id>: Start cross-signing verification with a user.", NULL);
   purple_cmd_register("matrix_e2ee_status", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_e2ee_status, "matrix_e2ee_status: Show encryption and cross-signing status.", NULL);
-  purple_cmd_register("matrix_reset_cross_signing", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_reset_cross_signing, "matrix_reset_cross_signing: Bootstrap or reset cross-signing keys.", NULL);
+  purple_cmd_register("matrix_reset_cross_signing", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_reset_cross_signing, "matrix_reset_cross_signing [password]: Bootstrap or reset cross-signing keys.", NULL);
   purple_cmd_register("matrix_recover_keys", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_recover_keys, "matrix_recover_keys <passphrase>: Recover E2EE secrets from storage.", NULL);
   purple_cmd_register("matrix_restore_backup", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_restore_backup, "matrix_restore_backup <security_key>: Restore keys from server backup.", NULL);
   purple_cmd_register("matrix_read_receipt", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_read_receipt, "matrix_read_receipt: Manually send a read receipt for the last message.", NULL);
@@ -620,6 +629,7 @@ void register_matrix_commands(PurplePlugin *plugin) {
   purple_cmd_register("matrix_read_receipt", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_read_receipt, "matrix_read_receipt: Manually send a read receipt for the last message.", NULL);
   purple_cmd_register("matrix_history", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_history, "matrix_history: Fetch the next page of back-history for this room.", NULL);
   purple_cmd_register("matrix_preview_room", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_preview_room, "matrix_preview_room <id>: Get metadata/summary for a room ID or alias.", NULL);
+  purple_cmd_register("matrix_who_read", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_who_read, "matrix_who_read: Show who has read the latest message in this room.", NULL);
   purple_cmd_register("matrix_my_profile", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_my_profile, "matrix_my_profile: Display your own Matrix profile information.", NULL);
   purple_cmd_register("matrix_set_history_page_size", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_history_page_size, "matrix_set_history_page_size <n>: Set lines per history fetch.", NULL);
   purple_cmd_register("matrix_set_auto_fetch_history", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_auto_fetch_history, "matrix_set_auto_fetch_history <on|off>: Toggle auto-history on chat open.", NULL);

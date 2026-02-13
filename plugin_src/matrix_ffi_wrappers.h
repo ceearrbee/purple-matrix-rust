@@ -26,6 +26,7 @@ extern void purple_matrix_rust_finish_sso(const char *token);
 extern void purple_matrix_rust_set_display_name(const char *user_id, const char *name);
 extern void purple_matrix_rust_set_avatar(const char *user_id, const char *path);
 extern void purple_matrix_rust_bootstrap_cross_signing(const char *user_id);
+extern void purple_matrix_rust_bootstrap_cross_signing_with_password(const char *user_id, const char *password);
 extern void purple_matrix_rust_e2ee_status(const char *user_id, const char *room_id);
 extern void purple_matrix_rust_verify_user(const char *user_id, const char *target_user_id);
 extern void purple_matrix_rust_recover_keys(const char *user_id, const char *passphrase);
@@ -62,6 +63,7 @@ extern void purple_matrix_rust_fetch_more_history_with_limit(const char *user_id
 extern void purple_matrix_rust_resync_recent_history(const char *user_id, const char *room_id);
 extern void purple_matrix_rust_resync_recent_history_with_limit(const char *user_id, const char *room_id, guint32 limit);
 extern void purple_matrix_rust_preview_room(const char *user_id, const char *room_id_or_alias, const char *output_room_id);
+extern void purple_matrix_rust_who_read(const char *user_id, const char *room_id);
 extern void purple_matrix_rust_fetch_history_with_limit(const char *user_id, const char *room_id, guint32 limit);
 extern void purple_matrix_rust_create_room(const char *user_id, const char *name, const char *topic, bool is_public);
 extern void purple_matrix_rust_search_public_rooms(const char *user_id, const char *search_term, const char *output_room_id);
