@@ -2,7 +2,6 @@ use matrix_sdk::Room;
 use matrix_sdk::ruma::events::{StateEventType, AnySyncStateEvent};
 use matrix_sdk::deserialized_responses::AnySyncOrStrippedState;
 use matrix_sdk::ruma::events::tag::TagName;
-use matrix_sdk::ruma::events::space::parent::SpaceParentEventContent;
 
 pub async fn get_room_group_name(room: &Room) -> String {
     // 1. Check Tags (Favorites / Low Priority)

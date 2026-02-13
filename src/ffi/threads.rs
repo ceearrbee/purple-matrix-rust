@@ -9,7 +9,7 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
     let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
 
-    with_client(&user_id_str.clone(), |client| {
+    with_client(&user_id_str.clone(), |_client| {
         RUNTIME.spawn(async move {
            // Matrix-sdk doesn't have a direct "list threads" easy API that returns a list of root events with metadata readily?
            // Actually, it maintains thread state in `BaseClient`.
