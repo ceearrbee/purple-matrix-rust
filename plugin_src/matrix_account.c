@@ -56,14 +56,20 @@ static gboolean process_sso_cb(gpointer data) {
   char *url = (char *)data; PurpleAccount *account = find_matrix_account();
   if (account) {
     PurpleConnection *gc = purple_account_get_connection(account);
+    // 1. Try to open browser automatically
     purple_notify_uri(gc ? (void *)gc : (void *)my_plugin, url);
+    
+    // 2. Also provide a dialog with the link and token input
     PurpleRequestFields *fields = purple_request_fields_new();
     PurpleRequestFieldGroup *group = purple_request_field_group_new(NULL);
     purple_request_fields_add_group(fields, group);
     PurpleRequestField *field = purple_request_field_string_new("sso_token", "Login Token", NULL, FALSE);
-    matrix_request_field_set_help_string(field, "Paste loginToken=...");
+    matrix_request_field_set_help_string(field, "Paste loginToken=... from the URL after signing in.");
     purple_request_field_group_add_field(group, field);
-    purple_request_fields(gc, "SSO Login", "Auth Required", url, fields, "Submit", G_CALLBACK(manual_sso_token_action_cb), "Cancel", NULL, account, NULL, NULL, account);
+    
+    char *msg = g_strdup_printf("A browser window should have opened to: %s\n\nIf not, please copy and paste the URL into your browser manually. After signing in, paste the 'loginToken' from the resulting URL below.", url);
+    purple_request_fields(gc, "SSO Login", "Authentication Required", msg, fields, "Submit", G_CALLBACK(manual_sso_token_action_cb), "Cancel", NULL, account, NULL, NULL, account);
+    g_free(msg);
   }
   g_free(url); return FALSE;
 }

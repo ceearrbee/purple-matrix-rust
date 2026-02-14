@@ -12,6 +12,9 @@
 #include <libpurple/version.h>
 #include <libpurple/prpl.h>
 #include <libpurple/accountopt.h>
+#include <libpurple/core.h>
+#include <libpurple/debug.h>
+#include <libpurple/signals.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -83,6 +86,23 @@ static void conversation_created_cb(PurpleConversation *conv) {
   }
 }
 
+static void connect_signals(void) {
+  void *conv_handle = purple_conversations_get_handle();
+  if (conv_handle) {
+    purple_signal_connect(conv_handle, "conversation-created",
+                          my_plugin, PURPLE_CALLBACK(conversation_created_cb), NULL);
+    purple_signal_connect(conv_handle, "conversation-displayed",
+                          my_plugin, PURPLE_CALLBACK(conversation_displayed_cb), NULL);
+    purple_debug_info("prpl-matrix-rust", "Conversation signals connected.\n");
+  } else {
+    purple_debug_error("prpl-matrix-rust", "Failed to get conversations handle for signal connection.\n");
+  }
+}
+
+static void core_initialized_cb(void) {
+  connect_signals();
+}
+
 static gboolean plugin_load(PurplePlugin *plugin) {
   my_plugin = plugin;
   purple_matrix_rust_init();
@@ -102,10 +122,14 @@ static gboolean plugin_load(PurplePlugin *plugin) {
   matrix_init_sso_callbacks();
   register_matrix_commands(plugin);
 
-  purple_signal_connect(purple_conversations_get_handle(), "conversation-created",
-                        plugin, PURPLE_CALLBACK(conversation_created_cb), NULL);
-  purple_signal_connect(purple_conversations_get_handle(), "conversation-displayed",
-                        plugin, PURPLE_CALLBACK(conversation_displayed_cb), NULL);
+  // If core is already initialized (usual case for manual plugin load), connect now.
+  // Otherwise wait for the signal.
+  if (purple_get_core() != NULL && purple_conversations_get_handle() != NULL) {
+    connect_signals();
+  } else {
+    purple_signal_connect(purple_get_core(), "core-initialized",
+                          plugin, PURPLE_CALLBACK(core_initialized_cb), NULL);
+  }
 
   return TRUE;
 }
