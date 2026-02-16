@@ -71,32 +71,21 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
              }
         }
 
-        let mut thread_root_id: Option<String> = None;
-        
-        let body = render_room_message(&ev, &room).await;
-
         // Check for Thread Relation
-        if let Some(Relation::Thread(thread)) = ev.content.relates_to.clone() {
+        if let Some(Relation::Thread(ref thread)) = ev.content.relates_to {
             thread_root_id = Some(thread.event_id.to_string());
         }
 
         let mut final_body = body;
 
-        // Handle reply rendering without leaking full event IDs into chat text.
+        // Handle reply rendering
         if let Some(Relation::Reply { in_reply_to }) = &ev.content.relates_to {
              let reply_ref = short_event_id(in_reply_to.event_id.as_str());
-             // We use a placeholder for the quoted text since we don't fetch it here yet.
-             // Ideally we would fetch the original message content.
-             // For now, consistent with previous behavior, we just show "Reply to X..."
              let quoted_placeholder = format!("Reply to {}...", crate::escape_html(&reply_ref));
              final_body = crate::html_fmt::style_reply(&quoted_placeholder, &final_body);
         }
 
-        // Apply Thread Styling
-        if let Some(Relation::Thread(_)) = ev.content.relates_to.clone() {
-            final_body = crate::html_fmt::style_thread_prefix(&final_body);
-        } else if let Some(Relation::Replacement(_)) = ev.content.relates_to {
-             // Move (edited) to the end and make it small
+        if let Some(Relation::Replacement(_)) = ev.content.relates_to {
             final_body = crate::html_fmt::style_edit(&final_body);
         }
         
@@ -110,36 +99,32 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
                     });
                 }
                 
-                // Fallback to simple mention if ruleset check failed or didn't catch it
                 if !is_highlight && final_body.contains(me.as_str()) {
                     is_highlight = true;
                 }
             }
         }
 
-        log::info!("Received msg from {} in {}: {} (Highlight: {})", sender, room_id, final_body, is_highlight);
+        log::info!("Received msg from {} in {}: {} (Thread: {:?}, Highlight: {})", sender, room_id, final_body, thread_root_id, is_highlight);
 
         let c_sender = CString::new(sender).unwrap_or_default();
         let c_body = CString::new(final_body).unwrap_or_default();
         let c_room_id = CString::new(room_id).unwrap_or_default();
         let c_event_id = CString::new(ev.event_id.as_str()).unwrap_or_default();
         
-        let c_thread_id = if let Some(tid) = thread_root_id {
-            CString::new(tid).unwrap_or_default()
+        let c_thread_id = if let Some(ref tid) = thread_root_id {
+            CString::new(tid.as_str()).unwrap_or_default()
         } else {
-            CString::default() 
+            CString::new("").unwrap_or_default()
         };
 
         let guard = MSG_CALLBACK.lock().unwrap();
         if let Some(cb) = *guard {
-            let thread_ptr = if c_thread_id.as_bytes().is_empty() {
-                std::ptr::null()
-            } else {
+            let thread_ptr = if thread_root_id.is_some() {
                 c_thread_id.as_ptr()
+            } else {
+                std::ptr::null()
             };
-            // Note: C side doesn't have a highlight flag in callback yet. 
-            // We should ideally expand the callback or use a special sender prefix?
-            // For now, let's keep it as is, but we could add a "[Highlight]" prefix if needed.
             cb(c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), thread_ptr, c_event_id.as_ptr(), timestamp);
         }
     }

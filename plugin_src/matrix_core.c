@@ -89,15 +89,12 @@ static void conversation_created_cb(PurpleConversation *conv) {
 static void connect_signals(void) {
   void *conv_handle = purple_conversations_get_handle();
   if (conv_handle) {
+    /* Core Signals */
     purple_signal_connect(conv_handle, "conversation-created",
                           my_plugin, PURPLE_CALLBACK(conversation_created_cb), NULL);
     purple_signal_connect(conv_handle, "conversation-displayed",
                           my_plugin, PURPLE_CALLBACK(conversation_displayed_cb), NULL);
-    purple_signal_connect(conv_handle, "conversation-extended-menu",
-                          my_plugin, PURPLE_CALLBACK(conversation_extended_menu_cb), NULL);
-    purple_debug_info("prpl-matrix-rust", "Conversation signals connected.\n");
-  } else {
-    purple_debug_error("prpl-matrix-rust", "Failed to get conversations handle for signal connection.\n");
+    purple_debug_info("prpl-matrix-rust", "Core conversation signals connected.\n");
   }
 }
 

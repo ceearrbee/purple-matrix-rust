@@ -16,13 +16,16 @@
 #include <stdlib.h>
 
 /* Forward Declarations */
-static void room_dashboard_action_cb(void *user_data, int action);
 static void menu_action_room_settings_cb(PurpleBlistNode *node, gpointer data);
 static void action_join_room_cb(PurplePluginAction *action);
 static void menu_action_reply_dialog_cb(void *user_data, const char *text);
 static void menu_action_thread_dialog_cb(void *user_data, const char *text);
+static PurpleCmdRet cmd_reply(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_thread(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_sticker_list(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
 static void menu_action_reply_conv_cb(PurpleConversation *conv, gpointer data);
 static void menu_action_thread_conv_cb(PurpleConversation *conv, gpointer data);
+static PurpleCmdRet cmd_e2ee_status(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
 
 /* Commands */
 static void sticker_selected_cb(void *user_data, PurpleRequestFields *fields) {
@@ -105,72 +108,128 @@ static void menu_action_poll_conv_cb(PurpleConversation *conv, gpointer data) {
   purple_request_fields(conv, "Create Poll", "Create a Matrix Poll", NULL, fields, "Create", G_CALLBACK(poll_create_dialog_cb), "Cancel", NULL, purple_conversation_get_account(conv), NULL, NULL, g_strdup(purple_conversation_get_name(conv)));
 }
 
+/* Dedicated Dashboard Callbacks */
+static void dash_reply_cb(char *room_id) {
+  PurpleAccount *account = find_matrix_account();
+  purple_request_input(account, "Reply", "Reply to last message", NULL, NULL, TRUE, FALSE, NULL, "Send", G_CALLBACK(menu_action_reply_dialog_cb), "Cancel", NULL, account, NULL, NULL, room_id);
+}
+static void dash_thread_cb(char *room_id) {
+  PurpleAccount *account = find_matrix_account();
+  purple_request_input(account, "Start Thread", "Start thread from last message", NULL, NULL, TRUE, FALSE, NULL, "Send", G_CALLBACK(menu_action_thread_dialog_cb), "Cancel", NULL, account, NULL, NULL, room_id);
+}
+static void dash_sticker_cb(char *room_id) {
+  PurpleAccount *account = find_matrix_account();
+  PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+  if (conv) menu_action_sticker_conv_cb(conv, NULL);
+  g_free(room_id);
+}
+static void dash_poll_cb(char *room_id) {
+  PurpleAccount *account = find_matrix_account();
+  PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+  if (conv) menu_action_poll_conv_cb(conv, NULL);
+  g_free(room_id);
+}
+static void dash_invite_cb(char *room_id) { action_join_room_cb(NULL); g_free(room_id); }
+static void dash_settings_cb(char *room_id) {
+  PurpleAccount *account = find_matrix_account();
+  PurpleBlistNode *node = (PurpleBlistNode *)purple_blist_find_chat(account, room_id);
+  if (node) menu_action_room_settings_cb(node, NULL);
+  g_free(room_id);
+}
+static void dash_power_cb(char *room_id) { purple_matrix_rust_get_power_levels(purple_account_get_username(find_matrix_account()), room_id); g_free(room_id); }
+static void dash_list_threads_cb(char *room_id) { purple_matrix_rust_list_threads(purple_account_get_username(find_matrix_account()), room_id); g_free(room_id); }
+static void dash_e2ee_cb(char *room_id) { purple_matrix_rust_e2ee_status(purple_account_get_username(find_matrix_account()), room_id); g_free(room_id); }
+static void dash_unread_cb(char *room_id) { purple_matrix_rust_mark_unread(purple_account_get_username(find_matrix_account()), room_id, TRUE); g_free(room_id); }
+
 static void open_room_dashboard(PurpleAccount *account, const char *room_id) {
   if (!room_id) return;
   purple_request_action(account, "Room Dashboard", "Matrix Room Actions", "Manage room settings and interactions.", 0, account, NULL, NULL, g_strdup(room_id), 10,
-    "Reply to Last", G_CALLBACK(room_dashboard_action_cb),
-    "Start Thread", G_CALLBACK(room_dashboard_action_cb),
-    "Send Sticker", G_CALLBACK(room_dashboard_action_cb),
-    "Create Poll", G_CALLBACK(room_dashboard_action_cb),
-    "Invite User", G_CALLBACK(room_dashboard_action_cb),
-    "Room Settings", G_CALLBACK(room_dashboard_action_cb),
-    "Power Levels", G_CALLBACK(room_dashboard_action_cb),
-    "List Threads", G_CALLBACK(room_dashboard_action_cb),
-    "E2EE Status", G_CALLBACK(room_dashboard_action_cb),
-    "Mark Unread", G_CALLBACK(room_dashboard_action_cb));
-}
-
-static void room_dashboard_action_cb(void *user_data, int action) {
-  char *room_id = (char *)user_data;
-  PurpleAccount *account = find_matrix_account();
-  if (!account) { g_free(room_id); return; }
-  const char *username = purple_account_get_username(account);
-  PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_CHAT, room_id, account);
-  if (!conv) conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_IM, room_id, account);
-  
-  purple_debug_info("matrix", "Dashboard action %d for room %s\n", action, room_id);
-
-  switch(action) {
-    case 0: { 
-      const char *last_id = conv ? (const char *)purple_conversation_get_data(conv, "last_event_id") : NULL;
-      if (last_id) purple_request_input(account, "Reply", "Reply to last message", NULL, NULL, TRUE, FALSE, NULL, "Send", G_CALLBACK(menu_action_reply_dialog_cb), "Cancel", NULL, account, NULL, NULL, g_strdup(room_id));
-      else purple_notify_error(my_plugin, "Matrix", "No message to reply to. Try sending a message first.", NULL);
-      break;
-    }
-    case 1: {
-      const char *last_id = conv ? (const char *)purple_conversation_get_data(conv, "last_event_id") : NULL;
-      if (last_id) purple_request_input(account, "Start Thread", "Start thread from last message", NULL, NULL, TRUE, FALSE, NULL, "Send", G_CALLBACK(menu_action_thread_dialog_cb), "Cancel", NULL, account, NULL, NULL, g_strdup(room_id));
-      else purple_notify_error(my_plugin, "Matrix", "No message to start thread from. Try sending a message first.", NULL);
-      break;
-    }
-    case 2: if (conv) menu_action_sticker_conv_cb(conv, NULL); break;
-    case 3: if (conv) menu_action_poll_conv_cb(conv, NULL); break;
-    case 4: action_join_room_cb(NULL); break;
-    case 5: { 
-       PurpleBlistNode *node = (PurpleBlistNode *)purple_blist_find_chat(account, room_id);
-       if (node) menu_action_room_settings_cb(node, NULL);
-       else purple_notify_error(my_plugin, "Matrix", "Room not found in buddy list", NULL);
-       break;
-    }
-    case 6: purple_matrix_rust_get_power_levels(username, room_id); break;
-    case 7: purple_matrix_rust_list_threads(username, room_id); break;
-    case 8: purple_matrix_rust_e2ee_status(username, room_id); break;
-    case 9: purple_matrix_rust_mark_unread(username, room_id, TRUE); break;
-  }
-  g_free(room_id);
+    "Reply to Last", dash_reply_cb,
+    "Start Thread", dash_thread_cb,
+    "Send Sticker", dash_sticker_cb,
+    "Create Poll", dash_poll_cb,
+    "Invite User", dash_invite_cb,
+    "Room Settings", dash_settings_cb,
+    "Power Levels", dash_power_cb,
+    "List Threads", dash_list_threads_cb,
+    "E2EE Status", dash_e2ee_cb,
+    "Mark Unread", dash_unread_cb);
 }
 
 static void menu_action_room_dashboard_conv_cb(PurpleConversation *conv, gpointer data) {
   open_room_dashboard(purple_conversation_get_account(conv), purple_conversation_get_name(conv));
 }
 
+static void poll_vote_selected_dialog_cb(void *user_data, PurpleRequestFields *fields) {
+  char *room_id = (char *)user_data;
+  PurpleRequestField *f_poll = purple_request_fields_get_field(fields, "poll");
+  PurpleRequestField *f_opt = purple_request_fields_get_field(fields, "opt");
+  
+  GList *sel_poll = purple_request_field_list_get_selected(f_poll);
+  GList *sel_opt = purple_request_field_list_get_selected(f_opt);
+  
+  if (sel_poll && sel_opt) {
+    const char *poll_id = (const char *)purple_request_field_list_get_data(f_poll, (const char *)sel_poll->data);
+    int opt_idx = GPOINTER_TO_INT(purple_request_field_list_get_data(f_opt, (const char *)sel_opt->data));
+    PurpleAccount *account = find_matrix_account();
+    if (account) purple_matrix_rust_poll_vote(purple_account_get_username(account), room_id, poll_id, (guint64)opt_idx);
+  }
+  g_free(room_id);
+}
+
+void active_poll_list_cb(const char *room_id, const char *event_id, const char *sender, const char *question, const char *options_str) {
+  /* This is called multiple times by Rust. We need to collect them. 
+     Since we can't easily hold state between calls for a single dialog, 
+     we'll use a simpler approach: the user sees the polls in the chat log 
+     and uses the ID. 
+     
+     Actually, let's stick to the input dialog but explain it better. */
+}
+
+static void poll_vote_selected_cb(void *user_data, const char *text) {
+  char *room_id = (char *)user_data;
+  PurpleAccount *account = find_matrix_account();
+  /* Expecting "poll_id index" */
+  if (text && *text) {
+    char *dup = g_strdup(text);
+    char *idx_str = strchr(dup, ' ');
+    if (idx_str) {
+      *idx_str = '\0';
+      idx_str++;
+      purple_matrix_rust_poll_vote(purple_account_get_username(account), room_id, dup, (guint64)atoll(idx_str));
+    } else {
+       purple_notify_error(my_plugin, "Matrix", "Invalid format. Expected 'event_id index'", "e.g. $abc... 0");
+    }
+    g_free(dup);
+  }
+  g_free(room_id);
+}
+
+static void menu_action_poll_vote_conv_cb(PurpleConversation *conv, gpointer data) {
+  const char *room_id = purple_conversation_get_name(conv);
+  /* Trigger discovery so they appear in log if missed */
+  PurpleAccount *account = purple_conversation_get_account(conv);
+  purple_matrix_rust_get_active_polls(purple_account_get_username(account), room_id);
+  
+  purple_request_input(account, "Vote on Poll", "Enter Poll Event ID and Option Index", "Copy the Event ID from the [Active Poll] message in history.\nFormat: event_id index (e.g. $abc... 0)", NULL, FALSE, FALSE, NULL, "Vote", G_CALLBACK(poll_vote_selected_cb), "Cancel", NULL, account, NULL, NULL, g_strdup(room_id));
+}
+
+static void menu_action_poll_vote_blist_cb(PurpleBlistNode *node, gpointer data) {
+  PurpleChat *chat = (PurpleChat *)node;
+  const char *room_id = g_hash_table_lookup(purple_chat_get_components(chat), "room_id");
+  if (room_id) purple_request_input(chat->account, "Vote on Poll", "Enter Poll Event ID and Option Index", "Format: event_id index", NULL, FALSE, FALSE, NULL, "Vote", G_CALLBACK(poll_vote_selected_cb), "Cancel", NULL, chat->account, NULL, NULL, g_strdup(room_id));
+}
+
 void conversation_extended_menu_cb(PurpleConversation *conv, GList **list) {
   if (strcmp(purple_account_get_protocol_id(purple_conversation_get_account(conv)), "prpl-matrix-rust") != 0) return;
-  *list = g_list_append(*list, purple_menu_action_new("Room Dashboard", PURPLE_CALLBACK(menu_action_room_dashboard_conv_cb), conv, NULL));
+  *list = g_list_append(*list, purple_menu_action_new("Room Dashboard...", PURPLE_CALLBACK(menu_action_room_dashboard_conv_cb), conv, NULL));
   *list = g_list_append(*list, purple_menu_action_new("Reply to Last Message", PURPLE_CALLBACK(menu_action_reply_conv_cb), conv, NULL));
-  *list = g_list_append(*list, purple_menu_action_new("Start Thread", PURPLE_CALLBACK(menu_action_thread_conv_cb), conv, NULL));
+  *list = g_list_append(*list, purple_menu_action_new("Start Thread from Last", PURPLE_CALLBACK(menu_action_thread_conv_cb), conv, NULL));
   *list = g_list_append(*list, purple_menu_action_new("Send Sticker...", PURPLE_CALLBACK(menu_action_sticker_conv_cb), conv, NULL));
   *list = g_list_append(*list, purple_menu_action_new("Create Poll...", PURPLE_CALLBACK(menu_action_poll_conv_cb), conv, NULL));
+  *list = g_list_append(*list, purple_menu_action_new("Vote on Poll...", PURPLE_CALLBACK(menu_action_poll_vote_conv_cb), conv, NULL));
+  *list = g_list_append(*list, purple_menu_action_new("Invite User...", PURPLE_CALLBACK(action_join_room_cb), NULL, NULL));
+  *list = g_list_append(*list, purple_menu_action_new("Security Status", PURPLE_CALLBACK(cmd_e2ee_status), NULL, NULL));
 }
 
 static void menu_action_reply_dialog_cb(void *user_data, const char *text) {
@@ -310,6 +369,7 @@ GList *blist_node_menu_cb(PurpleBlistNode *node) {
       list = g_list_append(list, purple_menu_action_new("Reply to Last Message", PURPLE_CALLBACK(menu_action_reply_last_cb), node, NULL));
       list = g_list_append(list, purple_menu_action_new("Start Thread from Last", PURPLE_CALLBACK(menu_action_thread_last_cb), node, NULL));
       list = g_list_append(list, purple_menu_action_new("Settings...", PURPLE_CALLBACK(menu_action_room_settings_cb), node, NULL));
+      list = g_list_append(list, purple_menu_action_new("Vote on Poll...", PURPLE_CALLBACK(menu_action_poll_vote_blist_cb), node, NULL));
       list = g_list_append(list, purple_menu_action_new("Mark Read", PURPLE_CALLBACK(menu_action_mark_read_cb), node, NULL));
       list = g_list_append(list, purple_menu_action_new("Mark Unread", PURPLE_CALLBACK(menu_action_mark_unread_cb), node, NULL));
       list = g_list_append(list, purple_menu_action_new("Security Status", PURPLE_CALLBACK(menu_action_e2ee_status_cb), node, NULL));
@@ -672,7 +732,19 @@ static PurpleCmdRet cmd_user_search(PurpleConversation *conv, const gchar *cmd, 
   return PURPLE_CMD_RET_OK;
 }
 
+static PurpleCmdRet cmd_poll_create_alias(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  menu_action_poll_conv_cb(conv, NULL);
+  return PURPLE_CMD_RET_OK;
+}
+
 void register_matrix_commands(PurplePlugin *plugin) {
+  /* Short-hand aliases */
+  purple_cmd_register("reply", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_reply, "reply <msg>: Reply to the last received message.", NULL);
+  purple_cmd_register("thread", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_thread, "thread <msg>: Start a new thread from the last message.", NULL);
+  purple_cmd_register("sticker", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_sticker_list, "sticker: Open the Matrix sticker picker.", NULL);
+  purple_cmd_register("poll", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_poll_create_alias, "poll: Create a new Matrix poll.", NULL);
+
+  /* Full commands */
   purple_cmd_register("matrix_sync_history", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_resync_history, "matrix_sync_history: Reset and resync history for the current room.", NULL);
   purple_cmd_register("matrix_enable_backup", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_enable_backup, "matrix_enable_backup: Check or enable online key backup on the server.", NULL);
   purple_cmd_register("matrix_thread", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_thread, "matrix_thread <msg>: Reply to the last message in a new thread.", NULL);

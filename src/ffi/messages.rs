@@ -568,6 +568,68 @@ pub extern "C" fn purple_matrix_rust_send_location(user_id: *const c_char, room_
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_search_messages(user_id: *const c_char, room_id: *const c_char, term: *const c_char) {
+    if user_id.is_null() || room_id.is_null() || term.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let term_str = unsafe { CStr::from_ptr(term).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        let client_clone = client.clone();
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::RoomId;
+            use matrix_sdk::ruma::api::client::search::search_events::v3::{
+                Request as SearchRequest,
+                Categories,
+                Criteria,
+            };
+            use matrix_sdk::ruma::api::client::filter::RoomEventFilter;
+            use matrix_sdk::ruma::events::{AnyTimelineEvent, AnyMessageLikeEvent, room::message::RoomMessageEvent};
+            
+            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                log::info!("Searching messages in {} for '{}'", room_id_str, term_str);
+                
+                let mut criteria = Criteria::new(term_str.clone());
+                let mut filter = RoomEventFilter::default();
+                filter.rooms = Some(vec![rid.to_owned()]);
+                criteria.filter = filter;
+                
+                let mut categories = Categories::new();
+                categories.room_events = Some(criteria);
+                let request = SearchRequest::new(categories);
+                
+                match client_clone.send(request).await {
+                    Ok(response) => {
+                        let mut msg = format!("<b>Search results for '{}' in {}</b>:<br/>", term_str, room_id_str);
+                        let results = &response.search_categories.room_events.results;
+                        if results.is_empty() {
+                            msg.push_str("No results found.");
+                        } else {
+                            for res in results {
+                                if let Some(raw) = &res.result {
+                                    let raw_ev: Result<AnyTimelineEvent, _> = raw.deserialize();
+                                    if let Ok(ev) = raw_ev {
+                                        if let AnyTimelineEvent::MessageLike(msg_ev) = ev {
+                                            let sender = msg_ev.sender().to_string();
+                                            let body = if let AnyMessageLikeEvent::RoomMessage(RoomMessageEvent::Original(ref o)) = msg_ev {
+                                                o.content.body().to_string()
+                                            } else { "Non-text message".to_string() };
+                                            msg.push_str(&format!("- <b>{}</b>: {}<br/>", sender, body));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &msg);
+                    },
+                    Err(e) => log::error!("Search failed: {:?}", e),
+                }
+            }
+        });
+    });
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_bulk_redact(user_id: *const c_char, room_id: *const c_char, count: i32, target_user: *const c_char) {
     if user_id.is_null() || room_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };

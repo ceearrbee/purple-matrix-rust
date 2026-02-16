@@ -681,6 +681,72 @@ pub extern "C" fn purple_matrix_rust_report_content(user_id: *const c_char, room
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_get_space_hierarchy(user_id: *const c_char, space_id: *const c_char) {
+    if user_id.is_null() || space_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let space_id_str = unsafe { CStr::from_ptr(space_id).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        let client_clone = client.clone();
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::RoomId;
+            use matrix_sdk::ruma::api::client::space::get_hierarchy::v1::Request as HierarchyRequest;
+            
+            if let Ok(rid) = <&RoomId>::try_from(space_id_str.as_str()) {
+                log::info!("Fetching hierarchy for space {}", space_id_str);
+                let request = HierarchyRequest::new(rid.to_owned());
+                match client_clone.send(request).await {
+                    Ok(response) => {
+                        for room in response.rooms {
+                            log::info!("Found room in space: {} ({:?})", room.summary.room_id, room.summary.name);
+                        }
+                    },
+                    Err(e) => log::error!("Space hierarchy request failed: {:?}", e),
+                }
+            }
+        });
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_search_room_members(user_id: *const c_char, room_id: *const c_char, term: *const c_char) {
+    if user_id.is_null() || room_id.is_null() || term.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let term_str = unsafe { CStr::from_ptr(term).to_string_lossy().to_lowercase() };
+
+    with_client(&user_id_str.clone(), |client| {
+        let client_clone = client.clone();
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::RoomId;
+            use matrix_sdk_base::RoomMemberships;
+            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                if let Some(room) = client_clone.get_room(rid) {
+                    log::info!("Searching members in {} for '{}'", room_id_str, term_str);
+                    if let Ok(members) = room.members(RoomMemberships::JOIN).await {
+                        for member in members {
+                            let m_id = member.user_id().as_str();
+                            let display_name = member.display_name().unwrap_or(m_id).to_lowercase();
+                            if m_id.to_lowercase().contains(&term_str) || display_name.contains(&term_str) {
+                                let c_room_id = CString::new(room_id_str.clone()).unwrap_or_default();
+                                let c_user_id = CString::new(m_id).unwrap_or_default();
+                                let c_alias = CString::new(member.display_name().unwrap_or(m_id)).unwrap_or_default();
+                                let c_avatar = CString::new(member.avatar_url().map(|u| u.to_string()).unwrap_or_default()).unwrap_or_default();
+
+                                let guard = CHAT_USER_CALLBACK.lock().unwrap();
+                                if let Some(cb) = *guard {
+                                    cb(c_room_id.as_ptr(), c_user_id.as_ptr(), true, c_alias.as_ptr(), c_avatar.as_ptr());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    });
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_get_supported_versions(user_id: *const c_char) {
     if user_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };

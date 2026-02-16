@@ -1,5 +1,6 @@
 #include "matrix_utils.h"
 #include "matrix_globals.h"
+#include "matrix_blist.h"
 #include <libpurple/util.h>
 #include <libpurple/accountopt.h>
 #include <libpurple/prpl.h>
@@ -74,24 +75,135 @@ char *matrix_get_chat_name(GHashTable *components) {
   return room_id ? g_strdup(room_id) : NULL;
 }
 
-void thread_list_cb(const char *room_id, const char *thread_root_id, const char *latest_msg, guint64 count, guint64 ts) {
-  PurpleAccount *account = find_matrix_account();
-  PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_CHAT, room_id, account);
-  if (conv) {
-    char *msg = g_strdup_printf("Thread Found: root_id=%s, count=%" G_GUINT64_FORMAT ", latest=\"%s\"", thread_root_id, count, latest_msg);
-    purple_conversation_write(conv, "Matrix", msg, PURPLE_MESSAGE_SYSTEM, (time_t)ts);
-    g_free(msg);
-  }
+static GHashTable *thread_lists = NULL;
+
+typedef struct {
+  char *root_id;
+  char *description;
+} MatrixThreadInfo;
+
+static void free_matrix_thread_info(MatrixThreadInfo *info) {
+  if (!info) return;
+  g_free(info->root_id);
+  g_free(info->description);
+  g_free(info);
 }
 
-void poll_list_cb(const char *room_id, const char *event_id, const char *sender, const char *question, const char *options_str) {
+static void free_thread_list(GList *list) {
+  g_list_free_full(list, (GDestroyNotify)free_matrix_thread_info);
+}
+
+static void open_selected_thread_cb(void *user_data, PurpleRequestFields *fields) {
+  char *room_id = (char *)user_data;
+  PurpleRequestField *f = purple_request_fields_get_field(fields, "thread");
+  GList *sel = purple_request_field_list_get_selected(f);
+  if (sel) {
+    const char *root_id = (const char *)purple_request_field_list_get_data(f, (const char *)sel->data);
+    char *virtual_id = g_strdup_printf("%s|%s", room_id, root_id);
+    PurpleAccount *account = find_matrix_account();
+    ensure_thread_in_blist(account, virtual_id, "Thread", room_id);
+    g_free(virtual_id);
+  }
+  g_free(room_id);
+}
+
+typedef struct {
+  char *room_id;
+} ThreadListUIData;
+
+static gboolean thread_list_ui_idle_cb(gpointer user_data) {
+  ThreadListUIData *ui_data = (ThreadListUIData *)user_data;
+  char *room_id = ui_data->room_id;
+  
+  GList *list = g_hash_table_lookup(thread_lists, room_id);
+  if (!list) {
+    purple_notify_info(my_plugin, "Threads", "No threads found", "Try fetching more history first.");
+    g_free(room_id);
+    g_free(ui_data);
+    return FALSE;
+  }
+  
+  PurpleRequestFields *fields = purple_request_fields_new();
+  PurpleRequestFieldGroup *group = purple_request_field_group_new(NULL);
+  purple_request_fields_add_group(fields, group);
+  PurpleRequestField *f = purple_request_field_list_new("thread", "Choose Thread");
+  purple_request_field_group_add_field(group, f);
+  
+  for (GList *it = list; it; it = it->next) {
+    MatrixThreadInfo *info = (MatrixThreadInfo *)it->data;
+    purple_request_field_list_add(f, info->description, info->root_id);
+  }
+  
+  purple_request_fields(find_matrix_account(), "Room Threads", "Active Threads", "Select a thread to open it in a new tab.", fields, "Open", G_CALLBACK(open_selected_thread_cb), "Cancel", NULL, find_matrix_account(), NULL, NULL, g_strdup(room_id));
+  
+  g_hash_table_remove(thread_lists, room_id);
+  g_free(room_id);
+  g_free(ui_data);
+  return FALSE;
+}
+
+void thread_list_cb(const char *room_id, const char *thread_root_id, const char *latest_msg, guint64 count, guint64 ts) {
+  if (!thread_lists) thread_lists = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)free_thread_list);
+  
+  if (thread_root_id == NULL) {
+    /* End of list - schedule UI on main thread */
+    ThreadListUIData *ui_data = g_new0(ThreadListUIData, 1);
+    ui_data->room_id = g_strdup(room_id);
+    g_idle_add(thread_list_ui_idle_cb, ui_data);
+    return;
+  }
+
+  /* Accumulate */
+  MatrixThreadInfo *info = g_new0(MatrixThreadInfo, 1);
+  info->root_id = g_strdup(thread_root_id);
+  info->description = g_strdup_printf("%s (%" G_GUINT64_FORMAT " msgs)", latest_msg, count);
+  
+  GList *list = g_hash_table_lookup(thread_lists, room_id);
+  list = g_list_append(list, info);
+  g_hash_table_insert(thread_lists, g_strdup(room_id), list);
+}
+
+typedef struct {
+  char *room_id;
+  char *event_id;
+  char *sender;
+  char *question;
+  char *options_str;
+} PollUIData;
+
+static gboolean poll_ui_idle_cb(gpointer user_data) {
+  PollUIData *ui_data = (PollUIData *)user_data;
   PurpleAccount *account = find_matrix_account();
-  PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_CHAT, room_id, account);
+  PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, ui_data->room_id, account);
+  
   if (conv) {
-    char *msg = g_strdup_printf("Active Poll: %s (by %s)\nOptions: %s", question, sender, options_str);
+    char *msg;
+    if (ui_data->event_id) {
+      msg = g_strdup_printf("<b>Active Poll:</b> %s (by %s)<br/><b>Options:</b> %s<br/><b>ID:</b> %s", ui_data->question, ui_data->sender, ui_data->options_str, ui_data->event_id);
+    } else {
+      msg = g_strdup("[End of Active Polls List]");
+    }
     purple_conversation_write(conv, "Matrix", msg, PURPLE_MESSAGE_SYSTEM, time(NULL));
     g_free(msg);
   }
+  
+  g_free(ui_data->room_id);
+  g_free(ui_data->event_id);
+  g_free(ui_data->sender);
+  g_free(ui_data->question);
+  g_free(ui_data->options_str);
+  g_free(ui_data);
+  return FALSE;
+}
+
+void poll_list_cb(const char *room_id, const char *event_id, const char *sender, const char *question, const char *options_str) {
+  PollUIData *ui_data = g_new0(PollUIData, 1);
+  ui_data->room_id = g_strdup(room_id);
+  ui_data->event_id = g_strdup(event_id);
+  ui_data->sender = g_strdup(sender);
+  ui_data->question = g_strdup(question);
+  ui_data->options_str = g_strdup(options_str);
+  g_idle_add(poll_ui_idle_cb, ui_data);
 }
 
 guint32 get_history_page_size(PurpleAccount *account) {

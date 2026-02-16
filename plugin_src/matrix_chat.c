@@ -156,15 +156,20 @@ static gboolean process_msg_cb(gpointer data) {
       purple_conv_chat_add_user(PURPLE_CONV_CHAT(conv), d->sender, NULL, PURPLE_CBFLAGS_NONE, TRUE);
     }
 
-    if (d->thread_root_id && separate_threads) {
-      int main_id = get_chat_id(d->room_id);
-      if (purple_find_chat(gc, main_id)) {
+    if (d->thread_root_id && strlen(d->thread_root_id) > 0) {
+      if (separate_threads) {
+        /* Only send to virtual room */
+        serv_got_chat_in(gc, chat_id, d->sender, PURPLE_MESSAGE_RECV, d->message, d->timestamp / 1000);
+      } else {
+        /* Send to main room with prefix */
         char *main_msg = g_strdup_printf("[Thread] %s", d->message);
-        serv_got_chat_in(gc, main_id, d->sender, PURPLE_MESSAGE_RECV, main_msg, d->timestamp / 1000);
+        serv_got_chat_in(gc, chat_id, d->sender, PURPLE_MESSAGE_RECV, main_msg, d->timestamp / 1000);
         g_free(main_msg);
       }
+    } else {
+      /* Normal message to its intended room */
+      serv_got_chat_in(gc, chat_id, d->sender, PURPLE_MESSAGE_RECV, d->message, d->timestamp / 1000);
     }
-    serv_got_chat_in(gc, chat_id, d->sender, PURPLE_MESSAGE_RECV, d->message, d->timestamp / 1000);
   }
 
   g_free(d->sender); g_free(d->message); g_free(d->room_id);

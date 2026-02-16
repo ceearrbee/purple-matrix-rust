@@ -1,4 +1,5 @@
 use matrix_sdk::ruma::events::poll::start::SyncPollStartEvent;
+use matrix_sdk::ruma::events::poll::response::SyncPollResponseEvent;
 use matrix_sdk::Room;
 use std::ffi::CString;
 use crate::ffi::MSG_CALLBACK;
@@ -24,4 +25,11 @@ pub async fn handle_poll_start(event: SyncPollStartEvent, room: Room) {
             cb(c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), c_event_id.as_ptr(), timestamp);
         }
     }
+}
+
+pub async fn handle_poll_response(_event: SyncPollResponseEvent, room: Room) {
+    // When someone votes, we should ideally refresh the poll UI.
+    // In libpurple, we can't easily "update" an old message, so we'll
+    // post a system message with the new tally if requested, or just log it.
+    log::info!("Received poll response in room {}", room.room_id());
 }
