@@ -123,20 +123,24 @@ static void open_room_dashboard(PurpleAccount *account, const char *room_id) {
 static void room_dashboard_action_cb(void *user_data, int action) {
   char *room_id = (char *)user_data;
   PurpleAccount *account = find_matrix_account();
+  if (!account) { g_free(room_id); return; }
   const char *username = purple_account_get_username(account);
   PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_CHAT, room_id, account);
   if (!conv) conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_IM, room_id, account);
+  
+  purple_debug_info("matrix", "Dashboard action %d for room %s\n", action, room_id);
+
   switch(action) {
     case 0: { 
-      const char *last_id = conv ? purple_conversation_get_data(conv, "last_event_id") : NULL;
+      const char *last_id = conv ? (const char *)purple_conversation_get_data(conv, "last_event_id") : NULL;
       if (last_id) purple_request_input(account, "Reply", "Reply to last message", NULL, NULL, TRUE, FALSE, NULL, "Send", G_CALLBACK(menu_action_reply_dialog_cb), "Cancel", NULL, account, NULL, NULL, g_strdup(room_id));
-      else purple_notify_error(my_plugin, "Matrix", "No message to reply to", NULL);
+      else purple_notify_error(my_plugin, "Matrix", "No message to reply to. Try sending a message first.", NULL);
       break;
     }
     case 1: {
-      const char *last_id = conv ? purple_conversation_get_data(conv, "last_event_id") : NULL;
+      const char *last_id = conv ? (const char *)purple_conversation_get_data(conv, "last_event_id") : NULL;
       if (last_id) purple_request_input(account, "Start Thread", "Start thread from last message", NULL, NULL, TRUE, FALSE, NULL, "Send", G_CALLBACK(menu_action_thread_dialog_cb), "Cancel", NULL, account, NULL, NULL, g_strdup(room_id));
-      else purple_notify_error(my_plugin, "Matrix", "No message to start thread from", NULL);
+      else purple_notify_error(my_plugin, "Matrix", "No message to start thread from. Try sending a message first.", NULL);
       break;
     }
     case 2: if (conv) menu_action_sticker_conv_cb(conv, NULL); break;
@@ -145,6 +149,7 @@ static void room_dashboard_action_cb(void *user_data, int action) {
     case 5: { 
        PurpleBlistNode *node = (PurpleBlistNode *)purple_blist_find_chat(account, room_id);
        if (node) menu_action_room_settings_cb(node, NULL);
+       else purple_notify_error(my_plugin, "Matrix", "Room not found in buddy list", NULL);
        break;
     }
     case 6: purple_matrix_rust_get_power_levels(username, room_id); break;

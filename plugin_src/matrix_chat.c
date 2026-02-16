@@ -94,7 +94,10 @@ static gboolean process_msg_cb(gpointer data) {
 
   if (d->event_id) {
     PurpleConversation *main_conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_CHAT, d->room_id, account);
+    if (!main_conv) main_conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_IM, d->room_id, account);
+    
     if (main_conv) {
+      purple_debug_info("matrix", "Updating last_event_id for room %s to %s\n", d->room_id, d->event_id);
       g_free(purple_conversation_get_data(main_conv, "last_event_id"));
       purple_conversation_set_data(main_conv, "last_event_id", g_strdup(d->event_id));
       g_free(purple_conversation_get_data(main_conv, "last_thread_root_id"));

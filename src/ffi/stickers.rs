@@ -44,16 +44,18 @@ pub extern "C" fn purple_matrix_rust_list_sticker_packs(
 
     with_client(&user_id_str, |client| {
         RUNTIME.spawn(async move {
+            let mut found_any = false;
+
             // 1. Check Global Account Data
             if let Ok(Some(event)) = client.account().fetch_account_data(
                 matrix_sdk::ruma::events::GlobalAccountDataEventType::from("im.ponies.user_defined_sticker_pack")
             ).await {
-                // Use the raw JSON directly
                 if let Ok(content) = serde_json::from_str::<StickerPackContent>(event.json().get()) {
                      let pack_name = content.pack.as_ref().and_then(|p| p.display_name.clone()).unwrap_or("Personal Pack".to_string());
                      let c_id = CString::new("im.ponies.user_defined_sticker_pack").unwrap_or_default();
                      let c_name = CString::new(pack_name).unwrap_or_default();
                      cb(c_id.as_ptr(), c_name.as_ptr(), u_data_usize as *mut c_void);
+                     found_any = true;
                 }
             }
 
@@ -69,15 +71,22 @@ pub extern "C" fn purple_matrix_rust_list_sticker_packs(
 
                         if let Ok(content) = serde_json::from_str::<StickerPackContent>(json_str) {
                             let pack_name = content.pack.as_ref().and_then(|p| p.display_name.clone()).unwrap_or_else(|| format!("Room Pack ({})", room.room_id()));
-                            
                             let pack_id = format!("room:{}:static", room.room_id());
-                            
                             let c_id = CString::new(pack_id).unwrap_or_default();
                             let c_name = CString::new(pack_name).unwrap_or_default();
                             cb(c_id.as_ptr(), c_name.as_ptr(), u_data_usize as *mut c_void);
+                            found_any = true;
                         }
                     }
                 }
+            }
+
+            // 3. Fallback: If nothing found, provide a few common default packs (if we had URLs)
+            // For now, if empty, we notify the user via a mock pack entry.
+            if !found_any {
+                 let c_id = CString::new("none").unwrap_or_default();
+                 let c_name = CString::new("No Sticker Packs Found (Use /matrix_sticker <mxc_url> to send directly)").unwrap_or_default();
+                 cb(c_id.as_ptr(), c_name.as_ptr(), u_data_usize as *mut c_void);
             }
             
             done_cb(u_data_usize as *mut c_void);

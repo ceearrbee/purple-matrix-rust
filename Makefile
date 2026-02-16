@@ -33,7 +33,7 @@ $(RUST_LIB):
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(TARGET): $(OBJECTS) $(RUST_LIB)
-	$(CC) $(LDFLAGS) -o $@ $(OBJECTS) $(RUST_LIB) $(PURPLE_LIBS) $(GLIB_LIBS) $(SQLITE_LIBS) $(OPENSSL_LIBS) -lpthread -ldl -lm
+	$(CC) $(LDFLAGS) -o $@ $(OBJECTS) -Wl,--whole-archive $(RUST_LIB) -Wl,--no-whole-archive $(PURPLE_LIBS) $(GLIB_LIBS) $(SQLITE_LIBS) $(OPENSSL_LIBS) -lpthread -ldl -lm
 
 clean:
 	rm -f plugin_src/*.o *.so

@@ -22,6 +22,9 @@ void matrix_login(PurpleAccount *account) {
   const char *password = purple_account_get_password(account);
   char *homeserver_derived = NULL;
   const char *homeserver = purple_account_get_string(account, "server", NULL);
+
+  purple_debug_info("matrix", "matrix_login called for user: %s at %s\n", username, homeserver ? homeserver : "default");
+
   if (!homeserver || strcmp(homeserver, "https://matrix.org") == 0 || strlen(homeserver) == 0) {
     const char *delimiter = strchr(username, ':');
     if (delimiter) {
@@ -141,7 +144,11 @@ void matrix_set_idle(PurpleConnection *gc, int time) { purple_matrix_rust_set_id
 void matrix_change_passwd(PurpleConnection *gc, const char *old, const char *new) { purple_matrix_rust_change_password(purple_account_get_username(purple_connection_get_account(gc)), old, new); }
 void matrix_add_deny(PurpleConnection *gc, const char *who) { purple_matrix_rust_ignore_user(purple_account_get_username(purple_connection_get_account(gc)), who); }
 void matrix_rem_deny(PurpleConnection *gc, const char *who) { purple_matrix_rust_unignore_user(purple_account_get_username(purple_connection_get_account(gc)), who); }
-void matrix_unregister_user(PurpleAccount *account, PurpleAccountUnregistrationCb cb, void *user_data) { purple_matrix_rust_deactivate_account(TRUE); if (cb) cb(account, TRUE, user_data); }
+void matrix_unregister_user(PurpleAccount *account, PurpleAccountUnregistrationCb cb, void *user_data) {
+  purple_debug_info("matrix", "Unregistering user %s - destroying session and wiping local data.\n", purple_account_get_username(account));
+  purple_matrix_rust_destroy_session(purple_account_get_username(account));
+  if (cb) cb(account, TRUE, user_data);
+}
 void matrix_set_public_alias(PurpleConnection *gc, const char *alias) { purple_matrix_rust_set_display_name(purple_account_get_username(purple_connection_get_account(gc)), alias); }
 void matrix_set_buddy_icon(PurpleConnection *gc, PurpleStoredImage *img) { if (img) purple_matrix_rust_set_avatar_bytes(purple_account_get_username(purple_connection_get_account(gc)), (const unsigned char *)purple_imgstore_get_data(img), purple_imgstore_get_size(img)); }
 

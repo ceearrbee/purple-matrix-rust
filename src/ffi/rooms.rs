@@ -635,6 +635,52 @@ pub extern "C" fn purple_matrix_rust_set_room_avatar(user_id: *const c_char, roo
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_room_tag(user_id: *const c_char, room_id: *const c_char, tag: *const c_char) {
+    if user_id.is_null() || room_id.is_null() || tag.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let tag_str = unsafe { CStr::from_ptr(tag).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::RoomId;
+            use matrix_sdk::ruma::events::tag::TagName;
+            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                if let Some(room) = client.get_room(rid) {
+                     let tag_name = match tag_str.as_str() {
+                         "Favourite" => TagName::Favorite,
+                         "LowPriority" => TagName::LowPriority,
+                         "ServerNotice" => TagName::ServerNotice,
+                         s => TagName::from(s),
+                     };
+                     let _ = room.set_tag(tag_name, Default::default()).await;
+                }
+            }
+        });
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_report_content(user_id: *const c_char, room_id: *const c_char, event_id: *const c_char, reason: *const c_char) {
+    if user_id.is_null() || room_id.is_null() || event_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let event_id_str = unsafe { CStr::from_ptr(event_id).to_string_lossy().into_owned() };
+    let reason_str = if reason.is_null() { None } else { Some(unsafe { CStr::from_ptr(reason).to_string_lossy().into_owned() }) };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+             use matrix_sdk::ruma::{RoomId, EventId};
+             if let (Ok(rid), Ok(eid)) = (<&RoomId>::try_from(room_id_str.as_str()), <&EventId>::try_from(event_id_str.as_str())) {
+                 if let Some(room) = client.get_room(rid) {
+                    let _ = room.report_content(eid.to_owned(), None, reason_str).await;
+                 }
+             }
+        });
+    });
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_get_supported_versions(user_id: *const c_char) {
     if user_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };

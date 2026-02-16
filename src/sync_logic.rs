@@ -219,6 +219,10 @@ pub async fn fetch_room_history_logic_with_limit(client: Client, room_id: String
                      crate::PAGINATION_TOKENS.lock().unwrap().insert(room_id.clone(), end.clone());
                  }
 
+                 if messages.chunk.is_empty() {
+                      log::info!("No more history found for {}", room_id);
+                 }
+
                  for (i, timeline_event) in messages.chunk.iter().rev().enumerate() {
                      if let Ok(event) = timeline_event.raw().deserialize() {
                          if let AnySyncTimelineEvent::MessageLike(matrix_sdk::ruma::events::AnySyncMessageLikeEvent::RoomMessage(msg_event)) = event {
@@ -235,7 +239,7 @@ pub async fn fetch_room_history_logic_with_limit(client: Client, room_id: String
                                        body = format!("&nbsp;&nbsp;🧵 {}", body);
                                    }
 
-                                   let final_body = format!("[History] {}", body);
+                                   let final_body = body; // Removed [History] prefix
                                    
                                    let c_sender = CString::new(sender).unwrap_or_default();
                                    let c_body = CString::new(final_body).unwrap_or_default();

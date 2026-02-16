@@ -298,7 +298,7 @@ async fn perform_login(username: String, password: String, homeserver: String, d
         let _ = std::fs::create_dir_all(&data_path);
     }
 
-    log::info!("Initializing Store at {:?}", data_path);
+    log::info!("Initializing Store at {:?} for {}", data_path, username);
 
     // 1. Build Client
     let client = match build_client(&homeserver, &data_path).await {
@@ -328,11 +328,13 @@ async fn perform_login(username: String, password: String, homeserver: String, d
     }
 
     // Case B: No password provided -> Try restoring saved session.
+    log::info!("No password provided, checking for saved session for {}...", username);
     {
          let session_path = data_path.join("session.json");
          if let Some(json) = load_session_json_secure(&session_path, &username) {
+              log::info!("Found potential session data for {}", username);
               if let Ok(saved) = serde_json::from_str::<SavedSession>(&json) {
-                       log::info!("Found saved session for {}, restoring...", saved.user_id);
+                       log::info!("Parsed saved session for {}, restoring...", saved.user_id);
                        
                        use matrix_sdk::authentication::matrix::MatrixSession;
                        use matrix_sdk::authentication::SessionTokens; 
@@ -354,26 +356,33 @@ async fn perform_login(username: String, password: String, homeserver: String, d
                                let load_settings = matrix_sdk::store::RoomLoadSettings::default(); 
                                
                                if let Err(e) = client.matrix_auth().restore_session(session, load_settings).await {
-                                   log::error!("Failed to restore session: {:?}", e);
+                                   log::error!("Failed to restore session for {}: {:?}", username, e);
+                                   // Fall through to Case C
                                } else {
-                                   log::info!("Session successfully restored!");
+                                   log::info!("Session successfully restored for {}!", username);
                                    finish_login_success(client).await;
                                    return;
                                }
                            }
+                       } else {
+                           log::error!("Stored User ID is invalid: {}", saved.user_id);
                        }
+              } else {
+                  log::error!("Failed to deserialize saved session for {}", username);
               }
+         } else {
+             log::info!("No saved session found in keyring or file for {}", username);
          }
     }
 
     // Case C: No password and no/broken saved session -> Try SSO.
     if let Some(user) = client.user_id() {
-         log::info!("Already logged in as {}", user);
+         log::info!("Client report user_id is already present: {}. Proceeding to success...", user);
          finish_login_success(client).await;
          return;
     }
 
-    log::warn!("No password and no valid saved session found. Transitioning to SSO...");
+    log::warn!("No password and no valid saved session found for {}. Transitioning to SSO...", username);
     start_sso_flow(client);
 }
 
@@ -655,30 +664,37 @@ pub extern "C" fn purple_matrix_rust_logout(user_id: *const c_char) {
 pub extern "C" fn purple_matrix_rust_destroy_session(user_id: *const c_char) {
     if user_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    log::info!("Explicit Logout Requested for {}. Invalidating session...", user_id_str);
-    let mut clients = crate::CLIENTS.lock().unwrap();
+    log::info!("Explicit Session Destruction Requested for {}.", user_id_str);
     
-    if let Some(client) = clients.remove(&user_id_str) {
-        RUNTIME.spawn(async move {
-            // 1. Invalidate on server
+    // 1. Remove from keyring immediately (sync)
+    let entry = get_keyring_entry(&user_id_str);
+    if let Err(e) = entry.delete_password() {
+        log::warn!("Failed to delete session from keyring (might not exist): {:?}", e);
+    } else {
+        log::info!("Session removed from keyring.");
+    }
+
+    let mut clients = crate::CLIENTS.lock().unwrap();
+    let client_opt = clients.remove(&user_id_str);
+    
+    RUNTIME.spawn(async move {
+        // 2. Invalidate on server if client was active
+        if let Some(client) = client_opt {
             if let Err(e) = client.logout().await {
                 log::error!("Failed to logout from homeserver: {:?}", e);
             } else {
                 log::info!("Session invalidated on homeserver.");
             }
-            
-            // 2. Remove Session File
-            let path_opt = {
-                 let guard = DATA_PATH.lock().unwrap();
-                 guard.clone()
-            };
-            if let Some(mut path) = path_opt {
-                 path.push("session.json");
-                 if path.exists() {
-                     let _ = std::fs::remove_file(path);
-                     log::info!("session.json deleted.");
-                 }
-            }
-        });
-    }
+        }
+        
+        // 3. Remove Local Session File and Data Dir
+        let path_opt = {
+             let guard = DATA_PATH.lock().unwrap();
+             guard.clone()
+        };
+        if let Some(path) = path_opt {
+             log::info!("Wiping data directory: {:?}", path);
+             safe_wipe_data_dir(&path);
+        }
+    });
 }

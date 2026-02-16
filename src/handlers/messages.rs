@@ -218,7 +218,7 @@ pub async fn render_room_message(ev: &OriginalSyncRoomMessageEvent, room: &Room)
                 }
             }
             if media_path.is_none() { 
-                body = format!("[Image: {}] (Download failed)", crate::escape_html(&content.body)); 
+                body = format!("<span style=\"color: #666; font-style: italic;\">[Image: {}] (Download failed)</span>", crate::escape_html(&content.body)); 
             }
         },
         MessageType::Video(content) => {
