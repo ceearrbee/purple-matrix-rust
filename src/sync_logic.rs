@@ -26,6 +26,14 @@ fn handle_auth_failure(client: &Client) {
     // Clear stale local session so reconnect performs fresh auth.
     if let Some(user_id) = client.user_id().map(|u| u.to_string()) {
         CLIENTS.lock().unwrap().remove(&user_id);
+        
+        // Clear Keyring
+        let entry = keyring::Entry::new("purple-matrix-rust", &user_id).unwrap();
+        if let Err(e) = entry.delete_password() {
+            log::warn!("Failed to delete stale password from keyring: {:?}", e);
+        } else {
+            log::info!("Stale password deleted from keyring.");
+        }
     }
 
     if let Some(mut path) = DATA_PATH.lock().unwrap().clone() {

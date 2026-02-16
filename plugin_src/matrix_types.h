@@ -3,6 +3,7 @@
 
 #include <glib.h>
 #include <stdbool.h>
+#include <libpurple/account.h>
 
 // Structs to marshal data to main thread
 

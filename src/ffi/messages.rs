@@ -568,13 +568,17 @@ pub extern "C" fn purple_matrix_rust_send_location(user_id: *const c_char, room_
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_bulk_redact(user_id: *const c_char, room_id: *const c_char, target_user: *const c_char) {
-    if user_id.is_null() || room_id.is_null() || target_user.is_null() { return; }
+pub extern "C" fn purple_matrix_rust_bulk_redact(user_id: *const c_char, room_id: *const c_char, count: i32, target_user: *const c_char) {
+    if user_id.is_null() || room_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
     let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
-    let target_user_str = unsafe { CStr::from_ptr(target_user).to_string_lossy().into_owned() };
+    let target_user_str = if target_user.is_null() {
+        None
+    } else {
+        Some(unsafe { CStr::from_ptr(target_user).to_string_lossy().into_owned() })
+    };
     
-    log::info!("Bulk redacting messages from {} in {}", target_user_str, room_id_str);
+    log::info!("Bulk redacting messages in {} (count: {})", room_id_str, count);
 
     with_client(&user_id_str.clone(), |client| {
         RUNTIME.spawn(async move {
@@ -584,17 +588,26 @@ pub extern "C" fn purple_matrix_rust_bulk_redact(user_id: *const c_char, room_id
              if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
                  if let Some(room) = client.get_room(rid) {
                      let mut options = MessagesOptions::backward();
-                     options.limit = 100u16.into();
+                     options.limit = (count.clamp(1, 100) as u16).into();
                      
                      if let Ok(messages) = room.messages(options).await {
                          for ev in messages.chunk {
                              if let Some(event_id) = ev.event_id() {
-                                 if let Ok(raw) = ev.raw().deserialize() {
-                                      if let matrix_sdk::ruma::events::AnySyncTimelineEvent::MessageLike(msg_ev) = raw {
-                                           if msg_ev.sender().as_str() == target_user_str {
-                                               let _ = room.redact(&event_id, Some("Bulk Redaction"), None).await;
+                                 let mut should_redact = true;
+                                 if let Some(target) = &target_user_str {
+                                      if let Ok(raw) = ev.raw().deserialize() {
+                                           if let matrix_sdk::ruma::events::AnySyncTimelineEvent::MessageLike(msg_ev) = raw {
+                                                if msg_ev.sender().as_str() != target {
+                                                    should_redact = false;
+                                                }
+                                           } else {
+                                               should_redact = false;
                                            }
                                       }
+                                 }
+                                 
+                                 if should_redact {
+                                     let _ = room.redact(&event_id, Some("Bulk Redaction"), None).await;
                                  }
                              }
                          }

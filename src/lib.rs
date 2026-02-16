@@ -68,32 +68,6 @@ pub fn escape_html(input: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
-pub fn strip_html_tags(input: &str) -> String {
-    let mut output = String::new();
-    let mut inside_tag = false;
-
-    // This is a naive implementation. For production, consider using a proper library like `ammonia` or `scraper` if dependencies allowed.
-    // For now, simple state machine to strip <...>
-    for c in input.chars() {
-        if c == '<' {
-            inside_tag = true;
-        } else if c == '>' {
-            inside_tag = false;
-        } else if !inside_tag {
-            output.push(c);
-        }
-    }
-    
-    // Decode common entities
-    output = output.replace("&lt;", "<")
-                   .replace("&gt;", ">")
-                   .replace("&amp;", "&")
-                   .replace("&quot;", "\"")
-                   .replace("&nbsp;", " ");
-                   
-    output
-}
-
 pub fn sanitize_untrusted_html(input: &str) -> String {
     // Delegate to our smart sanitizer in html_fmt
     crate::html_fmt::sanitize_matrix_html(input)

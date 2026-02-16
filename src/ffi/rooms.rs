@@ -1,6 +1,6 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use crate::{RUNTIME, with_client, handlers, sync_logic};
+use crate::{RUNTIME, with_client, sync_logic};
 use crate::ffi::*;
 use crate::{PAGINATION_TOKENS, HISTORY_FETCHED_ROOMS};
 use matrix_sdk::RoomState;
@@ -81,45 +81,6 @@ pub extern "C" fn purple_matrix_rust_fetch_history(user_id: *const c_char, room_
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_fetch_history_with_limit(user_id: *const c_char, room_id: *const c_char, limit: u32) {
-    if user_id.is_null() || room_id.is_null() { return; }
-    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
-    let clamped_limit = limit.clamp(1, 500) as u16;
-
-    {
-        let mut fetched = HISTORY_FETCHED_ROOMS.lock().unwrap();
-        if fetched.contains(&room_id_str) {
-            return;
-        }
-        fetched.insert(room_id_str.clone());
-    }
-
-    with_client(&user_id_str.clone(), |client| {
-        RUNTIME.spawn(async move {
-            let actual_room_id = if room_id_str.starts_with('@') {
-                use matrix_sdk::ruma::UserId;
-                if let Ok(user_id) = <&UserId>::try_from(room_id_str.as_str()) {
-                    if let Some(room) = client.get_dm_room(user_id) {
-                        Some(room.room_id().to_string())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                Some(room_id_str)
-            };
-
-            if let Some(rid) = actual_room_id {
-                sync_logic::fetch_room_history_logic_with_limit(client, rid, clamped_limit).await;
-            }
-        });
-    });
-}
-
-#[no_mangle]
 pub extern "C" fn purple_matrix_rust_fetch_more_history(user_id: *const c_char, room_id: *const c_char) {
     if user_id.is_null() || room_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
@@ -131,20 +92,6 @@ pub extern "C" fn purple_matrix_rust_fetch_more_history(user_id: *const c_char, 
         
         RUNTIME.spawn(async move {
             sync_logic::fetch_room_history_logic(client, room_id_str).await;
-        });
-    });
-}
-
-#[no_mangle]
-pub extern "C" fn purple_matrix_rust_fetch_more_history_with_limit(user_id: *const c_char, room_id: *const c_char, limit: u32) {
-    if user_id.is_null() || room_id.is_null() { return; }
-    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
-    let clamped_limit = limit.clamp(1, 500) as u16;
-
-    with_client(&user_id_str.clone(), |client| {
-        RUNTIME.spawn(async move {
-            sync_logic::fetch_room_history_logic_with_limit(client, room_id_str, clamped_limit).await;
         });
     });
 }
@@ -175,137 +122,6 @@ pub extern "C" fn purple_matrix_rust_resync_recent_history(user_id: *const c_cha
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_resync_recent_history_with_limit(user_id: *const c_char, room_id: *const c_char, limit: u32) {
-    if user_id.is_null() || room_id.is_null() { return; }
-    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    let mut room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
-    let clamped_limit = limit.clamp(1, 500) as u16;
-    if let Some((base, _)) = room_id_str.split_once('|') {
-        room_id_str = base.to_string();
-    }
-
-    {
-        let mut fetched = HISTORY_FETCHED_ROOMS.lock().unwrap();
-        fetched.remove(&room_id_str);
-    }
-    {
-        let mut tokens = PAGINATION_TOKENS.lock().unwrap();
-        tokens.remove(&room_id_str);
-    }
-
-    with_client(&user_id_str.clone(), |client| {
-        RUNTIME.spawn(async move {
-            sync_logic::fetch_room_history_logic_with_limit(client, room_id_str, clamped_limit).await;
-        });
-    });
-}
-
-#[no_mangle]
-pub extern "C" fn purple_matrix_rust_preview_room(user_id: *const c_char, room_id_or_alias: *const c_char, output_room_id: *const c_char) {
-    if user_id.is_null() || room_id_or_alias.is_null() { return; }
-    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    let room_id_or_alias_str = unsafe { CStr::from_ptr(room_id_or_alias).to_string_lossy().into_owned() };
-    let output_room_id_opt = if output_room_id.is_null() {
-        None
-    } else {
-        Some(unsafe { CStr::from_ptr(output_room_id).to_string_lossy().into_owned() })
-    };
-
-    with_client(&user_id_str.clone(), |client| {
-        RUNTIME.spawn(async move {
-            use matrix_sdk::ruma::api::client::room::get_summary::v1::Request as RoomSummaryRequest;
-            use matrix_sdk::ruma::RoomOrAliasId;
-
-            let mut lines = Vec::new();
-            lines.push(format!("<b>Room Preview</b>: {}", room_id_or_alias_str));
-
-            let parsed = match <&RoomOrAliasId>::try_from(room_id_or_alias_str.as_str()) {
-                Ok(v) => v.to_owned(),
-                Err(_) => {
-                    lines.push("Invalid room ID or alias.".to_string());
-                    send_preview_system_message(output_room_id_opt.as_deref(), &room_id_or_alias_str, &lines.join("<br/>"));
-                    return;
-                }
-            };
-
-            let request = RoomSummaryRequest::new(parsed, Vec::new());
-            match client.send(request).await {
-                Ok(response) => {
-                    let summary = response.summary;
-                    lines.push(format!("Name: {}", summary.name.unwrap_or_else(|| "Unnamed".to_string())));
-                    if let Some(alias) = summary.canonical_alias {
-                        lines.push(format!("Alias: {}", alias));
-                    }
-                    lines.push(format!("Room ID: {}", summary.room_id));
-                    lines.push(format!("Joined Members: {}", summary.num_joined_members));
-                    lines.push(format!("Join Rule: {:?}", summary.join_rule));
-                    lines.push(format!("World Readable: {}", summary.world_readable));
-                    lines.push(format!("Encrypted: {}", summary.encryption.is_some()));
-                    if let Some(topic) = summary.topic {
-                        lines.push(format!("Topic: {}", topic));
-                    }
-
-                    if let Some(room) = client.get_room(&summary.room_id) {
-                        use matrix_sdk::room::MessagesOptions;
-                        use matrix_sdk::ruma::events::{AnySyncTimelineEvent, AnySyncMessageLikeEvent};
-
-                        let mut options = MessagesOptions::backward();
-                        options.limit = 5u16.into();
-                        if let Ok(messages) = room.messages(options).await {
-                            let mut activity = Vec::new();
-                            for timeline_event in messages.chunk.iter().rev() {
-                                if let Ok(event) = timeline_event.raw().deserialize() {
-                                    if let AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomMessage(msg_event)) = event {
-                                        if let Some(ev) = msg_event.as_original() {
-                                            let body = handlers::messages::render_room_message(ev, &room).await;
-                                            activity.push(format!("{}: {}", ev.sender, body));
-                                        }
-                                    }
-                                }
-                            }
-                            if !activity.is_empty() {
-                                lines.push("<b>Recent Activity</b>:".to_string());
-                                lines.extend(activity);
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    lines.push(format!("Failed to fetch room summary: {:?}", e));
-                }
-            }
-
-            send_preview_system_message(output_room_id_opt.as_deref(), &room_id_or_alias_str, &lines.join("<br/>"));
-        });
-    });
-}
-
-fn send_preview_system_message(output_room_id: Option<&str>, preview_target: &str, body: &str) {
-    let c_target = CString::new(preview_target).unwrap_or_default();
-    let c_sender = CString::new("System").unwrap_or_default();
-    let c_body = CString::new(body.replace('\0', "")).unwrap_or_default();
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-
-    let preview_guard = ROOM_PREVIEW_CALLBACK.lock().unwrap();
-    if let Some(cb) = *preview_guard {
-        cb(c_target.as_ptr(), c_body.as_ptr());
-    }
-    drop(preview_guard);
-
-    let Some(room_id) = output_room_id else {
-        return;
-    };
-    let c_room_id = CString::new(room_id).unwrap_or_default();
-    let guard = MSG_CALLBACK.lock().unwrap();
-    if let Some(cb) = *guard {
-        cb(c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), timestamp);
-    }
-}
-
-#[no_mangle]
 pub extern "C" fn purple_matrix_rust_join_room(user_id: *const c_char, room_id: *const c_char) {
     if user_id.is_null() || room_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
@@ -317,15 +133,11 @@ pub extern "C" fn purple_matrix_rust_join_room(user_id: *const c_char, room_id: 
             use matrix_sdk::ruma::RoomId;
 
             // Parse ID for Thread Support: "room_id|thread_root_id"
-            let (room_id_str, thread_root_id_opt) = match id_str.split_once('|') {
+            let (room_id_str, _thread_root_id_opt) = match id_str.split_once('|') {
                 Some((r, t)) if !t.is_empty() => (r, Some(t)),
                 _ => (id_str.as_str(), None),
             };
             
-            if let Some(tid) = thread_root_id_opt {
-                log::info!("Request to join/open thread {} in room {}", tid, room_id_str);
-            }
-
             if let Ok(room_id_ruma) = <&RoomId>::try_from(room_id_str) {
                 if let Some(room) = client.get_room(room_id_ruma) {
 
@@ -441,89 +253,6 @@ pub extern "C" fn purple_matrix_rust_create_room(user_id: *const c_char, name: *
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_kick_user(account_user_id: *const c_char, room_id: *const c_char, target_user_id: *const c_char, reason: *const c_char) {
-    if account_user_id.is_null() || room_id.is_null() || target_user_id.is_null() { return; }
-    let account_user_id_str = unsafe { CStr::from_ptr(account_user_id).to_string_lossy().into_owned() };
-    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
-    let target_user_id_str = unsafe { CStr::from_ptr(target_user_id).to_string_lossy().into_owned() };
-    let reason_str = if reason.is_null() { None } else { Some(unsafe { CStr::from_ptr(reason).to_string_lossy().into_owned() }) };
-
-    with_client(&account_user_id_str.clone(), |client| {
-        
-        RUNTIME.spawn(async move {
-            use matrix_sdk::ruma::{RoomId, UserId};
-            if let (Ok(rid), Ok(uid)) = (<&RoomId>::try_from(room_id_str.as_str()), <&UserId>::try_from(target_user_id_str.as_str())) {
-                if let Some(room) = client.get_room(rid) {
-                    log::info!("Kicking {} from {}", target_user_id_str, room_id_str);
-                    if let Err(e) = room.kick_user(uid, reason_str.as_deref()).await {
-                        log::error!("Failed to kick user: {:?}", e);
-                    }
-                }
-            }
-        });
-    });
-}
-
-#[no_mangle]
-pub extern "C" fn purple_matrix_rust_ban_user(account_user_id: *const c_char, room_id: *const c_char, target_user_id: *const c_char, reason: *const c_char) {
-    if account_user_id.is_null() || room_id.is_null() || target_user_id.is_null() { return; }
-    let account_user_id_str = unsafe { CStr::from_ptr(account_user_id).to_string_lossy().into_owned() };
-    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
-    let target_user_id_str = unsafe { CStr::from_ptr(target_user_id).to_string_lossy().into_owned() };
-    let reason_str = if reason.is_null() { None } else { Some(unsafe { CStr::from_ptr(reason).to_string_lossy().into_owned() }) };
-
-    with_client(&account_user_id_str.clone(), |client| {
-        
-        RUNTIME.spawn(async move {
-            use matrix_sdk::ruma::{RoomId, UserId};
-            if let (Ok(rid), Ok(uid)) = (<&RoomId>::try_from(room_id_str.as_str()), <&UserId>::try_from(target_user_id_str.as_str())) {
-                if let Some(room) = client.get_room(rid) {
-                    log::info!("Banning {} from {}", target_user_id_str, room_id_str);
-                    if let Err(e) = room.ban_user(uid, reason_str.as_deref()).await {
-                        log::error!("Failed to ban user: {:?}", e);
-                    }
-                }
-            }
-        });
-    });
-}
-
-#[no_mangle]
-pub extern "C" fn purple_matrix_rust_set_room_tag(user_id: *const c_char, room_id: *const c_char, tag: *const c_char) {
-    if user_id.is_null() || room_id.is_null() || tag.is_null() { return; }
-    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
-    let tag_str = unsafe { CStr::from_ptr(tag).to_string_lossy().into_owned() };
-
-    with_client(&user_id_str.clone(), |client| {
-        
-        RUNTIME.spawn(async move {
-            use matrix_sdk::ruma::RoomId;
-            use matrix_sdk::ruma::events::tag::TagName;
-
-            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
-                if let Some(room) = client.get_room(rid) {
-                     let tag_name_opt = match tag_str.as_str() {
-                         "Favourite" => Some(TagName::Favorite),
-                         "LowPriority" => Some(TagName::LowPriority),
-                         "ServerNotice" => Some(TagName::ServerNotice),
-                         s => Some(s.into()),
-                     };
-
-                     if let Some(tag_name) = tag_name_opt {
-                         log::info!("Setting tag {:?} for room {}", tag_name, room_id_str);
-                         // Add tag
-                         if let Err(e) = room.set_tag(tag_name, matrix_sdk::ruma::events::tag::TagInfo::default()).await {
-                             log::error!("Failed to set tag: {:?}", e);
-                         }
-                     }
-                }
-            }
-        });
-    });
-}
-
-#[no_mangle]
 pub extern "C" fn purple_matrix_rust_get_power_levels(user_id: *const c_char, room_id: *const c_char) {
     if user_id.is_null() || room_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
@@ -568,83 +297,6 @@ pub extern "C" fn purple_matrix_rust_get_power_levels(user_id: *const c_char, ro
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_set_room_permission(user_id: *const c_char, room_id: *const c_char, event_type: *const c_char, level: i32) {
-    if user_id.is_null() || room_id.is_null() || event_type.is_null() { return; }
-    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
-    let ev_type_str = unsafe { CStr::from_ptr(event_type).to_string_lossy().into_owned() };
-
-    with_client(&user_id_str.clone(), |client| {
-        RUNTIME.spawn(async move {
-            use matrix_sdk::ruma::{RoomId, Int};
-            use matrix_sdk::ruma::events::StateEventType;
-            
-            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
-                if let Some(_room) = client.get_room(rid) {
-                    if let Ok(_level_int) = Int::try_from(level as i64) {
-                        let ev_type = match ev_type_str.as_str() {
-                            "ban" | "kick" | "redact" | "invite" => {
-                                crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, "Use /matrix_set_power_level for ban/kick/redact/invite defaults for now.");
-                                return;
-                            },
-                            s => StateEventType::from(s),
-                        };
-                        crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &format!("Setting permission for {} to {} (WIP)", ev_type, level));
-                    }
-                }
-            }
-        });
-    });
-}
-
-#[no_mangle]
-pub extern "C" fn purple_matrix_rust_set_power_level(user_id: *const c_char, room_id: *const c_char, target_user: *const c_char, level: i64) {
-    if user_id.is_null() || room_id.is_null() || target_user.is_null() { return; }
-    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
-    let target_user_str = unsafe { CStr::from_ptr(target_user).to_string_lossy().into_owned() };
-
-    with_client(&user_id_str.clone(), |client| {
-        RUNTIME.spawn(async move {
-            use matrix_sdk::ruma::{RoomId, UserId};
-             if let (Ok(rid), Ok(uid)) = (<&RoomId>::try_from(room_id_str.as_str()), <&UserId>::try_from(target_user_str.as_str())) {
-                if let Some(room) = client.get_room(rid) {
-                   use matrix_sdk::ruma::Int;
-                    if let Ok(level_int) =  Int::try_from(level) {
-                       if let Err(e) = room.update_power_levels(vec![(&uid, level_int)]).await {
-                            log::error!("Failed to update power level: {:?}", e);
-                       } else {
-                            log::info!("Updated power level for {} to {}", target_user_str, level);
-                       }
-                   }
-                }
-             }
-        });
-    });
-}
-
-#[no_mangle]
-pub extern "C" fn purple_matrix_rust_set_room_name(user_id: *const c_char, room_id: *const c_char, name: *const c_char) {
-    if user_id.is_null() || room_id.is_null() || name.is_null() { return; }
-    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
-    let name_str = unsafe { CStr::from_ptr(name).to_string_lossy().into_owned() };
-
-    with_client(&user_id_str.clone(), |client| {
-        RUNTIME.spawn(async move {
-            use matrix_sdk::ruma::RoomId;
-            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
-                if let Some(room) = client.get_room(rid) {
-                    if let Err(e) = room.set_name(name_str).await {
-                        log::error!("Failed to set room name: {:?}", e);
-                    }
-                }
-            }
-        });
-    });
-}
-
-#[no_mangle]
 pub extern "C" fn purple_matrix_rust_set_room_topic(user_id: *const c_char, room_id: *const c_char, topic: *const c_char) {
     if user_id.is_null() || room_id.is_null() || topic.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
@@ -661,28 +313,6 @@ pub extern "C" fn purple_matrix_rust_set_room_topic(user_id: *const c_char, room
                     }
                 }
             }
-        });
-    });
-}
-
-#[no_mangle]
-pub extern "C" fn purple_matrix_rust_report_content(user_id: *const c_char, room_id: *const c_char, event_id: *const c_char, reason: *const c_char) {
-    if user_id.is_null() || room_id.is_null() || event_id.is_null() { return; }
-    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
-    let event_id_str = unsafe { CStr::from_ptr(event_id).to_string_lossy().into_owned() };
-    let reason_str = if reason.is_null() { None } else { Some(unsafe { CStr::from_ptr(reason).to_string_lossy().into_owned() }) };
-
-    with_client(&user_id_str.clone(), |client| {
-        RUNTIME.spawn(async move {
-             use matrix_sdk::ruma::{RoomId, EventId};
-             if let (Ok(rid), Ok(eid)) = (<&RoomId>::try_from(room_id_str.as_str()), <&EventId>::try_from(event_id_str.as_str())) {
-                 if let Some(room) = client.get_room(rid) {
-                    if let Err(e) = room.report_content(eid.to_owned(), None, reason_str).await {
-                        log::error!("Failed to report content: {:?}", e);
-                    }
-                 }
-             }
         });
     });
 }
@@ -712,55 +342,6 @@ pub extern "C" fn purple_matrix_rust_set_room_mute_state(user_id: *const c_char,
                      log::error!("Failed to set room notification mode: {:?}", e);
                 }
             }
-        });
-    });
-}
-
-#[no_mangle]
-pub extern "C" fn purple_matrix_rust_knock(user_id: *const c_char, room_id_or_alias: *const c_char, reason: *const c_char) {
-    if user_id.is_null() || room_id_or_alias.is_null() { return; }
-    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    let id_or_alias = unsafe { CStr::from_ptr(room_id_or_alias).to_string_lossy().into_owned() };
-    let reason_str = if reason.is_null() { None } else { Some(unsafe { CStr::from_ptr(reason).to_string_lossy().into_owned() }) };
-
-    with_client(&user_id_str.clone(), |client| {
-        
-        RUNTIME.spawn(async move {
-            use matrix_sdk::ruma::{RoomId, RoomAliasId};
-
-            if let Ok(rid) = <&RoomId>::try_from(id_or_alias.as_str()) {
-                if let Err(e) = client.knock(rid.to_owned().into(), reason_str, vec![]).await {
-                    log::error!("Failed to knock on room: {:?}", e);
-                }
-            } else if let Ok(alias) = <&RoomAliasId>::try_from(id_or_alias.as_str()) {
-                 if let Err(e) = client.knock(alias.to_owned().into(), reason_str, vec![]).await {
-                    log::error!("Failed to knock on room: {:?}", e);
-                }
-            }
-        });
-    });
-}
-
-#[no_mangle]
-pub extern "C" fn purple_matrix_rust_unban_user(account_user_id: *const c_char, room_id: *const c_char, target_user_id: *const c_char, reason: *const c_char) {
-    if account_user_id.is_null() || room_id.is_null() || target_user_id.is_null() { return; }
-    let user_id_str = unsafe { CStr::from_ptr(account_user_id).to_string_lossy().into_owned() };
-    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
-    let target_str = unsafe { CStr::from_ptr(target_user_id).to_string_lossy().into_owned() };
-    let reason_str = if reason.is_null() { None } else { Some(unsafe { CStr::from_ptr(reason).to_string_lossy().into_owned() }) };
-
-    with_client(&user_id_str.clone(), |client| {
-        
-        RUNTIME.spawn(async move {
-             use matrix_sdk::ruma::{RoomId, UserId};
-             
-             if let (Ok(rid), Ok(uid)) = (<&RoomId>::try_from(room_id_str.as_str()), <&UserId>::try_from(target_str.as_str())) {
-                 if let Some(room) = client.get_room(rid) {
-                    if let Err(e) = room.unban_user(uid, reason_str.as_deref()).await {
-                        log::error!("Failed to unban user: {:?}", e);
-                    }
-                 }
-             }
         });
     });
 }
@@ -810,36 +391,6 @@ pub extern "C" fn purple_matrix_rust_who_read(user_id: *const c_char, room_id: *
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_upgrade_room(user_id: *const c_char, room_id: *const c_char, new_version: *const c_char) {
-    if user_id.is_null() || room_id.is_null() || new_version.is_null() { return; }
-    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
-    let version_str = unsafe { CStr::from_ptr(new_version).to_string_lossy().into_owned() };
-
-    with_client(&user_id_str.clone(), |client| {
-        RUNTIME.spawn(async move {
-            use matrix_sdk::ruma::RoomId;
-            use matrix_sdk::ruma::RoomVersionId;
-            
-            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
-                if let Some(_room) = client.get_room(rid) {
-                    let _version = match RoomVersionId::try_from(version_str.as_str()) {
-                        Ok(v) => v,
-                        Err(_) => {
-                            crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, "Invalid room version format.");
-                            return;
-                        }
-                    };
-                    log::info!("Upgrading room {} to version {}", room_id_str, version_str);
-                    
-                    crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, "Room upgrade API not directly found in this SDK version. Use a full client for upgrades.");
-                }
-            }
-        });
-    });
-}
-
-#[no_mangle]
 pub extern "C" fn purple_matrix_rust_get_server_info(user_id: *const c_char) {
     if user_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
@@ -863,48 +414,118 @@ pub extern "C" fn purple_matrix_rust_get_server_info(user_id: *const c_char) {
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_get_supported_versions(user_id: *const c_char) {
-    if user_id.is_null() { return; }
+pub extern "C" fn purple_matrix_rust_set_room_name(user_id: *const c_char, room_id: *const c_char, name: *const c_char) {
+    if user_id.is_null() || room_id.is_null() || name.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let name_str = unsafe { CStr::from_ptr(name).to_string_lossy().into_owned() };
 
     with_client(&user_id_str.clone(), |client| {
         RUNTIME.spawn(async move {
-            match client.supported_versions().await {
-                Ok(response) => {
-                    let versions: Vec<String> = response.versions.iter().map(|v| format!("{:?}", v)).collect();
-                    let msg = format!("<b>Supported Matrix Versions:</b><br/>{}", versions.join(", "));
-                    crate::ffi::send_system_message(&user_id_str, &msg);
-                },
-                Err(e) => log::error!("Failed to fetch supported versions: {:?}", e),
+            use matrix_sdk::ruma::RoomId;
+            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                if let Some(room) = client.get_room(rid) {
+                    let _ = room.set_name(name_str).await;
+                }
             }
         });
     });
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_set_room_avatar(user_id: *const c_char, room_id: *const c_char, path: *const c_char) {
-    if user_id.is_null() || room_id.is_null() || path.is_null() { return; }
+pub extern "C" fn purple_matrix_rust_kick_user(account_user_id: *const c_char, room_id: *const c_char, target_user_id: *const c_char, reason: *const c_char) {
+    if account_user_id.is_null() || room_id.is_null() || target_user_id.is_null() { return; }
+    let account_user_id_str = unsafe { CStr::from_ptr(account_user_id).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let target_user_id_str = unsafe { CStr::from_ptr(target_user_id).to_string_lossy().into_owned() };
+    let reason_str = if reason.is_null() { None } else { Some(unsafe { CStr::from_ptr(reason).to_string_lossy().into_owned() }) };
+
+    with_client(&account_user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::{RoomId, UserId};
+            if let (Ok(rid), Ok(uid)) = (<&RoomId>::try_from(room_id_str.as_str()), <&UserId>::try_from(target_user_id_str.as_str())) {
+                if let Some(room) = client.get_room(rid) {
+                    let _ = room.kick_user(uid, reason_str.as_deref()).await;
+                }
+            }
+        });
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_ban_user(account_user_id: *const c_char, room_id: *const c_char, target_user_id: *const c_char, reason: *const c_char) {
+    if account_user_id.is_null() || room_id.is_null() || target_user_id.is_null() { return; }
+    let account_user_id_str = unsafe { CStr::from_ptr(account_user_id).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let target_user_id_str = unsafe { CStr::from_ptr(target_user_id).to_string_lossy().into_owned() };
+    let reason_str = if reason.is_null() { None } else { Some(unsafe { CStr::from_ptr(reason).to_string_lossy().into_owned() }) };
+
+    with_client(&account_user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::{RoomId, UserId};
+            if let (Ok(rid), Ok(uid)) = (<&RoomId>::try_from(room_id_str.as_str()), <&UserId>::try_from(target_user_id_str.as_str())) {
+                if let Some(room) = client.get_room(rid) {
+                    let _ = room.ban_user(uid, reason_str.as_deref()).await;
+                }
+            }
+        });
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_unban_user(account_user_id: *const c_char, room_id: *const c_char, target_user_id: *const c_char, reason: *const c_char) {
+    if account_user_id.is_null() || room_id.is_null() || target_user_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(account_user_id).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let target_str = unsafe { CStr::from_ptr(target_user_id).to_string_lossy().into_owned() };
+    let reason_str = if reason.is_null() { None } else { Some(unsafe { CStr::from_ptr(reason).to_string_lossy().into_owned() }) };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+             use matrix_sdk::ruma::{RoomId, UserId};
+             if let (Ok(rid), Ok(uid)) = (<&RoomId>::try_from(room_id_str.as_str()), <&UserId>::try_from(target_str.as_str())) {
+                 if let Some(room) = client.get_room(rid) {
+                    let _ = room.unban_user(uid, reason_str.as_deref()).await;
+                 }
+             }
+        });
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_upgrade_room(user_id: *const c_char, room_id: *const c_char, new_version: *const c_char) {
+    if user_id.is_null() || room_id.is_null() || new_version.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
     let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
-    let path_str = unsafe { CStr::from_ptr(path).to_string_lossy().into_owned() };
-    
+    let version_str = unsafe { CStr::from_ptr(new_version).to_string_lossy().into_owned() };
+
     with_client(&user_id_str.clone(), |client| {
         RUNTIME.spawn(async move {
             use matrix_sdk::ruma::RoomId;
-            let path_buf = std::path::PathBuf::from(&path_str);
-            if !path_buf.exists() { return; }
-            
             if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
-                 if let Some(room) = client.get_room(rid) {
-                      let mime = mime_guess::from_path(&path_buf).first_or_octet_stream();
-                      if let Ok(data) = std::fs::read(&path_buf) {
-                          if let Ok(response) = client.media().upload(&mime, data, None).await {
-                               if let Err(e) = room.set_avatar_url(&response.content_uri, None).await {
-                                   log::error!("Failed to set room avatar: {:?}", e);
-                               }
-                          }
-                      }
-                 }
+                if let Some(_room) = client.get_room(rid) {
+                    log::info!("Upgrading room {} to version {}", room_id_str, version_str);
+                    crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, "Room upgrade API not directly found in this SDK version. Use a full client for upgrades.");
+                }
+            }
+        });
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_knock(user_id: *const c_char, room_id_or_alias: *const c_char, reason: *const c_char) {
+    if user_id.is_null() || room_id_or_alias.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let id_or_alias = unsafe { CStr::from_ptr(room_id_or_alias).to_string_lossy().into_owned() };
+    let reason_str = if reason.is_null() { None } else { Some(unsafe { CStr::from_ptr(reason).to_string_lossy().into_owned() }) };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::{RoomId, RoomAliasId};
+            if let Ok(rid) = <&RoomId>::try_from(id_or_alias.as_str()) {
+                let _ = client.knock(rid.to_owned().into(), reason_str, vec![]).await;
+            } else if let Ok(alias) = <&RoomAliasId>::try_from(id_or_alias.as_str()) {
+                 let _ = client.knock(alias.to_owned().into(), reason_str, vec![]).await;
             }
         });
     });
@@ -921,7 +542,6 @@ pub extern "C" fn purple_matrix_rust_set_room_join_rule(user_id: *const c_char, 
         RUNTIME.spawn(async move {
             use matrix_sdk::ruma::RoomId;
             use matrix_sdk::ruma::events::room::join_rules::{JoinRule, RoomJoinRulesEventContent};
-            
             if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
                 if let Some(room) = client.get_room(rid) {
                     let rule = match rule_str.as_str() {
@@ -929,17 +549,10 @@ pub extern "C" fn purple_matrix_rust_set_room_join_rule(user_id: *const c_char, 
                         "invite" => JoinRule::Invite,
                         "knock" => JoinRule::Knock,
                         "restricted" => JoinRule::Restricted(Default::default()),
-                        _ => {
-                            crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, "Invalid join rule. Use: public, invite, knock, restricted");
-                            return;
-                        }
+                        _ => return,
                     };
                     let content = RoomJoinRulesEventContent::new(rule);
-                    if let Err(e) = room.send_state_event(content).await {
-                        crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &format!("Failed to set join rule: {:?}", e));
-                    } else {
-                        crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &format!("Join rule set to {}", rule_str));
-                    }
+                    let _ = room.send_state_event(content).await;
                 }
             }
         });
@@ -956,16 +569,11 @@ pub extern "C" fn purple_matrix_rust_set_room_guest_access(user_id: *const c_cha
         RUNTIME.spawn(async move {
             use matrix_sdk::ruma::RoomId;
             use matrix_sdk::ruma::events::room::guest_access::{GuestAccess, RoomGuestAccessEventContent};
-            
             if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
                 if let Some(room) = client.get_room(rid) {
                     let access = if allow { GuestAccess::CanJoin } else { GuestAccess::Forbidden };
                     let content = RoomGuestAccessEventContent::new(access);
-                    if let Err(e) = room.send_state_event(content).await {
-                        crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &format!("Failed to set guest access: {:?}", e));
-                    } else {
-                        crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &format!("Guest access set to {}", if allow { "allowed" } else { "forbidden" }));
-                    }
+                    let _ = room.send_state_event(content).await;
                 }
             }
         });
@@ -983,7 +591,6 @@ pub extern "C" fn purple_matrix_rust_set_room_history_visibility(user_id: *const
         RUNTIME.spawn(async move {
             use matrix_sdk::ruma::RoomId;
             use matrix_sdk::ruma::events::room::history_visibility::{HistoryVisibility, RoomHistoryVisibilityEventContent};
-            
             if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
                 if let Some(room) = client.get_room(rid) {
                     let vis = match vis_str.as_str() {
@@ -991,18 +598,56 @@ pub extern "C" fn purple_matrix_rust_set_room_history_visibility(user_id: *const
                         "shared" => HistoryVisibility::Shared,
                         "invited" => HistoryVisibility::Invited,
                         "joined" => HistoryVisibility::Joined,
-                        _ => {
-                            crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, "Invalid visibility. Use: world_readable, shared, invited, joined");
-                            return;
-                        }
+                        _ => return,
                     };
                     let content = RoomHistoryVisibilityEventContent::new(vis);
-                    if let Err(e) = room.send_state_event(content).await {
-                        crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &format!("Failed to set history visibility: {:?}", e));
-                    } else {
-                        crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &format!("History visibility set to {}", vis_str));
-                    }
+                    let _ = room.send_state_event(content).await;
                 }
+            }
+        });
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_room_avatar(user_id: *const c_char, room_id: *const c_char, path: *const c_char) {
+    if user_id.is_null() || room_id.is_null() || path.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let path_str = unsafe { CStr::from_ptr(path).to_string_lossy().into_owned() };
+    
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::RoomId;
+            let path_buf = std::path::PathBuf::from(&path_str);
+            if !path_buf.exists() { return; }
+            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                 if let Some(room) = client.get_room(rid) {
+                      let mime = mime_guess::from_path(&path_buf).first_or_octet_stream();
+                      if let Ok(data) = std::fs::read(&path_buf) {
+                          if let Ok(response) = client.media().upload(&mime, data, None).await {
+                               let _ = room.set_avatar_url(&response.content_uri, None).await;
+                          }
+                      }
+                 }
+            }
+        });
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_get_supported_versions(user_id: *const c_char) {
+    if user_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            match client.supported_versions().await {
+                Ok(response) => {
+                    let versions: Vec<String> = response.versions.iter().map(|v| format!("{:?}", v)).collect();
+                    let msg = format!("<b>Supported Matrix Versions:</b><br/>{}", versions.join(", "));
+                    crate::ffi::send_system_message(&user_id_str, &msg);
+                },
+                Err(e) => log::error!("Failed to fetch supported versions: {:?}", e),
             }
         });
     });

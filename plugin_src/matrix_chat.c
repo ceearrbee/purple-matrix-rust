@@ -182,6 +182,13 @@ void msg_callback(const char *sender, const char *msg, const char *room_id, cons
 
 static gboolean process_typing_cb(gpointer data) {
   MatrixTypingData *d = (MatrixTypingData *)data;
+  PurpleAccount *account = find_matrix_account();
+  if (account) {
+    PurpleConnection *gc = purple_account_get_connection(account);
+    if (gc) {
+      serv_got_typing(gc, d->user_id, 0, d->is_typing ? PURPLE_TYPING : PURPLE_NOT_TYPING);
+    }
+  }
   g_free(d->room_id); g_free(d->user_id); g_free(d);
   return FALSE;
 }
@@ -258,7 +265,12 @@ void matrix_chat_invite(PurpleConnection *gc, int id, const char *message, const
   if (conv) purple_matrix_rust_invite_user(purple_account_get_username(purple_connection_get_account(gc)), purple_conversation_get_name(conv), name);
 }
 
-void matrix_chat_leave(PurpleConnection *gc, int id) { }
+void matrix_chat_leave(PurpleConnection *gc, int id) {
+  PurpleConversation *conv = purple_find_chat(gc, id);
+  if (conv) {
+    purple_matrix_rust_leave_room(purple_account_get_username(purple_connection_get_account(gc)), purple_conversation_get_name(conv));
+  }
+}
 void matrix_chat_whisper(PurpleConnection *gc, int id, const char *who, const char *message) { }
 int matrix_chat_send(PurpleConnection *gc, int id, const char *message, PurpleMessageFlags flags) { return matrix_send_chat(gc, id, message, flags); }
 

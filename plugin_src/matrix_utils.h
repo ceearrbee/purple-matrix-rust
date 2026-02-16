@@ -8,6 +8,7 @@
 
 int get_chat_id(const char *room_id);
 gboolean is_virtual_room_id(const char *room_id);
+char *dup_base_room_id(const char *room_id);
 char *derive_base_group_from_threads_group(const char *group_name);
 char *sanitize_markup_text(const char *input);
 void matrix_request_field_set_help_string(PurpleRequestField *field, const char *hint);

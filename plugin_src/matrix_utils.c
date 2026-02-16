@@ -24,6 +24,13 @@ gboolean is_virtual_room_id(const char *room_id) {
   return room_id && strchr(room_id, '|') != NULL;
 }
 
+char *dup_base_room_id(const char *room_id) {
+  if (!room_id) return NULL;
+  const char *sep = strchr(room_id, '|');
+  if (!sep) return g_strdup(room_id);
+  return g_strndup(room_id, (gsize)(sep - room_id));
+}
+
 char *derive_base_group_from_threads_group(const char *group_name) {
   if (!group_name || !*group_name) return g_strdup("Matrix Rooms");
   const char *threads = strstr(group_name, " / Threads");
@@ -65,6 +72,26 @@ char *matrix_get_chat_name(GHashTable *components) {
   if (!components) return NULL;
   const char *room_id = g_hash_table_lookup(components, "room_id");
   return room_id ? g_strdup(room_id) : NULL;
+}
+
+void thread_list_cb(const char *room_id, const char *thread_root_id, const char *latest_msg, guint64 count, guint64 ts) {
+  PurpleAccount *account = find_matrix_account();
+  PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_CHAT, room_id, account);
+  if (conv) {
+    char *msg = g_strdup_printf("Thread Found: root_id=%s, count=%" G_GUINT64_FORMAT ", latest=\"%s\"", thread_root_id, count, latest_msg);
+    purple_conversation_write(conv, "Matrix", msg, PURPLE_MESSAGE_SYSTEM, (time_t)ts);
+    g_free(msg);
+  }
+}
+
+void poll_list_cb(const char *room_id, const char *event_id, const char *sender, const char *question, const char *options_str) {
+  PurpleAccount *account = find_matrix_account();
+  PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_CHAT, room_id, account);
+  if (conv) {
+    char *msg = g_strdup_printf("Active Poll: %s (by %s)\nOptions: %s", question, sender, options_str);
+    purple_conversation_write(conv, "Matrix", msg, PURPLE_MESSAGE_SYSTEM, time(NULL));
+    g_free(msg);
+  }
 }
 
 guint32 get_history_page_size(PurpleAccount *account) {

@@ -15,7 +15,6 @@ pub extern "C" fn purple_matrix_rust_create_alias(user_id: *const c_char, room_i
             
             if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
                 // Construct full alias. Needs server name.
-                // Client `user_id` has server name.
                 if let Some(uid) = client.user_id() {
                      let server = uid.server_name();
                      let full_alias = format!("#{}:{}", alias_localpart_str, server);

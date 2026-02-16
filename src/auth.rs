@@ -69,18 +69,44 @@ fn generate_sso_state() -> String {
 
 #[no_mangle]
 async fn finish_sso_internal(client: Client, token: String) {
+    // 1. Check session
+    if client.session().is_some() {
+        log::info!("Client already has a session, ignoring SSO completion.");
+        set_sso_in_progress(false);
+        return;
+    }
+
+    // 2. Extra guard to prevent race conditions between automatic and manual token submission
+    static FINISHING_SSO: Mutex<bool> = Mutex::new(false);
+    {
+        let mut guard = FINISHING_SSO.lock().unwrap();
+        if *guard {
+            log::warn!("SSO finalization already in progress, ignoring duplicate call.");
+            return;
+        }
+        *guard = true;
+    }
+
     log::info!("Finishing SSO login with token...");
     match client.matrix_auth().login_token(&token).initial_device_display_name("Pidgin (Rust)").await {
         Ok(_) => {
             log::info!("SSO Login Successful! Persisting session...");
             set_sso_in_progress(false);
+            {
+                let mut guard = FINISHING_SSO.lock().unwrap();
+                *guard = false;
+            }
             finish_login_success(client).await;
         },
         Err(e) => {
+            {
+                let mut guard = FINISHING_SSO.lock().unwrap();
+                *guard = false;
+            }
             let err_msg = format!("SSO Login Failed: {:?}", e);
             log::error!("{}", err_msg);
             
-            if err_msg.contains("Mismatched") || err_msg.contains("Session") {
+            if (err_msg.contains("Mismatched") || err_msg.contains("Session")) && !err_msg.contains("Invalid login token") {
                 log::warn!("SSO mismatch detected. Wiping data and restarting SSO flow...");
                 
                 // 1. Preserve config
@@ -88,7 +114,6 @@ async fn finish_sso_internal(client: Client, token: String) {
                 
                 // 2. Drop Client - Implicitly dropped as we overwrite `client` or just ensure we don't use it.
                 // We need to drop the client instance to release DB lock if it holds it.
-                // `client` logic in `perform_login` retry handled this.
                 drop(client); 
                 
                 // 3. Wipe Data
@@ -131,6 +156,7 @@ async fn finish_sso_internal(client: Client, token: String) {
         }
     }
 }
+
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_login(
     username: *const c_char,
@@ -293,8 +319,15 @@ async fn perform_login(username: String, password: String, homeserver: String, d
 
     log::info!("Client built successfully. Homeserver: {}", client.homeserver());
 
-    // 2. Check existing session
-    // Attempt to load from secure storage
+    // 2. Priority Logic:
+    // Case A: User provided a password -> ALWAYS try fresh login.
+    if !password.is_empty() {
+        log::info!("Password provided for {}, attempting fresh login...", username);
+        proceed_with_login(client, username, password).await;
+        return;
+    }
+
+    // Case B: No password provided -> Try restoring saved session.
     {
          let session_path = data_path.join("session.json");
          if let Some(json) = load_session_json_secure(&session_path, &username) {
@@ -322,7 +355,6 @@ async fn perform_login(username: String, password: String, homeserver: String, d
                                
                                if let Err(e) = client.matrix_auth().restore_session(session, load_settings).await {
                                    log::error!("Failed to restore session: {:?}", e);
-                                   // Don't delete metadata yet, maybe it was a transient error.
                                } else {
                                    log::info!("Session successfully restored!");
                                    finish_login_success(client).await;
@@ -334,35 +366,15 @@ async fn perform_login(username: String, password: String, homeserver: String, d
          }
     }
 
+    // Case C: No password and no/broken saved session -> Try SSO.
     if let Some(user) = client.user_id() {
-         log::info!("Restored existing session for {}", user);
+         log::info!("Already logged in as {}", user);
          finish_login_success(client).await;
          return;
     }
 
-    log::warn!("No existing session found (user_id is None). Wiping potentially stale data to prevent MismatchedAccount errors...");
-    if data_path.exists() {
-         safe_wipe_data_dir(&data_path);
-         let _ = std::fs::create_dir_all(&data_path);
-         
-         // Re-build client after wipe to ensure fresh state
-         let client = match build_client(&homeserver, &data_path).await {
-             Ok(c) => c,
-             Err(e) => {
-                 report_login_failure(format!("Failed to rebuild client after safety wipe: {:?}", e));
-                 return;
-             }
-         };
-         
-         {
-              let mut clients = crate::CLIENTS.lock().unwrap();
-              clients.insert(username.clone(), client.clone());
-         }
-         
-         proceed_with_login(client, username, password).await;
-    } else {
-         proceed_with_login(client, username, password).await;
-    }
+    log::warn!("No password and no valid saved session found. Transitioning to SSO...");
+    start_sso_flow(client);
 }
 
 async fn proceed_with_login(client: Client, username: String, password: String) {
@@ -670,4 +682,3 @@ pub extern "C" fn purple_matrix_rust_destroy_session(user_id: *const c_char) {
         });
     }
 }
-// End of file anchor
