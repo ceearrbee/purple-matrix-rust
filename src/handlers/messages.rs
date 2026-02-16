@@ -71,6 +71,9 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
              }
         }
 
+        let mut thread_root_id: Option<String> = None;
+        let body = render_room_message(&ev, &room).await;
+
         // Check for Thread Relation
         if let Some(Relation::Thread(ref thread)) = ev.content.relates_to {
             thread_root_id = Some(thread.event_id.to_string());
@@ -113,7 +116,8 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
         let c_event_id = CString::new(ev.event_id.as_str()).unwrap_or_default();
         
         let c_thread_id = if let Some(ref tid) = thread_root_id {
-            CString::new(tid.as_str()).unwrap_or_default()
+            let tid_str: &str = tid.as_str();
+            CString::new(tid_str).unwrap_or_default()
         } else {
             CString::new("").unwrap_or_default()
         };

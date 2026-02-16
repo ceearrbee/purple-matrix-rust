@@ -108,4 +108,10 @@ extern void purple_matrix_rust_get_user_info(const char *user_id, const char *ta
 extern void purple_matrix_rust_get_my_profile(const char *user_id);
 extern void purple_matrix_rust_set_status(const char *user_id, int status, const char *msg);
 
+extern void purple_matrix_rust_search_messages(const char *user_id, const char *room_id, const char *term);
+extern void purple_matrix_rust_set_search_callback(void (*cb)(const char *room_id, const char *sender, const char *message, const char *timestamp_str));
+
+// UI integration FFI
+extern void purple_matrix_rust_ui_show_dashboard(const char *room_id);
+
 #endif // MATRIX_FFI_WRAPPERS_H

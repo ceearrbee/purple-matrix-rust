@@ -141,7 +141,7 @@ static void dash_list_threads_cb(char *room_id) { purple_matrix_rust_list_thread
 static void dash_e2ee_cb(char *room_id) { purple_matrix_rust_e2ee_status(purple_account_get_username(find_matrix_account()), room_id); g_free(room_id); }
 static void dash_unread_cb(char *room_id) { purple_matrix_rust_mark_unread(purple_account_get_username(find_matrix_account()), room_id, TRUE); g_free(room_id); }
 
-static void open_room_dashboard(PurpleAccount *account, const char *room_id) {
+void open_room_dashboard(PurpleAccount *account, const char *room_id) {
   if (!room_id) return;
   purple_request_action(account, "Room Dashboard", "Matrix Room Actions", "Manage room settings and interactions.", 0, account, NULL, NULL, g_strdup(room_id), 10,
     "Reply to Last", dash_reply_cb,

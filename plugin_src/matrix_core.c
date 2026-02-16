@@ -80,6 +80,21 @@ static void conversation_displayed_cb(PurpleConversation *conv) {
 static void conversation_created_cb(PurpleConversation *conv) {
   PurpleAccount *account = purple_conversation_get_account(conv);
   if (strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
+    /* Inject Welcome Banner */
+    char *banner = g_strdup_printf(
+      "<div style=\"background-color: #e1eaf2; border: 1px solid #a3b8cc; padding: 8px; margin: 5px; font-family: sans-serif;\">"
+      "<b>Welcome to this Matrix Room!</b><br/>"
+      "<span style=\"font-size: smaller;\">Matrix supports advanced features like threads and polls.</span><br/>"
+      "<ul style=\"font-size: smaller; margin-top: 5px;\">"
+      "<li>Use <b>/thread &lt;msg&gt;</b> to reply in a new thread.</li>"
+      "<li>Use <b>/poll</b> to create a new poll.</li>"
+      "<li>Right-click the room in your buddy list for the <b>Room Dashboard</b>.</li>"
+      "</ul>"
+      "</div>"
+    );
+    purple_conversation_write(conv, "Matrix", banner, PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_NO_LOG, time(NULL));
+    g_free(banner);
+
     if (purple_account_get_bool(account, "auto_fetch_history_on_open", TRUE)) {
       purple_matrix_rust_fetch_history(purple_account_get_username(account), purple_conversation_get_name(conv));
     }
@@ -98,8 +113,19 @@ static void connect_signals(void) {
   }
 }
 
+#include "matrix_commands.h"
+
 static void core_initialized_cb(void) {
   connect_signals();
+}
+
+static void
+handle_show_dashboard_signal(const char *room_id, gpointer user_data)
+{
+    PurpleAccount *account = find_matrix_account();
+    if (account && room_id) {
+        open_room_dashboard(account, room_id);
+    }
 }
 
 static gboolean plugin_load(PurplePlugin *plugin) {
@@ -118,8 +144,17 @@ static gboolean plugin_load(PurplePlugin *plugin) {
   purple_matrix_rust_set_room_preview_callback(room_preview_cb);
   purple_matrix_rust_set_thread_list_callback(thread_list_cb);
   purple_matrix_rust_set_poll_list_callback(poll_list_cb);
+  purple_matrix_rust_set_search_callback(search_result_cb);
   matrix_init_sso_callbacks();
   register_matrix_commands(plugin);
+
+  /* Signal for UI plugin communication */
+  purple_signal_register(plugin, "matrix-ui-action::show-dashboard",
+                         purple_marshal_VOID__POINTER,
+                         NULL, 1, purple_value_new(PURPLE_TYPE_STRING));
+
+  purple_signal_connect(plugin, "matrix-ui-action::show-dashboard",
+                        plugin, PURPLE_CALLBACK(handle_show_dashboard_signal), NULL);
 
   // If core is already initialized (usual case for manual plugin load), connect now.
   // Otherwise wait for the signal.

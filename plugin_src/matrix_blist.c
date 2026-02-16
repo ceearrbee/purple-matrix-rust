@@ -64,7 +64,14 @@ void cleanup_stale_thread_labels(PurpleAccount *account) {
 static gboolean process_room_cb(gpointer data) {
   MatrixRoomData *d = (MatrixRoomData *)data;
   PurpleAccount *account = find_matrix_account();
+  
+  purple_debug_info("matrix", "process_room_cb: room_id=%s, name=%s, account=%p\n", 
+                    d->room_id ? d->room_id : "NULL", 
+                    d->name ? d->name : "NULL", 
+                    account);
+
   if (d->room_id && strchr(d->room_id, '|')) {
+    purple_debug_info("matrix", "Ignoring virtual room in process_room_cb\n");
     g_free(d->room_id);
     g_free(d->name);
     g_free(d->group_name);
@@ -82,9 +89,14 @@ static gboolean process_room_cb(gpointer data) {
   }
   if (account) {
     PurpleGroup *group = purple_find_group(target_group_name);
-    if (!group) { group = purple_group_new(target_group_name); purple_blist_add_group(group, NULL); }
+    if (!group) { 
+      purple_debug_info("matrix", "Creating group: %s\n", target_group_name);
+      group = purple_group_new(target_group_name); 
+      purple_blist_add_group(group, NULL); 
+    }
     PurpleChat *chat = find_chat_manual(account, d->room_id);
     if (!chat) {
+      purple_debug_info("matrix", "Adding new chat: %s\n", d->room_id);
       GHashTable *components = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
       g_hash_table_insert(components, g_strdup("room_id"), g_strdup(d->room_id));
       if (d->avatar_url && strlen(d->avatar_url) > 0) g_hash_table_insert(components, g_strdup("avatar_path"), g_strdup(d->avatar_url));
@@ -97,6 +109,7 @@ static gboolean process_room_cb(gpointer data) {
         purple_blist_node_set_string((PurpleBlistNode *)chat, "icon_path", d->avatar_url);
       }
     } else {
+      purple_debug_info("matrix", "Updating existing chat: %s\n", d->room_id);
       GHashTable *components = purple_chat_get_components(chat);
       if (d->avatar_url && strlen(d->avatar_url) > 0) {
         g_hash_table_replace(components, g_strdup("avatar_path"), g_strdup(d->avatar_url));
@@ -110,6 +123,8 @@ static gboolean process_room_cb(gpointer data) {
       if (!cur_grp || g_strcmp0(cur_grp, target_group_name) != 0) purple_blist_add_chat(chat, group, NULL);
     }
     if (chat && d->name && strlen(d->name) > 0) purple_blist_alias_chat(chat, d->name);
+  } else {
+    purple_debug_warning("matrix", "No account found in process_room_cb!\n");
   }
   g_free(target_group_name);
   g_free(d->room_id);
