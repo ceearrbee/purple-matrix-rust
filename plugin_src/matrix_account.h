@@ -4,16 +4,18 @@
 #include <libpurple/account.h>
 #include <libpurple/plugin.h>
 #include <libpurple/status.h>
+#include <libpurple/request.h>
 #include <glib.h>
 
 void matrix_login(PurpleAccount *account);
 void matrix_close(PurpleConnection *gc);
 void matrix_init_sso_callbacks(void);
+void manual_sso_token_action_cb(void *user_data, PurpleRequestFields *fields);
 GList *matrix_actions(PurplePlugin *plugin, gpointer context);
 
 // Callbacks
 void sso_url_cb(const char *url);
-void connected_cb(void);
+void connected_cb(const char *user_id);
 void login_failed_cb(const char *reason);
 
 // PRPL Ops

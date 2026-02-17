@@ -222,24 +222,26 @@ pub extern "C" fn purple_matrix_rust_get_user_info(account_user_id: *const c_cha
                         
                         let is_online = false; 
 
+                        let c_local_user_id = CString::new(account_user_id_str).unwrap_or_default();
                         let c_user_id = CString::new(user_id_str).unwrap_or_default();
                         let c_display_name = CString::new(display_name).unwrap_or_default();
                         let c_avatar_url = CString::new(avatar_url).unwrap_or_default();
                         
                         let guard = SHOW_USER_INFO_CALLBACK.lock().unwrap();
                         if let Some(cb) = *guard {
-                            cb(c_user_id.as_ptr(), c_display_name.as_ptr(), c_avatar_url.as_ptr(), is_online);
+                            cb(c_local_user_id.as_ptr(), c_user_id.as_ptr(), c_display_name.as_ptr(), c_avatar_url.as_ptr(), is_online);
                         }
                     },
                     Err(e) => {
                         log::error!("Failed to fetch profile for {}: {:?}", user_id_str, e);
                         // Fallback
+                        let c_local_user_id = CString::new(account_user_id_str).unwrap_or_default();
                         let c_user_id = CString::new(user_id_str.clone()).unwrap_or_default();
                         let c_display_name = CString::new(user_id_str).unwrap_or_default();
                         let c_avatar_url = CString::new("").unwrap_or_default();
                         let guard = SHOW_USER_INFO_CALLBACK.lock().unwrap();
                         if let Some(cb) = *guard {
-                            cb(c_user_id.as_ptr(), c_display_name.as_ptr(), c_avatar_url.as_ptr(), false);
+                            cb(c_local_user_id.as_ptr(), c_user_id.as_ptr(), c_display_name.as_ptr(), c_avatar_url.as_ptr(), false);
                         }
                     }
                 }

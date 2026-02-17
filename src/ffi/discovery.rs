@@ -25,11 +25,12 @@ pub extern "C" fn purple_matrix_rust_fetch_public_rooms_for_list(user_id: *const
                                let topic = chunk.topic.unwrap_or_default();
                                let members = chunk.num_joined_members;
 
-                               let c_id = CString::new(room_id).unwrap_or_default();
-                               let c_name = CString::new(name).unwrap_or_default();
-                               let c_topic = CString::new(topic).unwrap_or_default();
+                               let c_user_id = CString::new(crate::sanitize_string(&user_id_str)).unwrap_or_default();
+                               let c_id = CString::new(crate::sanitize_string(&room_id)).unwrap_or_default();
+                               let c_name = CString::new(crate::sanitize_string(&name)).unwrap_or_default();
+                               let c_topic = CString::new(crate::sanitize_string(&topic)).unwrap_or_default();
                                
-                               cb(c_name.as_ptr(), c_id.as_ptr(), c_topic.as_ptr(), members.into());
+                               cb(c_user_id.as_ptr(), c_name.as_ptr(), c_id.as_ptr(), c_topic.as_ptr(), members.into());
                           }
                       }
                  },
@@ -109,8 +110,4 @@ pub extern "C" fn purple_matrix_rust_search_users(user_id: *const c_char, search
     });
 }
 
-#[no_mangle]
-pub extern "C" fn purple_matrix_rust_set_roomlist_add_callback(cb: RoomListAddCallback) {
-    let mut guard = ROOMLIST_ADD_CALLBACK.lock().unwrap();
-    *guard = Some(cb);
-}
+

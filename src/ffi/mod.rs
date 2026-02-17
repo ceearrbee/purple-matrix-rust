@@ -13,30 +13,34 @@ use std::os::raw::c_char;
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
 
-// C-compatible callback signatures
-pub type MsgCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char, *const c_char, u64);
-pub type TypingCallback = extern "C" fn(*const c_char, *const c_char, bool);
-pub type RoomJoinedCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char, *const c_char, bool);
-pub type InviteCallback = extern "C" fn(*const c_char, *const c_char);
-pub type PresenceCallback = extern "C" fn(*const c_char, bool);
-pub type ChatTopicCallback = extern "C" fn(*const c_char, *const c_char, *const c_char);
-// room_id, user_id, add, alias, avatar_path
-pub type ChatUserCallback = extern "C" fn(*const c_char, *const c_char, bool, *const c_char, *const c_char);
+// C-compatible callback signatures (Now including user_id for context)
+pub type MsgCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char, *const c_char, *const c_char, u64);
+pub type TypingCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, bool);
+pub type RoomJoinedCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char, *const c_char, *const c_char, bool);
+pub type InviteCallback = extern "C" fn(*const c_char, *const c_char, *const c_char);
+pub type PresenceCallback = extern "C" fn(*const c_char, *const c_char, bool);
+pub type ChatTopicCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char);
+// user_id, room_id, member_id, add, alias, avatar_path
+pub type ChatUserCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, bool, *const c_char, *const c_char);
 pub type SsoCallback = extern "C" fn(*const c_char);
-pub type ConnectedCallback = extern "C" fn();
+pub type ConnectedCallback = extern "C" fn(*const c_char);
 pub type LoginFailedCallback = extern "C" fn(*const c_char);
-pub type VerificationRequestCallback = extern "C" fn(*const c_char, *const c_char);
-pub type VerificationEmojiCallback = extern "C" fn(*const c_char, *const c_char, *const c_char);
-pub type ShowVerificationQrCallback = extern "C" fn(*const c_char, *const c_char);
-pub type ReadMarkerCallback = extern "C" fn(*const c_char, *const c_char, *const c_char);
-pub type RoomPreviewCallback = extern "C" fn(*const c_char, *const c_char);
-pub type RoomLeftCallback = extern "C" fn(*const c_char);
-pub type StickerPackCallback = extern "C" fn(*const c_char, *const c_char, *mut std::ffi::c_void);
-pub type StickerCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *mut std::ffi::c_void);
+pub type VerificationRequestCallback = extern "C" fn(*const c_char, *const c_char, *const c_char);
+pub type VerificationEmojiCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char);
+pub type ShowVerificationQrCallback = extern "C" fn(*const c_char, *const c_char, *const c_char);
+pub type ReadMarkerCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char);
+pub type RoomPreviewCallback = extern "C" fn(*const c_char, *const c_char, *const c_char);
+pub type RoomLeftCallback = extern "C" fn(*const c_char, *const c_char);
+pub type RoomMuteCallback = extern "C" fn(*const c_char, *const c_char, bool);
+pub type RoomTagCallback = extern "C" fn(*const c_char, *const c_char, *const c_char);
+pub type SearchCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char, *const c_char);
+pub type StickerPackCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *mut std::ffi::c_void);
+pub type StickerCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char, *mut std::ffi::c_void);
 pub type StickerDoneCallback = extern "C" fn(*mut std::ffi::c_void);
 
 // Global callbacks
 pub static MSG_CALLBACK: Lazy<Mutex<Option<MsgCallback>>> = Lazy::new(|| Mutex::new(None));
+pub static SEARCH_CALLBACK: Lazy<Mutex<Option<SearchCallback>>> = Lazy::new(|| Mutex::new(None));
 pub static TYPING_CALLBACK: Lazy<Mutex<Option<TypingCallback>>> = Lazy::new(|| Mutex::new(None));
 pub static ROOM_JOINED_CALLBACK: Lazy<Mutex<Option<RoomJoinedCallback>>> = Lazy::new(|| Mutex::new(None));
 pub static INVITE_CALLBACK: Lazy<Mutex<Option<InviteCallback>>> = Lazy::new(|| Mutex::new(None));
@@ -52,10 +56,18 @@ pub static LOGIN_FAILED_CALLBACK: Lazy<Mutex<Option<LoginFailedCallback>>> = Laz
 pub static READ_MARKER_CALLBACK: Lazy<Mutex<Option<ReadMarkerCallback>>> = Lazy::new(|| Mutex::new(None));
 pub static ROOM_LEFT_CALLBACK: Lazy<Mutex<Option<RoomLeftCallback>>> = Lazy::new(|| Mutex::new(None));
 pub static ROOM_PREVIEW_CALLBACK: Lazy<Mutex<Option<RoomPreviewCallback>>> = Lazy::new(|| Mutex::new(None));
+pub static ROOM_MUTE_CALLBACK: Lazy<Mutex<Option<RoomMuteCallback>>> = Lazy::new(|| Mutex::new(None));
+pub static ROOM_TAG_CALLBACK: Lazy<Mutex<Option<RoomTagCallback>>> = Lazy::new(|| Mutex::new(None));
 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_set_msg_callback(cb: MsgCallback) {
     let mut guard = MSG_CALLBACK.lock().unwrap();
+    *guard = Some(cb);
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_search_callback(cb: SearchCallback) {
+    let mut guard = SEARCH_CALLBACK.lock().unwrap();
     *guard = Some(cb);
 }
 
@@ -74,6 +86,18 @@ pub extern "C" fn purple_matrix_rust_set_room_joined_callback(cb: RoomJoinedCall
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_init_invite_cb(cb: InviteCallback) {
     let mut guard = INVITE_CALLBACK.lock().unwrap();
+    *guard = Some(cb);
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_room_mute_callback(cb: RoomMuteCallback) {
+    let mut guard = ROOM_MUTE_CALLBACK.lock().unwrap();
+    *guard = Some(cb);
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_room_tag_callback(cb: RoomTagCallback) {
+    let mut guard = ROOM_TAG_CALLBACK.lock().unwrap();
     *guard = Some(cb);
 }
 
@@ -128,7 +152,7 @@ pub extern "C" fn purple_matrix_rust_set_chat_user_callback(cb: ChatUserCallback
 }
 
 // User Info Callback
-pub type ShowUserInfoCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, bool);
+pub type ShowUserInfoCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char, bool);
 pub static SHOW_USER_INFO_CALLBACK: Lazy<Mutex<Option<ShowUserInfoCallback>>> = Lazy::new(|| Mutex::new(None));
 
 #[no_mangle]
@@ -164,29 +188,48 @@ pub extern "C" fn purple_matrix_rust_set_update_buddy_callback(cb: UpdateBuddyCa
     *guard = Some(cb);
 }
 
-pub fn send_system_message(_user_id: &str, msg: &str) {
-    send_system_message_to_room(_user_id, "System", msg);
+pub fn send_system_message(user_id: &str, msg: &str) {
+    send_system_message_to_room(user_id, "System", msg);
 }
 
-pub fn send_system_message_to_room(_user_id: &str, room_id: &str, msg: &str) {
+pub fn send_system_message_to_room(user_id: &str, room_id: &str, msg: &str) {
+    let c_user_id = std::ffi::CString::new(user_id).unwrap_or_default();
     let c_sender = std::ffi::CString::new("System").unwrap_or_default();
     let c_body = std::ffi::CString::new(msg).unwrap_or_default();
     let c_room_id = std::ffi::CString::new(room_id).unwrap_or_default();
     
     let guard = MSG_CALLBACK.lock().unwrap();
     if let Some(cb) = *guard {
-         cb(c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), 0);
+         cb(c_user_id.as_ptr(), c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), 0);
     }
 }
 
 // Room List Callback
-pub type RoomListAddCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, u64);
+pub type RoomListAddCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char, u64);
 pub static ROOMLIST_ADD_CALLBACK: Lazy<Mutex<Option<RoomListAddCallback>>> = Lazy::new(|| Mutex::new(None));
 
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_roomlist_add_callback(cb: RoomListAddCallback) {
+    let mut guard = ROOMLIST_ADD_CALLBACK.lock().unwrap();
+    *guard = Some(cb);
+}
+
 // Thread List Callback
-pub type ThreadListCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, u64, u64);
+pub type ThreadListCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char, u64, u64);
 pub static THREAD_LIST_CALLBACK: Lazy<Mutex<Option<ThreadListCallback>>> = Lazy::new(|| Mutex::new(None));
 
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_thread_list_callback(cb: ThreadListCallback) {
+    let mut guard = THREAD_LIST_CALLBACK.lock().unwrap();
+    *guard = Some(cb);
+}
+
 // Poll List Callback
-pub type PollListCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char, *const c_char);
+pub type PollListCallback = extern "C" fn(*const c_char, *const c_char, *const c_char, *const c_char, *const c_char, *const c_char);
 pub static POLL_LIST_CALLBACK: Lazy<Mutex<Option<PollListCallback>>> = Lazy::new(|| Mutex::new(None));
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_poll_list_callback(cb: PollListCallback) {
+    let mut guard = POLL_LIST_CALLBACK.lock().unwrap();
+    *guard = Some(cb);
+}

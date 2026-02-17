@@ -13,23 +13,6 @@
 
 static PurpleRoomlist *active_roomlist = NULL;
 
-PurpleChat *find_chat_manual(PurpleAccount *account, const char *room_id) {
-  PurpleBlistNode *gnode, *cnode;
-  for (gnode = purple_blist_get_root(); gnode; gnode = gnode->next) {
-    if (!PURPLE_BLIST_NODE_IS_GROUP(gnode)) continue;
-    for (cnode = gnode->child; cnode; cnode = cnode->next) {
-      if (!PURPLE_BLIST_NODE_IS_CHAT(cnode)) continue;
-      PurpleChat *chat = (PurpleChat *)cnode;
-      if (purple_chat_get_account(chat) != account) continue;
-      GHashTable *components = purple_chat_get_components(chat);
-      if (!components) continue;
-      const char *id = g_hash_table_lookup(components, "room_id");
-      if (id && strcmp(id, room_id) == 0) return chat;
-    }
-  }
-  return NULL;
-}
-
 void cleanup_stale_thread_labels(PurpleAccount *account) {
   if (!account) return;
   PurpleBlistNode *gnode = NULL;
@@ -63,100 +46,156 @@ void cleanup_stale_thread_labels(PurpleAccount *account) {
 
 static gboolean process_room_cb(gpointer data) {
   MatrixRoomData *d = (MatrixRoomData *)data;
-  PurpleAccount *account = find_matrix_account();
+  PurpleAccount *account = find_matrix_account_by_id(d->user_id);
   
-  purple_debug_info("matrix", "process_room_cb: room_id=%s, name=%s, account=%p\n", 
-                    d->room_id ? d->room_id : "NULL", 
-                    d->name ? d->name : "NULL", 
-                    account);
+  if (!account || purple_account_get_connection(account) == NULL) {
+    goto cleanup;
+  }
 
   if (d->room_id && strchr(d->room_id, '|')) {
-    purple_debug_info("matrix", "Ignoring virtual room in process_room_cb\n");
-    g_free(d->room_id);
-    g_free(d->name);
-    g_free(d->group_name);
-    g_free(d->avatar_url);
-    if (d->topic)
-      g_free(d->topic);
-    g_free(d);
-    return FALSE;
+    goto cleanup;
   }
-  const char *group_name = (d->group_name && strlen(d->group_name) > 0) ? d->group_name : "Matrix Rooms";
+
+  /* Atomic safety: ensure we have something to work with */
+  if (!d->room_id) goto cleanup;
+
+  char *s_name = strip_emojis(d->name ? d->name : "");
+  char *s_topic = strip_emojis(d->topic ? d->topic : "");
+  char *s_group = strip_emojis(d->group_name ? d->group_name : "Matrix Rooms");
+
+  const char *group_name = (s_group && strlen(s_group) > 0) ? s_group : "Matrix Rooms";
   char *target_group_name = g_strdup(group_name);
+  
   if (strstr(target_group_name, " / Threads")) {
     gchar *clean_group = derive_base_group_from_threads_group(group_name);
     g_free(target_group_name); target_group_name = clean_group;
   }
-  if (account) {
-    PurpleGroup *group = purple_find_group(target_group_name);
-    if (!group) { 
-      purple_debug_info("matrix", "Creating group: %s\n", target_group_name);
-      group = purple_group_new(target_group_name); 
-      purple_blist_add_group(group, NULL); 
-    }
-    PurpleChat *chat = find_chat_manual(account, d->room_id);
-    if (!chat) {
-      purple_debug_info("matrix", "Adding new chat: %s\n", d->room_id);
-      GHashTable *components = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
-      g_hash_table_insert(components, g_strdup("room_id"), g_strdup(d->room_id));
-      if (d->avatar_url && strlen(d->avatar_url) > 0) g_hash_table_insert(components, g_strdup("avatar_path"), g_strdup(d->avatar_url));
-      if (d->topic && strlen(d->topic) > 0) g_hash_table_insert(components, g_strdup("topic"), g_strdup(d->topic));
-      g_hash_table_insert(components, g_strdup("encrypted"), g_strdup(d->encrypted ? "1" : "0"));
-      chat = purple_chat_new(account, d->room_id, components);
-      purple_blist_add_chat(chat, group, NULL);
-      if (d->avatar_url && strlen(d->avatar_url) > 0) {
-        purple_blist_node_set_string((PurpleBlistNode *)chat, "buddy_icon", d->avatar_url);
-        purple_blist_node_set_string((PurpleBlistNode *)chat, "icon_path", d->avatar_url);
-      }
-    } else {
-      purple_debug_info("matrix", "Updating existing chat: %s\n", d->room_id);
-      GHashTable *components = purple_chat_get_components(chat);
-      if (d->avatar_url && strlen(d->avatar_url) > 0) {
-        g_hash_table_replace(components, g_strdup("avatar_path"), g_strdup(d->avatar_url));
-        purple_blist_node_set_string((PurpleBlistNode *)chat, "buddy_icon", d->avatar_url);
-        purple_blist_node_set_string((PurpleBlistNode *)chat, "icon_path", d->avatar_url);
-      }
-      if (d->topic && strlen(d->topic) > 0) g_hash_table_replace(components, g_strdup("topic"), g_strdup(d->topic));
-      g_hash_table_replace(components, g_strdup("encrypted"), g_strdup(d->encrypted ? "1" : "0"));
-      PurpleBlistNode *parent = PURPLE_BLIST_NODE(chat)->parent;
-      const char *cur_grp = (parent && PURPLE_BLIST_NODE_IS_GROUP(parent)) ? purple_group_get_name((PurpleGroup *)parent) : NULL;
-      if (!cur_grp || g_strcmp0(cur_grp, target_group_name) != 0) purple_blist_add_chat(chat, group, NULL);
-    }
-    if (chat && d->name && strlen(d->name) > 0) purple_blist_alias_chat(chat, d->name);
-  } else {
-    purple_debug_warning("matrix", "No account found in process_room_cb!\n");
+
+  PurpleGroup *group = purple_find_group(target_group_name);
+  if (!group) { 
+    group = purple_group_new(target_group_name); 
+    purple_blist_add_group(group, NULL); 
   }
+
+  PurpleChat *chat = purple_blist_find_chat(account, d->room_id);
+  if (!chat) {
+    GHashTable *components = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+    g_hash_table_insert(components, g_strdup("room_id"), g_strdup(d->room_id));
+    if (d->avatar_url && strlen(d->avatar_url) > 0) g_hash_table_insert(components, g_strdup("avatar_path"), g_strdup(d->avatar_url));
+    if (s_topic && strlen(s_topic) > 0) g_hash_table_insert(components, g_strdup("topic"), g_strdup(s_topic));
+    g_hash_table_insert(components, g_strdup("encrypted"), g_strdup(d->encrypted ? "1" : "0"));
+    
+    chat = purple_chat_new(account, d->room_id, components);
+    purple_blist_add_chat(chat, group, NULL);
+    
+    if (d->avatar_url && strlen(d->avatar_url) > 0) {
+      purple_blist_node_set_string((PurpleBlistNode *)chat, "buddy_icon", d->avatar_url);
+      purple_blist_node_set_string((PurpleBlistNode *)chat, "icon_path", d->avatar_url);
+    }
+    if (s_name && strlen(s_name) > 0) {
+        purple_blist_alias_chat(chat, s_name);
+    }
+  } else {
+    GHashTable *components = purple_chat_get_components(chat);
+    gboolean changed = FALSE;
+    if (components) {
+        if (d->avatar_url && strlen(d->avatar_url) > 0) {
+          const char *old_avatar = g_hash_table_lookup(components, "avatar_path");
+          if (g_strcmp0(old_avatar, d->avatar_url) != 0 && g_file_test(d->avatar_url, G_FILE_TEST_EXISTS)) {
+              g_hash_table_replace(components, g_strdup("avatar_path"), g_strdup(d->avatar_url));
+              purple_blist_node_set_string((PurpleBlistNode *)chat, "buddy_icon", d->avatar_url);
+              purple_blist_node_set_string((PurpleBlistNode *)chat, "icon_path", d->avatar_url);
+              changed = TRUE;
+          }
+        }
+        if (s_topic && strlen(s_topic) > 0) {
+            const char *old_topic = g_hash_table_lookup(components, "topic");
+            if (g_strcmp0(old_topic, s_topic) != 0) {
+                g_hash_table_replace(components, g_strdup("topic"), g_strdup(s_topic));
+                changed = TRUE;
+            }
+        }
+        const char *old_enc = g_hash_table_lookup(components, "encrypted");
+        const char *new_enc = d->encrypted ? "1" : "0";
+        if (g_strcmp0(old_enc, new_enc) != 0) {
+            g_hash_table_replace(components, g_strdup("encrypted"), g_strdup(new_enc));
+            changed = TRUE;
+        }
+    }
+    
+    PurpleBlistNode *parent = PURPLE_BLIST_NODE(chat)->parent;
+    const char *cur_grp = (parent && PURPLE_BLIST_NODE_IS_GROUP(parent)) ? purple_group_get_name((PurpleGroup *)parent) : NULL;
+    if (!cur_grp || g_strcmp0(cur_grp, target_group_name) != 0) {
+      purple_blist_add_chat(chat, group, NULL);
+      changed = TRUE;
+    }
+
+    if (s_name && strlen(s_name) > 0) {
+      const char *old_alias = chat->alias;
+      if (g_strcmp0(old_alias, s_name) != 0) {
+          purple_blist_alias_chat(chat, s_name);
+          changed = TRUE;
+      }
+    }
+    
+    if (changed) {
+        purple_blist_update_node_icon((PurpleBlistNode *)chat);
+    }
+  }
+
   g_free(target_group_name);
+  g_free(s_name);
+  g_free(s_topic);
+  g_free(s_group);
+
+cleanup:
+  g_free(d->user_id);
   g_free(d->room_id);
   g_free(d->name);
   g_free(d->group_name);
   g_free(d->avatar_url);
-  if (d->topic)
-    g_free(d->topic);
+  if (d->topic) g_free(d->topic);
   g_free(d);
   return FALSE;
 }
 
-void room_joined_callback(const char *room_id, const char *name, const char *group_name, const char *avatar_url, const char *topic, bool encrypted) {
+void room_joined_callback(const char *user_id, const char *room_id, const char *name, const char *group_name, const char *avatar_url, const char *topic, bool encrypted) {
   MatrixRoomData *d = g_new0(MatrixRoomData, 1);
-  d->room_id = g_strdup(room_id); d->name = g_strdup(name); d->group_name = g_strdup(group_name); d->avatar_url = g_strdup(avatar_url); d->topic = g_strdup(topic); d->encrypted = encrypted;
+  d->user_id = g_strdup(user_id); d->room_id = g_strdup(room_id); d->name = g_strdup(name); d->group_name = g_strdup(group_name); d->avatar_url = g_strdup(avatar_url); d->topic = g_strdup(topic); d->encrypted = encrypted;
   g_idle_add(process_room_cb, d);
 }
 
+typedef struct { char *user_id; char *room_id; } RoomLeftData;
 static gboolean process_room_left_cb(gpointer data) {
-  char *room_id = (char *)data;
-  PurpleAccount *account = find_matrix_account();
-  if (account) {
+  RoomLeftData *d = (RoomLeftData *)data;
+  PurpleAccount *account = find_matrix_account_by_id(d->user_id);
+  if (account && purple_account_get_connection(account) != NULL) {
     PurpleConnection *gc = purple_account_get_connection(account);
-    if (gc) serv_got_chat_left(gc, get_chat_id(room_id));
+    if (gc) serv_got_chat_left(gc, get_chat_id(d->room_id));
   }
-  g_free(room_id); return FALSE;
+  g_free(d->user_id); g_free(d->room_id); g_free(d); return FALSE;
 }
 
-void room_left_callback(const char *room_id) { g_idle_add(process_room_left_cb, g_strdup(room_id)); }
+void room_left_callback(const char *user_id, const char *room_id) {
+  RoomLeftData *d = g_new0(RoomLeftData, 1); d->user_id = g_strdup(user_id); d->room_id = g_strdup(room_id);
+  g_idle_add(process_room_left_cb, d);
+}
+
+void room_mute_callback(const char *user_id, const char *room_id, bool muted) {
+}
+
+void room_tag_callback(const char *user_id, const char *room_id, const char *tag) {
+  if (tag) {
+    MatrixRoomData *d = g_new0(MatrixRoomData, 1);
+    d->user_id = g_strdup(user_id);
+    d->room_id = g_strdup(room_id);
+    d->group_name = g_strdup(tag);
+    g_idle_add(process_room_cb, d);
+  }
+}
 
 void ensure_thread_in_blist(PurpleAccount *account, const char *virtual_id, const char *alias, const char *parent_room_id) {
-  if (!account || !virtual_id || !strchr(virtual_id, '|')) return;
+  if (!account || purple_account_get_connection(account) == NULL || !virtual_id || !strchr(virtual_id, '|')) return;
   PurpleConnection *gc = purple_account_get_connection(account);
   if (!gc) return;
   char *group_name = NULL;
@@ -165,10 +204,10 @@ void ensure_thread_in_blist(PurpleAccount *account, const char *virtual_id, cons
     const char *p_title = NULL; const char *p_grp = NULL;
     if (pconv) {
       p_title = purple_conversation_get_title(pconv);
-      PurpleChat *pchat = find_chat_manual(account, parent_room_id);
+      PurpleChat *pchat = purple_blist_find_chat(account, parent_room_id);
       if (pchat) { PurpleGroup *pg = purple_chat_get_group(pchat); if (pg) p_grp = purple_group_get_name(pg); }
     } else {
-      PurpleChat *pchat = find_chat_manual(account, parent_room_id);
+      PurpleChat *pchat = purple_blist_find_chat(account, parent_room_id);
       if (pchat) { p_title = pchat->alias ? pchat->alias : purple_chat_get_name(pchat); PurpleGroup *pg = purple_chat_get_group(pchat); if (pg) p_grp = purple_group_get_name(pg); }
     }
     if (!p_grp || !*p_grp) p_grp = "Matrix Rooms";
@@ -177,11 +216,12 @@ void ensure_thread_in_blist(PurpleAccount *account, const char *virtual_id, cons
   } else group_name = g_strdup("Matrix Rooms / Unknown Room / Threads");
   PurpleGroup *group = purple_find_group(group_name);
   if (!group) { group = purple_group_new(group_name); purple_blist_add_group(group, NULL); }
-  PurpleChat *chat = find_chat_manual(account, virtual_id);
+  PurpleChat *chat = purple_blist_find_chat(account, virtual_id);
   char *nice_alias = NULL;
-  if (alias) {
-    char *trunc = g_strndup(alias, 50); char *end = NULL; if (!g_utf8_validate(trunc, -1, (const gchar **)&end)) if (end) *end = '\0';
-    nice_alias = g_strdup_printf("Thread: %s%s", trunc, strlen(alias) > 50 ? "..." : ""); g_free(trunc);
+  char *s_alias = strip_emojis(alias);
+  if (s_alias && strlen(s_alias) > 0) {
+    char *trunc = g_strndup(s_alias, 50); char *end = NULL; if (!g_utf8_validate(trunc, -1, (const gchar **)&end)) if (end) *end = '\0';
+    nice_alias = g_strdup_printf("Thread: %s%s", trunc, strlen(s_alias) > 50 ? "..." : ""); g_free(trunc);
   } else nice_alias = g_strdup("Thread");
   if (!chat) {
     GHashTable *comp = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free); g_hash_table_insert(comp, g_strdup("room_id"), g_strdup(virtual_id));
@@ -190,13 +230,14 @@ void ensure_thread_in_blist(PurpleAccount *account, const char *virtual_id, cons
     PurpleBlistNode *parent = PURPLE_BLIST_NODE(chat)->parent;
     const char *cur_grp = (parent && PURPLE_BLIST_NODE_IS_GROUP(parent)) ? purple_group_get_name((PurpleGroup *)parent) : NULL;
     if (!cur_grp || g_strcmp0(cur_grp, group_name) != 0) purple_blist_add_chat(chat, group, NULL);
-    if (alias && strlen(alias) > 0) purple_blist_alias_chat(chat, nice_alias);
+    if (s_alias && strlen(s_alias) > 0) purple_blist_alias_chat(chat, nice_alias);
   }
-  g_free(nice_alias); g_free(group_name);
+  g_free(nice_alias); g_free(group_name); g_free(s_alias);
 }
 
 static gboolean process_roomlist_add_cb(gpointer data) {
   RoomListData *d = (RoomListData *)data;
+  // Account lookup not strictly needed for the global roomlist view, but good for context
   if (active_roomlist) {
     PurpleRoomlistRoom *room = purple_roomlist_room_new(PURPLE_ROOMLIST_ROOMTYPE_ROOM, d->name, NULL);
     purple_roomlist_room_add_field(active_roomlist, room, d->id);
@@ -206,7 +247,7 @@ static gboolean process_roomlist_add_cb(gpointer data) {
   g_free(d->name); g_free(d->id); g_free(d->topic); g_free(d); return FALSE;
 }
 
-void roomlist_add_cb(const char *name, const char *id, const char *topic, guint64 count) {
+void roomlist_add_cb(const char *user_id, const char *name, const char *id, const char *topic, guint64 count) {
   RoomListData *d = g_new0(RoomListData, 1); d->name = g_strdup(name); d->id = g_strdup(id); d->topic = g_strdup(topic); d->count = count; g_idle_add(process_roomlist_add_cb, d);
 }
 
@@ -254,17 +295,39 @@ void matrix_remove_buddy(PurpleConnection *gc, PurpleBuddy *buddy, PurpleGroup *
 
 static gboolean process_invite_cb(gpointer data) {
   MatrixInviteData *d = (MatrixInviteData *)data;
-  PurpleAccount *account = find_matrix_account();
-  if (account) {
+  PurpleAccount *account = find_matrix_account_by_id(d->user_id);
+  if (account && purple_account_get_connection(account) != NULL) {
     PurpleConnection *gc = purple_account_get_connection(account);
     if (gc) {
       GHashTable *comp = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free); g_hash_table_insert(comp, g_strdup("room_id"), g_strdup(d->room_id));
       serv_got_chat_invite(gc, d->room_id, d->inviter, "Incoming Matrix Invite", comp);
     }
   }
-  g_free(d->room_id); g_free(d->inviter); g_free(d); return FALSE;
+  g_free(d->user_id); g_free(d->room_id); g_free(d->inviter); g_free(d); return FALSE;
 }
 
-void invite_callback(const char *room_id, const char *inviter) {
-  MatrixInviteData *d = g_new0(MatrixInviteData, 1); d->room_id = g_strdup(room_id); d->inviter = g_strdup(inviter); g_idle_add(process_invite_cb, d);
+void invite_callback(const char *user_id, const char *room_id, const char *inviter) {
+  MatrixInviteData *d = g_new0(MatrixInviteData, 1); d->user_id = g_strdup(user_id); d->room_id = g_strdup(room_id); d->inviter = g_strdup(inviter); g_idle_add(process_invite_cb, d);
+}
+
+static void menu_action_room_dashboard_blist_cb(PurpleBlistNode *node, gpointer data) {
+    if (!PURPLE_BLIST_NODE_IS_CHAT(node)) return;
+    PurpleChat *chat = (PurpleChat *)node;
+    GHashTable *components = purple_chat_get_components(chat);
+    const char *room_id = g_hash_table_lookup(components, "room_id");
+    open_room_dashboard(purple_chat_get_account(chat), room_id);
+}
+
+GList *blist_node_menu_cb(PurpleBlistNode *node) {
+    GList *m = NULL;
+    PurpleMenuAction *action;
+
+    if (PURPLE_BLIST_NODE_IS_CHAT(node)) {
+        action = purple_menu_action_new("Room Settings...", PURPLE_CALLBACK(menu_action_room_settings_cb), node, NULL);
+        m = g_list_append(m, action);
+        
+        action = purple_menu_action_new("Room Dashboard...", PURPLE_CALLBACK(menu_action_room_dashboard_blist_cb), node, NULL);
+        m = g_list_append(m, action);
+    }
+    return m;
 }

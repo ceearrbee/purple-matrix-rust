@@ -15,61 +15,18 @@
 #include <libpurple/core.h>
 #include <libpurple/debug.h>
 #include <libpurple/signals.h>
+#include <libpurple/conversation.h>
+#include <libpurple/account.h>
 #include <string.h>
 #include <stdio.h>
+#include <stddef.h>
 
 PurplePlugin *my_plugin = NULL;
 GHashTable *room_id_map = NULL;
 
-static PurplePluginProtocolInfo prpl_info = {
-    .options = OPT_PROTO_CHAT_TOPIC | OPT_PROTO_NO_PASSWORD,
-    .user_splits = NULL,
-    .protocol_options = NULL,
-    .icon_spec = {
-        .format = "png",
-        .min_width = 30, .min_height = 30,
-        .max_width = 96, .max_height = 96,
-        .scale_rules = PURPLE_ICON_SCALE_SEND | PURPLE_ICON_SCALE_DISPLAY,
-    },
-    .list_icon = matrix_list_icon,
-    .list_emblem = matrix_list_emblem,
-    .status_text = matrix_status_text,
-    .tooltip_text = matrix_tooltip_text,
-    .status_types = matrix_status_types,
-    .blist_node_menu = blist_node_menu_cb,
-    .chat_info = matrix_chat_info,
-    .chat_info_defaults = matrix_chat_info_defaults,
-    .login = matrix_login,
-    .close = matrix_close,
-    .send_im = matrix_send_im,
-    .send_typing = matrix_send_typing,
-    .get_info = matrix_get_info,
-    .set_status = matrix_set_status,
-    .set_idle = matrix_set_idle,
-    .change_passwd = matrix_change_passwd,
-    .add_buddy = matrix_add_buddy,
-    .remove_buddy = matrix_remove_buddy,
-    .add_deny = matrix_add_deny,
-    .rem_deny = matrix_rem_deny,
-    .join_chat = matrix_join_chat,
-    .get_chat_name = matrix_get_chat_name,
-    .chat_invite = matrix_chat_invite,
-    .chat_leave = matrix_chat_leave,
-    .chat_whisper = matrix_chat_whisper,
-    .chat_send = matrix_chat_send,
-    .set_chat_topic = matrix_set_chat_topic,
-    .send_file = matrix_send_file,
-    .roomlist_get_list = matrix_roomlist_get_list,
-    .roomlist_cancel = matrix_roomlist_cancel,
-    .unregister_user = matrix_unregister_user,
-    .set_public_alias = (void *)matrix_set_public_alias,
-    .set_buddy_icon = matrix_set_buddy_icon,
-    .struct_size = sizeof(PurplePluginProtocolInfo)
-};
-
 static void conversation_displayed_cb(PurpleConversation *conv) {
   PurpleAccount *account = purple_conversation_get_account(conv);
-  if (strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
+  if (account && strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
     const char *last_id = purple_conversation_get_data(conv, "last_event_id");
     if (last_id) {
       purple_matrix_rust_send_read_receipt(purple_account_get_username(account), purple_conversation_get_name(conv), last_id);
@@ -79,8 +36,9 @@ static void conversation_displayed_cb(PurpleConversation *conv) {
 
 static void conversation_created_cb(PurpleConversation *conv) {
   PurpleAccount *account = purple_conversation_get_account(conv);
-  if (strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
-    /* Inject Welcome Banner */
+  if (account && strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
+    /* Inject Welcome Banner - Temporarily disabled to debug crash */
+    /*
     char *banner = g_strdup_printf(
       "<div style=\"background-color: #e1eaf2; border: 1px solid #a3b8cc; padding: 8px; margin: 5px; font-family: sans-serif;\">"
       "<b>Welcome to this Matrix Room!</b><br/>"
@@ -94,9 +52,10 @@ static void conversation_created_cb(PurpleConversation *conv) {
     );
     purple_conversation_write(conv, "Matrix", banner, PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_NO_LOG, time(NULL));
     g_free(banner);
+    */
 
     if (purple_account_get_bool(account, "auto_fetch_history_on_open", TRUE)) {
-      purple_matrix_rust_fetch_history(purple_account_get_username(account), purple_conversation_get_name(conv));
+      /* redundant call removed to prevent UI hammer */
     }
   }
 }
@@ -104,28 +63,54 @@ static void conversation_created_cb(PurpleConversation *conv) {
 static void connect_signals(void) {
   void *conv_handle = purple_conversations_get_handle();
   if (conv_handle) {
-    /* Core Signals */
-    purple_signal_connect(conv_handle, "conversation-created",
-                          my_plugin, PURPLE_CALLBACK(conversation_created_cb), NULL);
-    purple_signal_connect(conv_handle, "conversation-displayed",
-                          my_plugin, PURPLE_CALLBACK(conversation_displayed_cb), NULL);
-    purple_debug_info("prpl-matrix-rust", "Core conversation signals connected.\n");
+    purple_signal_connect(conv_handle, "conversation-created", my_plugin, PURPLE_CALLBACK(conversation_created_cb), NULL);
+    purple_signal_connect(conv_handle, "conversation-displayed", my_plugin, PURPLE_CALLBACK(conversation_displayed_cb), NULL);
   }
 }
-
-#include "matrix_commands.h"
 
 static void core_initialized_cb(void) {
   connect_signals();
 }
 
-static void
-handle_show_dashboard_signal(const char *room_id, gpointer user_data)
-{
+static void handle_show_dashboard_signal(const char *room_id, gpointer user_data) {
+    if (!room_id) return;
     PurpleAccount *account = find_matrix_account();
-    if (account && room_id) {
-        open_room_dashboard(account, room_id);
-    }
+    if (account) open_room_dashboard(account, room_id);
+}
+
+static void handle_reply_signal(const char *room_id, gpointer user_data) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (conv) menu_action_reply_conv_cb(conv, NULL);
+}
+
+static void handle_thread_signal(const char *room_id, gpointer user_data) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (conv) menu_action_thread_conv_cb(conv, NULL);
+}
+
+static void handle_sticker_signal(const char *room_id, gpointer user_data) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (conv) menu_action_sticker_conv_cb(conv, NULL);
+}
+
+static void handle_poll_signal(const char *room_id, gpointer user_data) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (conv) menu_action_poll_conv_cb(conv, NULL);
+}
+
+/**
+ * Custom marshaller for UI actions.
+ */
+static void
+handle_ui_action_marshal(PurpleCallback cb, va_list args, void *data, void **return_val)
+{
+    void (*callback)(const char *, void *) = (void (*)(const char *, void *))cb;
+    const char *arg1 = va_arg(args, const char *);
+    callback(arg1, data);
 }
 
 static gboolean plugin_load(PurplePlugin *plugin) {
@@ -145,63 +130,58 @@ static gboolean plugin_load(PurplePlugin *plugin) {
   purple_matrix_rust_set_thread_list_callback(thread_list_cb);
   purple_matrix_rust_set_poll_list_callback(poll_list_cb);
   purple_matrix_rust_set_search_callback(search_result_cb);
+  purple_matrix_rust_set_room_mute_callback(room_mute_callback);
+  purple_matrix_rust_set_room_tag_callback(room_tag_callback);
+  purple_matrix_rust_init_invite_cb(invite_callback);
   matrix_init_sso_callbacks();
   register_matrix_commands(plugin);
 
-  /* Signal for UI plugin communication */
-  purple_signal_register(plugin, "matrix-ui-action::show-dashboard",
-                         purple_marshal_VOID__POINTER,
-                         NULL, 1, purple_value_new(PURPLE_TYPE_STRING));
+  /* Register Matrix UI Signals */
+  purple_signal_register(plugin, "matrix-ui-action-show-dashboard", handle_ui_action_marshal, NULL, 1, purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-reply", handle_ui_action_marshal, NULL, 1, purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-thread", handle_ui_action_marshal, NULL, 1, purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-sticker", handle_ui_action_marshal, NULL, 1, purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-poll", handle_ui_action_marshal, NULL, 1, purple_value_new(PURPLE_TYPE_STRING));
 
-  purple_signal_connect(plugin, "matrix-ui-action::show-dashboard",
-                        plugin, PURPLE_CALLBACK(handle_show_dashboard_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-show-dashboard", plugin, PURPLE_CALLBACK(handle_show_dashboard_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-reply", plugin, PURPLE_CALLBACK(handle_reply_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-thread", plugin, PURPLE_CALLBACK(handle_thread_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-sticker", plugin, PURPLE_CALLBACK(handle_sticker_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-poll", plugin, PURPLE_CALLBACK(handle_poll_signal), NULL);
 
-  // If core is already initialized (usual case for manual plugin load), connect now.
-  // Otherwise wait for the signal.
-  if (purple_get_core() != NULL && purple_conversations_get_handle() != NULL) {
-    connect_signals();
-  } else {
-    purple_signal_connect(purple_get_core(), "core-initialized",
-                          plugin, PURPLE_CALLBACK(core_initialized_cb), NULL);
-  }
+  if (purple_get_core() != NULL && purple_conversations_get_handle() != NULL) connect_signals();
+  else purple_signal_connect(purple_get_core(), "core-initialized", plugin, PURPLE_CALLBACK(core_initialized_cb), NULL);
 
   return TRUE;
 }
 
 static gboolean plugin_unload(PurplePlugin *plugin) {
   purple_signals_disconnect_by_handle(plugin);
+  purple_signals_unregister_by_instance(plugin);
   return TRUE;
 }
 
+static PurplePluginProtocolInfo prpl_info = {
+    .options = OPT_PROTO_CHAT_TOPIC | OPT_PROTO_PASSWORD_OPTIONAL,
+    .user_splits = NULL,
+    .protocol_options = NULL,
+    .icon_spec = { .format = "png", .min_width = 30, .min_height = 30, .max_width = 96, .max_height = 96, .scale_rules = PURPLE_ICON_SCALE_SEND | PURPLE_ICON_SCALE_DISPLAY },
+    .list_icon = matrix_list_icon, .list_emblem = matrix_list_emblem, .status_text = matrix_status_text, .tooltip_text = matrix_tooltip_text, .status_types = matrix_status_types, .blist_node_menu = blist_node_menu_cb,
+    .chat_info = matrix_chat_info, .chat_info_defaults = matrix_chat_info_defaults, .login = matrix_login, .close = matrix_close, .send_im = matrix_send_im, .send_typing = matrix_send_typing, .get_info = matrix_get_info, .set_status = matrix_set_status, .set_idle = matrix_set_idle, .change_passwd = matrix_change_passwd, .add_buddy = matrix_add_buddy, .remove_buddy = matrix_remove_buddy, .add_deny = matrix_add_deny, .rem_deny = matrix_rem_deny, .join_chat = matrix_join_chat, .get_chat_name = matrix_get_chat_name, .chat_invite = matrix_chat_invite, .chat_leave = matrix_chat_leave, .chat_whisper = matrix_chat_whisper, .chat_send = matrix_chat_send, .set_chat_topic = matrix_set_chat_topic, .send_file = matrix_send_file, .roomlist_get_list = matrix_roomlist_get_list, .roomlist_cancel = matrix_roomlist_cancel, .unregister_user = matrix_unregister_user, .set_public_alias = (void *)matrix_set_public_alias, .set_buddy_icon = matrix_set_buddy_icon, .struct_size = sizeof(PurplePluginProtocolInfo)
+};
+
 static PurplePluginInfo info = {
-    .magic = PURPLE_PLUGIN_MAGIC,
-    .major_version = PURPLE_MAJOR_VERSION,
-    .minor_version = PURPLE_MINOR_VERSION,
-    .type = PURPLE_PLUGIN_PROTOCOL,
-    .priority = PURPLE_PRIORITY_DEFAULT,
-    .id = "prpl-matrix-rust",
-    .name = "Matrix (Rust)",
-    .version = "0.1",
-    .summary = "Matrix Protocol Plugin (Rust Backend)",
-    .description = "Using matrix-rust-sdk",
-    .author = "Author Name",
-    .homepage = "https://matrix.org",
-    .load = plugin_load,
-    .unload = plugin_unload,
-    .extra_info = &prpl_info,
-    .actions = matrix_actions
+    .magic = PURPLE_PLUGIN_MAGIC, .major_version = PURPLE_MAJOR_VERSION, .minor_version = PURPLE_MINOR_VERSION,
+    .type = PURPLE_PLUGIN_PROTOCOL, .priority = PURPLE_PRIORITY_DEFAULT, .id = "prpl-matrix-rust", .name = "Matrix (Rust)",
+    .version = "0.1", .summary = "Matrix Protocol Plugin", .description = "Using matrix-rust-sdk",
+    .load = plugin_load, .unload = plugin_unload, .extra_info = &prpl_info, .actions = matrix_actions
 };
 
 static void init_plugin(PurplePlugin *plugin) {
-  PurpleAccountOption *option;
-  option = purple_account_option_string_new("Homeserver URL", "server", "https://matrix.org");
-  prpl_info.protocol_options = g_list_append(prpl_info.protocol_options, option);
-  option = purple_account_option_bool_new("Separate Thread Tabs", "separate_threads", FALSE);
-  prpl_info.protocol_options = g_list_append(prpl_info.protocol_options, option);
-  option = purple_account_option_bool_new("Auto Fetch History On Open", "auto_fetch_history_on_open", TRUE);
-  prpl_info.protocol_options = g_list_append(prpl_info.protocol_options, option);
-  option = purple_account_option_string_new("History Page Size", "history_page_size", "50");
-  prpl_info.protocol_options = g_list_append(prpl_info.protocol_options, option);
+  PurpleAccountOption *o;
+  o = purple_account_option_string_new("Homeserver URL", "server", "https://matrix.org"); prpl_info.protocol_options = g_list_append(prpl_info.protocol_options, o);
+  o = purple_account_option_bool_new("Separate Thread Tabs", "separate_threads", FALSE); prpl_info.protocol_options = g_list_append(prpl_info.protocol_options, o);
+  o = purple_account_option_bool_new("Auto Fetch History On Open", "auto_fetch_history_on_open", TRUE); prpl_info.protocol_options = g_list_append(prpl_info.protocol_options, o);
+  o = purple_account_option_string_new("History Page Size", "history_page_size", "50"); prpl_info.protocol_options = g_list_append(prpl_info.protocol_options, o);
 }
-
 PURPLE_INIT_PLUGIN(matrix_rust, init_plugin, info)

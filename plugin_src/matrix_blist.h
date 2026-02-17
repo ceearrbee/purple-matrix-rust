@@ -8,10 +8,12 @@
 #include <stdbool.h>
 
 void ensure_thread_in_blist(PurpleAccount *account, const char *virtual_id, const char *alias, const char *parent_room_id);
-PurpleChat *find_chat_manual(PurpleAccount *account, const char *room_id);
-void room_joined_callback(const char *room_id, const char *name, const char *group_name, const char *avatar_url, const char *topic, bool encrypted);
-void room_left_callback(const char *room_id);
-void roomlist_add_cb(const char *name, const char *id, const char *topic, guint64 count);
+void room_joined_callback(const char *user_id, const char *room_id, const char *name, const char *group_name, const char *avatar_url, const char *topic, bool encrypted);
+void room_left_callback(const char *user_id, const char *room_id);
+void room_mute_callback(const char *user_id, const char *room_id, bool muted);
+void room_tag_callback(const char *user_id, const char *room_id, const char *tag);
+void invite_callback(const char *user_id, const char *room_id, const char *inviter);
+void roomlist_add_cb(const char *user_id, const char *name, const char *id, const char *topic, guint64 count);
 void cleanup_stale_thread_labels(PurpleAccount *account);
 
 PurpleRoomlist *matrix_roomlist_get_list(PurpleConnection *gc);

@@ -42,5 +42,11 @@ clean:
 install: $(TARGET)
 	mkdir -p $(DESTDIR)$(PLUGIN_DIR)
 	install -m 0755 $(TARGET) $(DESTDIR)$(PLUGIN_DIR)
+	mkdir -p $(DESTDIR)/usr/share/pixmaps/pidgin/protocols/16
+	mkdir -p $(DESTDIR)/usr/share/pixmaps/pidgin/protocols/22
+	mkdir -p $(DESTDIR)/usr/share/pixmaps/pidgin/protocols/48
+	install -m 0644 icons/16/matrix.png $(DESTDIR)/usr/share/pixmaps/pidgin/protocols/16/matrix.png
+	install -m 0644 icons/22/matrix.png $(DESTDIR)/usr/share/pixmaps/pidgin/protocols/22/matrix.png
+	install -m 0644 icons/48/matrix.png $(DESTDIR)/usr/share/pixmaps/pidgin/protocols/48/matrix.png
 
 .PHONY: all clean install

@@ -83,9 +83,23 @@ unsigned int matrix_send_typing(PurpleConnection *gc, const char *name,
 
 static gboolean process_msg_cb(gpointer data) {
   MatrixMsgData *d = (MatrixMsgData *)data;
-  PurpleAccount *account = find_matrix_account();
+  
+  /* Strict NULL safety for essential message fields */
+  if (!d->user_id || !d->room_id || !d->sender || !d->message) {
+    if (d->user_id) g_free(d->user_id);
+    if (d->sender) g_free(d->sender);
+    if (d->message) g_free(d->message);
+    if (d->room_id) g_free(d->room_id);
+    if (d->thread_root_id) g_free(d->thread_root_id);
+    if (d->event_id) g_free(d->event_id);
+    g_free(d);
+    return FALSE;
+  }
+
+  PurpleAccount *account = find_matrix_account_by_id(d->user_id);
   if (!account) {
-    g_free(d->sender); g_free(d->message); g_free(d->room_id);
+    purple_debug_error("matrix", "process_msg_cb: No account found for %s\n", d->user_id ? d->user_id : "NULL");
+    g_free(d->user_id); g_free(d->sender); g_free(d->message); g_free(d->room_id);
     if (d->thread_root_id) g_free(d->thread_root_id);
     if (d->event_id) g_free(d->event_id);
     g_free(d);
@@ -97,7 +111,6 @@ static gboolean process_msg_cb(gpointer data) {
     if (!main_conv) main_conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_IM, d->room_id, account);
     
     if (main_conv) {
-      purple_debug_info("matrix", "Updating last_event_id for room %s to %s\n", d->room_id, d->event_id);
       g_free(purple_conversation_get_data(main_conv, "last_event_id"));
       purple_conversation_set_data(main_conv, "last_event_id", g_strdup(d->event_id));
       g_free(purple_conversation_get_data(main_conv, "last_thread_root_id"));
@@ -121,7 +134,7 @@ static gboolean process_msg_cb(gpointer data) {
       PurpleConversation *conv = purple_find_chat(gc_sys, chat_id);
       if (conv) purple_conv_chat_write(PURPLE_CONV_CHAT(conv), "", sys_msg, PURPLE_MESSAGE_SYSTEM, d->timestamp / 1000);
     }
-    g_free(target_id); g_free(d->sender); g_free(d->message); g_free(d->room_id);
+    g_free(target_id); g_free(d->user_id); g_free(d->sender); g_free(d->message); g_free(d->room_id);
     if (d->thread_root_id) g_free(d->thread_root_id);
     if (d->event_id) g_free(d->event_id);
     g_free(d);
@@ -137,51 +150,42 @@ static gboolean process_msg_cb(gpointer data) {
     int chat_id = get_chat_id(target_id);
     PurpleConversation *conv = purple_find_chat(gc, chat_id);
     if (!conv) conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_CHAT, target_id, account);
+    
     if (d->thread_root_id && strlen(d->thread_root_id) > 0 && separate_threads) {
       char *clean_alias = sanitize_markup_text(d->message);
       ensure_thread_in_blist(account, target_id, clean_alias, d->room_id);
       g_free(clean_alias);
     }
-    if (!conv) {
-      serv_got_joined_chat(gc, chat_id, target_id);
-      conv = purple_find_chat(gc, chat_id);
-      if (conv) {
-        PurpleChat *blist_chat = purple_blist_find_chat(account, target_id);
-        if (blist_chat && blist_chat->alias) purple_conversation_set_title(conv, blist_chat->alias);
-        else if (d->thread_root_id && separate_threads) purple_conversation_set_title(conv, "Thread");
-      }
-    } else purple_conv_chat_set_id(PURPLE_CONV_CHAT(conv), chat_id);
 
-    if (conv && !purple_conv_chat_find_user(PURPLE_CONV_CHAT(conv), d->sender)) {
-      purple_conv_chat_add_user(PURPLE_CONV_CHAT(conv), d->sender, NULL, PURPLE_CBFLAGS_NONE, TRUE);
-    }
-
-    if (d->thread_root_id && strlen(d->thread_root_id) > 0) {
-      if (separate_threads) {
-        /* Only send to virtual room */
-        serv_got_chat_in(gc, chat_id, d->sender, PURPLE_MESSAGE_RECV, d->message, d->timestamp / 1000);
+    if (conv) {
+      char *s_sender = strip_emojis(d->sender ? d->sender : "Unknown");
+      char *s_msg = strip_emojis(d->message ? d->message : " ");
+      char *final_msg = NULL;
+      
+      if (d->thread_root_id && strlen(d->thread_root_id) > 0 && !separate_threads) {
+          final_msg = g_strdup_printf("[Thread] %s", s_msg);
       } else {
-        /* Send to main room with prefix */
-        char *main_msg = g_strdup_printf("[Thread] %s", d->message);
-        serv_got_chat_in(gc, chat_id, d->sender, PURPLE_MESSAGE_RECV, main_msg, d->timestamp / 1000);
-        g_free(main_msg);
+          final_msg = g_strdup(s_msg);
       }
-    } else {
-      /* Normal message to its intended room */
-      serv_got_chat_in(gc, chat_id, d->sender, PURPLE_MESSAGE_RECV, d->message, d->timestamp / 1000);
+
+      purple_conversation_write(conv, s_sender, final_msg, PURPLE_MESSAGE_RECV, d->timestamp / 1000);
+      
+      g_free(final_msg);
+      g_free(s_msg);
+      g_free(s_sender);
     }
   }
 
-  g_free(d->sender); g_free(d->message); g_free(d->room_id);
+  g_free(d->user_id); g_free(d->sender); g_free(d->message); g_free(d->room_id);
   if (d->thread_root_id) g_free(d->thread_root_id);
   if (d->event_id) g_free(d->event_id);
   g_free(d); g_free(target_id);
   return FALSE;
 }
 
-void msg_callback(const char *sender, const char *msg, const char *room_id, const char *thread_root_id, const char *event_id, guint64 timestamp) {
+void msg_callback(const char *user_id, const char *sender, const char *msg, const char *room_id, const char *thread_root_id, const char *event_id, guint64 timestamp) {
   MatrixMsgData *d = g_new0(MatrixMsgData, 1);
-  d->sender = g_strdup(sender); d->message = g_strdup(msg); d->room_id = g_strdup(room_id);
+  d->user_id = g_strdup(user_id); d->sender = g_strdup(sender); d->message = g_strdup(msg); d->room_id = g_strdup(room_id);
   if (thread_root_id) d->thread_root_id = g_strdup(thread_root_id);
   if (event_id) d->event_id = g_strdup(event_id);
   d->timestamp = timestamp;
@@ -190,45 +194,44 @@ void msg_callback(const char *sender, const char *msg, const char *room_id, cons
 
 static gboolean process_typing_cb(gpointer data) {
   MatrixTypingData *d = (MatrixTypingData *)data;
-  PurpleAccount *account = find_matrix_account();
-  if (account) {
+  PurpleAccount *account = find_matrix_account_by_id(d->user_id);
+  if (account && purple_account_get_connection(account) != NULL) {
     PurpleConnection *gc = purple_account_get_connection(account);
     if (gc) {
-      serv_got_typing(gc, d->user_id, 0, d->is_typing ? PURPLE_TYPING : PURPLE_NOT_TYPING);
+      serv_got_typing(gc, d->who, 0, d->is_typing ? PURPLE_TYPING : PURPLE_NOT_TYPING);
     }
   }
-  g_free(d->room_id); g_free(d->user_id); g_free(d);
+  g_free(d->user_id); g_free(d->room_id); g_free(d->who); g_free(d);
   return FALSE;
 }
 
-void typing_callback(const char *room_id, const char *user_id, bool is_typing) {
+void typing_callback(const char *user_id, const char *room_id, const char *who, bool is_typing) {
   MatrixTypingData *d = g_new0(MatrixTypingData, 1);
-  d->room_id = g_strdup(room_id); d->user_id = g_strdup(user_id); d->is_typing = is_typing;
+  d->user_id = g_strdup(user_id); d->room_id = g_strdup(room_id); d->who = g_strdup(who); d->is_typing = is_typing;
   g_idle_add(process_typing_cb, d);
 }
 
 static gboolean process_read_marker_cb(gpointer data) {
   MatrixReadMarkerData *d = (MatrixReadMarkerData *)data;
-  PurpleAccount *account = find_matrix_account();
-  if (account) {
+  PurpleAccount *account = find_matrix_account_by_id(d->user_id);
+  if (account && purple_account_get_connection(account) != NULL) {
     PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_CHAT, d->room_id, account);
     if (!conv) conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_IM, d->room_id, account);
     if (conv) {
-      const char *local_user = purple_account_get_username(account);
-      if (d->user_id && strcmp(d->user_id, local_user) != 0) {
-        char *msg = g_strdup_printf("[Read Receipt] %s read up to %s", d->user_id, d->event_id);
+      if (d->who && strcmp(d->who, d->user_id) != 0) {
+        char *msg = g_strdup_printf("[Read Receipt] %s read up to %s", d->who, d->event_id);
         purple_conv_chat_write(PURPLE_CONV_CHAT(conv), "", msg, PURPLE_MESSAGE_SYSTEM, time(NULL));
         g_free(msg);
       }
     }
   }
-  g_free(d->room_id); g_free(d->event_id); g_free(d->user_id); g_free(d);
+  g_free(d->user_id); g_free(d->room_id); g_free(d->event_id); g_free(d->who); g_free(d);
   return FALSE;
 }
 
-void read_marker_cb(const char *room_id, const char *event_id, const char *user_id) {
+void read_marker_cb(const char *user_id, const char *room_id, const char *event_id, const char *who) {
   MatrixReadMarkerData *d = g_new0(MatrixReadMarkerData, 1);
-  d->room_id = g_strdup(room_id); d->event_id = g_strdup(event_id); d->user_id = g_strdup(user_id);
+  d->user_id = g_strdup(user_id); d->room_id = g_strdup(room_id); d->event_id = g_strdup(event_id); d->who = g_strdup(who);
   g_idle_add(process_read_marker_cb, d);
 }
 
@@ -248,24 +251,33 @@ void matrix_join_chat(PurpleConnection *gc, GHashTable *data) {
   const char *room_id = g_hash_table_lookup(data, "room_id");
   PurpleAccount *account = purple_connection_get_account(gc);
   if (!room_id) return;
+  
   purple_matrix_rust_join_room(purple_account_get_username(account), room_id);
   purple_matrix_rust_fetch_room_members(purple_account_get_username(account), room_id);
-
-  if (purple_account_get_bool(account, "auto_fetch_history_on_open", TRUE)) {
-    purple_matrix_rust_fetch_history(purple_account_get_username(account), room_id);
-  }
 
   int chat_id = get_chat_id(room_id);
   PurpleConversation *conv = purple_find_chat(gc, chat_id);
   if (!conv) {
+    /* Only join if not already present to avoid signal recursion */
     serv_got_joined_chat(gc, chat_id, room_id);
     conv = purple_find_chat(gc, chat_id);
     if (conv) {
       PurpleChat *blist_chat = purple_blist_find_chat(account, room_id);
-      if (blist_chat && blist_chat->alias) purple_conversation_set_title(conv, blist_chat->alias);
+      if (blist_chat && blist_chat->alias) {
+        purple_conversation_set_title(conv, blist_chat->alias);
+      } else {
+        purple_conversation_set_title(conv, room_id);
+      }
       purple_conv_chat_add_user(PURPLE_CONV_CHAT(conv), purple_account_get_username(account), NULL, PURPLE_CBFLAGS_NONE, FALSE);
+      
+      /* Defer history fetch until AFTER the conversation is fully established */
+      if (purple_account_get_bool(account, "auto_fetch_history_on_open", TRUE)) {
+        purple_matrix_rust_fetch_history(purple_account_get_username(account), room_id);
+      }
     }
-  } else purple_conversation_present(conv);
+  } else {
+    purple_conversation_present(conv);
+  }
 }
 
 void matrix_chat_invite(PurpleConnection *gc, int id, const char *message, const char *name) {

@@ -22,8 +22,6 @@ pub(crate) static CLIENTS: Lazy<Mutex<std::collections::HashMap<String, Client>>
 pub(crate) static HISTORY_FETCHED_ROOMS: Lazy<Mutex<std::collections::HashSet<String>>> = Lazy::new(|| Mutex::new(std::collections::HashSet::new()));
 pub(crate) static PAGINATION_TOKENS: Lazy<Mutex<std::collections::HashMap<String, String>>> = Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
 pub(crate) static DATA_PATH: Lazy<Mutex<Option<std::path::PathBuf>>> = Lazy::new(|| Mutex::new(None));
-// event_id -> { emoji -> count }
-pub(crate) static REACTIONS: Lazy<Mutex<std::collections::HashMap<String, std::collections::HashMap<String, usize>>>> = Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
 
 pub(crate) fn with_client<F, R>(user_id: &str, f: F) -> Option<R>
 where
@@ -33,9 +31,16 @@ where
     if let Some(client) = guard.get(user_id) {
         Some(f(client.clone()))
     } else {
-        log::warn!("No client found for user_id: {}", user_id);
+        log::warn!("No client found for user_id: '{}'", user_id);
+        if !user_id.is_empty() && user_id != "System" {
+             send_system_message(user_id, "Matrix error: Account not connected or session lost.");
+        }
         None
     }
+}
+
+pub fn send_system_message(user_id: &str, msg: &str) {
+    crate::ffi::send_system_message(user_id, msg);
 }
 
 
@@ -71,6 +76,16 @@ pub fn escape_html(input: &str) -> String {
 pub fn sanitize_untrusted_html(input: &str) -> String {
     // Delegate to our smart sanitizer in html_fmt
     crate::html_fmt::sanitize_matrix_html(input)
+}
+
+pub(crate) fn sanitize_string(s: &str) -> String {
+    let res: String = s.chars()
+        .map(|c| if (c as u32) < 0x10000 { c } else { ' ' })
+        .collect();
+    if res.is_empty() {
+        return " ".to_string();
+    }
+    res
 }
 
 

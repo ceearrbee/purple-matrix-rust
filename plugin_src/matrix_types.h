@@ -8,6 +8,7 @@
 // Structs to marshal data to main thread
 
 typedef struct {
+  char *user_id;
   char *sender;
   char *message;
   char *room_id;
@@ -17,12 +18,14 @@ typedef struct {
 } MatrixMsgData;
 
 typedef struct {
-  char *room_id;
   char *user_id;
+  char *room_id;
+  char *who;
   gboolean is_typing;
 } MatrixTypingData;
 
 typedef struct {
+  char *user_id;
   char *room_id;
   char *name;
   char *group_name;
@@ -89,14 +92,16 @@ typedef struct {
 } MatrixEmojiData;
 
 typedef struct {
+  char *user_id;
   char *room_id;
   char *inviter;
 } MatrixInviteData;
 
 typedef struct {
+  char *user_id;
   char *room_id;
   char *event_id;
-  char *user_id;
+  char *who;
 } MatrixReadMarkerData;
 
 typedef struct {
@@ -107,18 +112,21 @@ typedef struct {
 
 typedef struct {
   char *user_id;
+  char *target_user_id;
   bool is_online;
 } MatrixPresenceData;
 
 typedef struct {
+  char *user_id;
   char *room_id;
   char *topic;
   char *sender;
 } MatrixTopicData;
 
 typedef struct {
-  char *room_id;
   char *user_id;
+  char *room_id;
+  char *member_id;
   bool add;
   char *alias;
   char *avatar_path;
@@ -135,6 +143,7 @@ typedef struct {
 } PreviewRoomContext;
 
 typedef struct {
+  char *user_id;
   char *room_id_or_alias;
   char *html_body;
 } MatrixRoomPreviewData;

@@ -273,6 +273,12 @@ pub extern "C" fn purple_matrix_rust_send_typing(user_id: *const c_char, room_id
     });
 }
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+
+static STICKER_MXC_CACHE: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_send_sticker(user_id: *const c_char, room_id: *const c_char, url: *const c_char) {
     if user_id.is_null() || room_id.is_null() || url.is_null() { return; }
@@ -288,9 +294,15 @@ pub extern "C" fn purple_matrix_rust_send_sticker(user_id: *const c_char, room_i
             
             if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
                 if let Some(room) = client.get_room(rid) {
-                    log::info!("Sending sticker to {}: {}", room_id_str, url_str);
                     
-                    let mxc_uri = if url_str.starts_with("mxc://") {
+                    let cached_mxc = {
+                        let cache = STICKER_MXC_CACHE.lock().unwrap();
+                        cache.get(&url_str).cloned()
+                    };
+
+                    let mxc_uri = if let Some(mxc) = cached_mxc {
+                        mxc
+                    } else if url_str.starts_with("mxc://") {
                         url_str.clone()
                     } else {
                         use std::path::Path;
@@ -300,7 +312,10 @@ pub extern "C" fn purple_matrix_rust_send_sticker(user_id: *const c_char, room_i
                              if let Ok(bytes) = std::fs::read(path) {
                                  let mime = mime_guess::from_path(path).first_or_octet_stream();
                                  if let Ok(response) = client.media().upload(&mime, bytes, None).await {
-                                     response.content_uri.to_string()
+                                     let mxc = response.content_uri.to_string();
+                                     let mut cache = STICKER_MXC_CACHE.lock().unwrap();
+                                     cache.insert(url_str.clone(), mxc.clone());
+                                     mxc
                                  } else {
                                      log::error!("Failed to upload sticker file");
                                      return;
@@ -313,6 +328,8 @@ pub extern "C" fn purple_matrix_rust_send_sticker(user_id: *const c_char, room_i
                              url_str.clone()
                         }
                     };
+                    
+                    log::info!("Sending sticker to {}: {}", room_id_str, mxc_uri);
 
                     let uri = match <OwnedMxcUri>::try_from(mxc_uri.as_str()) {
                         Ok(u) => u,

@@ -5,76 +5,12 @@
 #include <libpurple/util.h>
 #include <libpurple/accountopt.h>
 #include <libpurple/prpl.h>
+#include <libpurple/debug.h>
+#include <libpurple/notify.h>
+#include <libpurple/request.h>
 #include <libpurple/version.h>
 #include <string.h>
-#include <stdlib.h>
-
-static int next_chat_id = 1;
-
-int get_chat_id(const char *room_id) {
-  if (!room_id_map) {
-    room_id_map = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
-  }
-  gpointer val = g_hash_table_lookup(room_id_map, room_id);
-  if (val) return GPOINTER_TO_INT(val);
-  int new_id = next_chat_id++;
-  g_hash_table_insert(room_id_map, g_strdup(room_id), GINT_TO_POINTER(new_id));
-  return new_id;
-}
-
-gboolean is_virtual_room_id(const char *room_id) {
-  return room_id && strchr(room_id, '|') != NULL;
-}
-
-char *dup_base_room_id(const char *room_id) {
-  if (!room_id) return NULL;
-  const char *sep = strchr(room_id, '|');
-  if (!sep) return g_strdup(room_id);
-  return g_strndup(room_id, (gsize)(sep - room_id));
-}
-
-char *derive_base_group_from_threads_group(const char *group_name) {
-  if (!group_name || !*group_name) return g_strdup("Matrix Rooms");
-  const char *threads = strstr(group_name, " / Threads");
-  if (!threads) return g_strdup(group_name);
-  char *base = g_strndup(group_name, (gsize)(threads - group_name));
-  char *last_sep = g_strrstr(base, " / ");
-  if (last_sep) *last_sep = '\0';
-  if (!*base) { g_free(base); return g_strdup("Matrix Rooms"); }
-  return base;
-}
-
-char *sanitize_markup_text(const char *input) {
-  if (!input) return NULL;
-  GString *out = g_string_new("");
-  gboolean in_tag = FALSE;
-  for (const char *p = input; *p; p++) {
-    if (*p == '<') in_tag = TRUE;
-    else if (*p == '>') in_tag = FALSE;
-    else if (!in_tag) g_string_append_c(out, *p);
-  }
-  return g_string_free(out, FALSE);
-}
-
-void matrix_request_field_set_help_string(PurpleRequestField *field, const char *hint) {
-  (void)field; (void)hint;
-}
-
-PurpleAccount *find_matrix_account(void) {
-  GList *accts = purple_accounts_get_all();
-  while (accts) {
-    PurpleAccount *a = (PurpleAccount *)accts->data;
-    if (a && purple_account_get_protocol_id(a) && strcmp(purple_account_get_protocol_id(a), "prpl-matrix-rust") == 0) return a;
-    accts = accts->next;
-  }
-  return NULL;
-}
-
-char *matrix_get_chat_name(GHashTable *components) {
-  if (!components) return NULL;
-  const char *room_id = g_hash_table_lookup(components, "room_id");
-  return room_id ? g_strdup(room_id) : NULL;
-}
+#include <time.h>
 
 static GHashTable *thread_lists = NULL;
 
@@ -95,6 +31,7 @@ static void free_thread_list(GList *list) {
 }
 
 typedef struct {
+  char *user_id;
   char *room_id;
   char *thread_root_id;
   char *latest_msg;
@@ -115,19 +52,19 @@ static void thread_search_result_cb(PurpleConnection *gc, GList *row, gpointer u
   }
 }
 
-static gboolean thread_list_ui_idle_cb(gpointer user_data) {
-  char *room_id = (char *)user_data;
-  PurpleAccount *account = find_matrix_account();
-  if (!thread_lists || !room_id) { if (room_id) g_free(room_id); return FALSE; }
-  GList *list = g_hash_table_lookup(thread_lists, room_id);
+static gboolean thread_list_ui_idle_cb(gpointer data) {
+  ThreadData *d = (ThreadData *)data;
+  PurpleAccount *account = find_matrix_account_by_id(d->user_id);
+  if (!thread_lists || !d->room_id || !account) { if (d->room_id) g_free(d->room_id); g_free(d->user_id); g_free(d); return FALSE; }
+  GList *list = g_hash_table_lookup(thread_lists, d->room_id);
   if (!list) {
-    purple_notify_info(my_plugin, "Threads", "No threads found", "No active threads were found.");
-    g_free(room_id); return FALSE;
+    purple_notify_info(my_plugin, "Thread Discovery", "No threads found", "No active threads were found in the recent history of this room.");
+    g_free(d->user_id); g_free(d->room_id); g_free(d); return FALSE;
   }
   PurpleNotifySearchResults *results = purple_notify_searchresults_new();
   purple_notify_searchresults_column_add(results, purple_notify_searchresults_column_new("Topic / Latest Message"));
   purple_notify_searchresults_column_add(results, purple_notify_searchresults_column_new("Replies"));
-  purple_notify_searchresults_column_add(results, purple_notify_searchresults_column_new("ID"));
+  purple_notify_searchresults_column_add(results, purple_notify_searchresults_column_new("Root Event ID"));
   purple_notify_searchresults_button_add(results, PURPLE_NOTIFY_BUTTON_CONTINUE, thread_search_result_cb);
   for (GList *it = list; it; it = it->next) {
     MatrixThreadInfo *info = (MatrixThreadInfo *)it->data;
@@ -139,9 +76,9 @@ static gboolean thread_list_ui_idle_cb(gpointer user_data) {
       purple_notify_searchresults_row_add(results, row);
     }
   }
-  purple_notify_searchresults(purple_account_get_connection(account), "Active Threads", "Room Threads", "Select a thread to open it.", results, notify_close_free_cb, g_strdup(room_id));
-  g_hash_table_remove(thread_lists, room_id);
-  g_free(room_id);
+  purple_notify_searchresults(purple_account_get_connection(account), "Active Room Threads", "Thread Selection Wizard", "Please select a thread from the list below to open it in a new conversation tab.", results, notify_close_free_cb, g_strdup(d->room_id));
+  g_hash_table_remove(thread_lists, d->room_id);
+  g_free(d->user_id); g_free(d->room_id); g_free(d);
   return FALSE;
 }
 
@@ -151,7 +88,8 @@ static gboolean process_thread_item_cb(gpointer user_data) {
   if (!thread_lists) thread_lists = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)free_thread_list);
   
   if (d->thread_root_id == NULL) {
-    g_idle_add(thread_list_ui_idle_cb, g_strdup(d->room_id));
+    g_idle_add(thread_list_ui_idle_cb, d);
+    return FALSE;
   } else if (d->room_id) {
     MatrixThreadInfo *info = g_new0(MatrixThreadInfo, 1);
     info->root_id = g_strdup(d->thread_root_id);
@@ -160,35 +98,43 @@ static gboolean process_thread_item_cb(gpointer user_data) {
     list = g_list_append(list, info);
     g_hash_table_insert(thread_lists, g_strdup(d->room_id), list);
   }
-  g_free(d->room_id); g_free(d->thread_root_id); g_free(d->latest_msg); g_free(d);
+  g_free(d->user_id); g_free(d->room_id); g_free(d->thread_root_id); g_free(d->latest_msg); g_free(d);
   return FALSE;
 }
 
-void thread_list_cb(const char *room_id, const char *thread_root_id, const char *latest_msg, guint64 count, guint64 ts) {
+void thread_list_cb(const char *user_id, const char *room_id, const char *thread_root_id, const char *latest_msg, guint64 count, guint64 ts) {
   ThreadData *d = g_new0(ThreadData, 1);
-  d->room_id = g_strdup(room_id); d->thread_root_id = g_strdup(thread_root_id); d->latest_msg = g_strdup(latest_msg); d->count = count;
+  d->user_id = g_strdup(user_id); d->room_id = g_strdup(room_id); d->thread_root_id = g_strdup(thread_root_id); d->latest_msg = g_strdup(latest_msg); d->count = count;
   g_idle_add(process_thread_item_cb, d);
 }
 
 static GHashTable *poll_lists = NULL;
 typedef struct { char *event_id; char *question; char *sender; char *options_str; } MatrixPollInfo;
 static void free_matrix_poll_info(MatrixPollInfo *info) {
-  if (!info) return; g_free(info->event_id); g_free(info->question); g_free(info->sender); g_free(info->options_str); g_free(info);
+  if (!info) return;
+  g_free(info->event_id);
+  g_free(info->question);
+  g_free(info->sender);
+  g_free(info->options_str);
+  g_free(info);
 }
 static void free_poll_list(GList *list) { g_list_free_full(list, (GDestroyNotify)free_matrix_poll_info); }
 
 static void submit_vote_cb(void *user_data, const char *index_str) {
   char *data_str = (char *)user_data; char *sep = strchr(data_str, ' ');
   if (sep && index_str && *index_str) {
-    *sep = '\0'; char *event_id = data_str; char *room_id = sep + 1;
-    PurpleAccount *account = find_matrix_account();
-    purple_matrix_rust_poll_vote(purple_account_get_username(account), room_id, event_id, (guint64)atoll(index_str));
+    *sep = '\0'; char *event_id = data_str; char *user_id_room_id = sep + 1;
+    char *sep2 = strchr(user_id_room_id, ' ');
+    if (sep2) {
+        *sep2 = '\0'; char *user_id = user_id_room_id; char *room_id = sep2 + 1;
+        purple_matrix_rust_poll_vote(user_id, room_id, event_id, (guint64)atoll(index_str));
+    }
   }
   g_free(data_str);
 }
 
 static void vote_on_selected_poll_step2_cb(void *user_data, PurpleRequestFields *fields) {
-  char *room_id = (char *)user_data;
+  char *combined_context = (char *)user_data; // "user_id room_id"
   PurpleRequestField *f = purple_request_fields_get_field(fields, "poll");
   GList *sel = purple_request_field_list_get_selected(f);
   if (sel) {
@@ -196,21 +142,31 @@ static void vote_on_selected_poll_step2_cb(void *user_data, PurpleRequestFields 
     char *dup = g_strdup(combined); char *sep = strchr(dup, '|');
     if (sep) {
       *sep = '\0'; char *event_id = dup; char *options_str = sep + 1;
-      char *prompt = g_strdup_printf("Options:\n%s\n\nEnter the index (0 for first, 1 for second...)", options_str);
-      char *next_data = g_strdup_printf("%s %s", event_id, room_id);
-      purple_request_input(find_matrix_account(), "Cast Vote", "Select Option", prompt, "0", FALSE, FALSE, NULL, "_Vote", G_CALLBACK(submit_vote_cb), "_Cancel", NULL, find_matrix_account(), NULL, NULL, next_data);
+      char *prompt = g_strdup_printf("Options:\n%s", options_str);
+      char *next_data = g_strdup_printf("%s %s", event_id, combined_context);
+      purple_request_input(find_matrix_account(), "Poll Voting Wizard", "Select Option", prompt, "0", FALSE, FALSE, NULL, "_Vote", G_CALLBACK(submit_vote_cb), "_Cancel", NULL, find_matrix_account(), NULL, NULL, next_data);
       g_free(prompt);
     }
     g_free(dup);
   }
-  g_free(room_id);
+  g_free(combined_context);
 }
 
-static gboolean poll_list_ui_idle_cb(gpointer user_data) {
-  char *room_id = (char *)user_data;
-  if (!poll_lists || !room_id) { if (room_id) g_free(room_id); return FALSE; }
-  GList *list = g_hash_table_lookup(poll_lists, room_id);
-  if (!list) { purple_notify_info(my_plugin, "Polls", "No active polls found", "No polls were found in recent history."); g_free(room_id); return FALSE; }
+typedef struct {
+  char *user_id;
+  char *room_id;
+  char *event_id;
+  char *sender;
+  char *question;
+  char *options_str;
+} PollData;
+
+static gboolean poll_list_ui_idle_cb(gpointer data) {
+  PollData *d = (PollData *)data;
+  PurpleAccount *account = find_matrix_account_by_id(d->user_id);
+  if (!poll_lists || !d->room_id || !account) { if (d->room_id) g_free(d->room_id); g_free(d->user_id); g_free(d); return FALSE; }
+  GList *list = g_hash_table_lookup(poll_lists, d->room_id);
+  if (!list) { purple_notify_info(my_plugin, "Poll Discovery", "No active polls found", "No polls were found in the recent history of this room."); g_free(d->user_id); g_free(d->room_id); g_free(d); return FALSE; }
   PurpleRequestFields *fields = purple_request_fields_new();
   PurpleRequestFieldGroup *group = purple_request_field_group_new("Available Polls");
   purple_request_fields_add_group(fields, group);
@@ -224,17 +180,10 @@ static gboolean poll_list_ui_idle_cb(gpointer user_data) {
       purple_request_field_list_add(f, label, value); g_free(label);
     }
   }
-  purple_request_fields(find_matrix_account(), "Poll Voting Wizard", "Active Polls", "Select a poll to vote on and click Select.", fields, "_Select", G_CALLBACK(vote_on_selected_poll_step2_cb), "_Cancel", NULL, find_matrix_account(), NULL, NULL, g_strdup(room_id));
-  g_hash_table_remove(poll_lists, room_id); g_free(room_id); return FALSE;
+  char *ctx = g_strdup_printf("%s %s", d->user_id, d->room_id);
+  purple_request_fields(account, "Poll Voting Wizard", "Select a Poll", "Please select a poll from the list below to cast your vote.", fields, "_Select", G_CALLBACK(vote_on_selected_poll_step2_cb), "_Cancel", NULL, account, NULL, NULL, ctx);
+  g_hash_table_remove(poll_lists, d->room_id); g_free(d->user_id); g_free(d->room_id); g_free(d); return FALSE;
 }
-
-typedef struct {
-  char *room_id;
-  char *event_id;
-  char *sender;
-  char *question;
-  char *options_str;
-} PollData;
 
 static gboolean process_poll_item_cb(gpointer user_data) {
   PollData *d = (PollData *)user_data;
@@ -242,7 +191,8 @@ static gboolean process_poll_item_cb(gpointer user_data) {
   if (!poll_lists) poll_lists = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)free_poll_list);
   
   if (d->event_id == NULL) {
-    g_idle_add(poll_list_ui_idle_cb, g_strdup(d->room_id));
+    g_idle_add(poll_list_ui_idle_cb, d);
+    return FALSE;
   } else if (d->room_id) {
     MatrixPollInfo *info = g_new0(MatrixPollInfo, 1);
     info->event_id = g_strdup(d->event_id);
@@ -253,38 +203,48 @@ static gboolean process_poll_item_cb(gpointer user_data) {
     list = g_list_append(list, info);
     g_hash_table_insert(poll_lists, g_strdup(d->room_id), list);
   }
-  g_free(d->room_id); g_free(d->event_id); g_free(d->sender); g_free(d->question); g_free(d->options_str); g_free(d);
+  g_free(d->user_id); g_free(d->room_id); g_free(d->event_id); g_free(d->sender); g_free(d->question); g_free(d->options_str); g_free(d);
   return FALSE;
 }
 
-void poll_list_cb(const char *room_id, const char *event_id, const char *sender, const char *question, const char *options_str) {
+void poll_list_cb(const char *user_id, const char *room_id, const char *event_id, const char *sender, const char *question, const char *options_str) {
   PollData *d = g_new0(PollData, 1);
-  d->room_id = g_strdup(room_id); d->event_id = g_strdup(event_id); d->sender = g_strdup(sender); d->question = g_strdup(question); d->options_str = g_strdup(options_str);
+  d->user_id = g_strdup(user_id); d->room_id = g_strdup(room_id); d->event_id = g_strdup(event_id); d->sender = g_strdup(sender); d->question = g_strdup(question); d->options_str = g_strdup(options_str);
   g_idle_add(process_poll_item_cb, d);
 }
 
 static GHashTable *search_results_map = NULL;
 typedef struct { char *sender; char *message; char *timestamp_str; } MatrixSearchResultInfo;
 static void free_search_result_info(MatrixSearchResultInfo *info) {
-  if (!info) return; g_free(info->sender); g_free(info->message); g_free(info->timestamp_str); g_free(info);
+  if (!info) return;
+  g_free(info->sender);
+  g_free(info->message);
+  g_free(info->timestamp_str);
+  g_free(info);
 }
 static void free_search_list(GList *list) { g_list_free_full(list, (GDestroyNotify)free_search_result_info); }
 
-typedef struct { char *room_id; char *term; } SearchUIData;
+typedef struct {
+  char *user_id;
+  char *room_id;
+  char *sender;
+  char *message;
+  char *timestamp_str;
+} SearchData;
 
-static gboolean search_ui_idle_cb(gpointer user_data) {
-  SearchUIData *ui_data = (SearchUIData *)user_data;
-  PurpleAccount *account = find_matrix_account();
-  if (!search_results_map) return FALSE;
-  GList *list = g_hash_table_lookup(search_results_map, ui_data->room_id);
+static gboolean search_ui_idle_cb(gpointer data) {
+  SearchData *d = (SearchData *)data;
+  PurpleAccount *account = find_matrix_account_by_id(d->user_id);
+  if (!search_results_map || !d->room_id || !account) { if (d->room_id) g_free(d->room_id); g_free(d->user_id); g_free(d); return FALSE; }
+  GList *list = g_hash_table_lookup(search_results_map, d->room_id);
   if (!list) {
-    purple_notify_info(my_plugin, "Search Results", "No matches found", "No messages matched your search term.");
-    g_free(ui_data->room_id); g_free(ui_data->term); g_free(ui_data); return FALSE;
+    purple_notify_info(my_plugin, "Message Search", "No results found", "No messages matched your search term in this room.");
+    g_free(d->user_id); g_free(d->room_id); g_free(d); return FALSE;
   }
   PurpleNotifySearchResults *results = purple_notify_searchresults_new();
   purple_notify_searchresults_column_add(results, purple_notify_searchresults_column_new("Date"));
   purple_notify_searchresults_column_add(results, purple_notify_searchresults_column_new("Sender"));
-  purple_notify_searchresults_column_add(results, purple_notify_searchresults_column_new("Message"));
+  purple_notify_searchresults_column_add(results, purple_notify_searchresults_column_new("Message Content"));
   for (GList *it = list; it; it = it->next) {
     MatrixSearchResultInfo *info = (MatrixSearchResultInfo *)it->data;
     GList *row = NULL;
@@ -293,38 +253,32 @@ static gboolean search_ui_idle_cb(gpointer user_data) {
     row = g_list_append(row, g_strdup(info->message));
     purple_notify_searchresults_row_add(results, row);
   }
-  char *title = g_strdup_printf("Search: %s", ui_data->term);
-  purple_notify_searchresults(purple_account_get_connection(account), title, "Search Results", "Matches found in history:", results, notify_close_free_cb, NULL);
-  g_free(title); g_hash_table_remove(search_results_map, ui_data->room_id);
-  g_free(ui_data->room_id); g_free(ui_data->term); g_free(ui_data); return FALSE;
+  purple_notify_searchresults(purple_account_get_connection(account), "Search Results", "History Search", "The following messages were found in the room history.", results, notify_close_free_cb, NULL);
+  g_hash_table_remove(search_results_map, d->room_id);
+  g_free(d->user_id); g_free(d->room_id); g_free(d);
+  return FALSE;
 }
-
-typedef struct {
-  char *room_id;
-  char *sender;
-  char *message;
-  char *timestamp_str;
-} SearchData;
 
 static gboolean process_search_item_cb(gpointer user_data) {
   SearchData *d = (SearchData *)user_data;
-  if (!search_results_map) search_results_map = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)free_search_list);
+  if (!search_results_map) search_results_map = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)free_search_result_info);
   if (d->sender == NULL) {
-    g_idle_add(search_ui_idle_cb, g_strdup(d->room_id));
-  } else {
+    g_idle_add(search_ui_idle_cb, d);
+    return FALSE;
+  } else if (d->room_id) {
     MatrixSearchResultInfo *info = g_new0(MatrixSearchResultInfo, 1);
     info->sender = g_strdup(d->sender); info->message = g_strdup(d->message); info->timestamp_str = g_strdup(d->timestamp_str);
     GList *list = g_hash_table_lookup(search_results_map, d->room_id);
     list = g_list_append(list, info);
     g_hash_table_insert(search_results_map, g_strdup(d->room_id), list);
   }
-  g_free(d->room_id); g_free(d->sender); g_free(d->message); g_free(d->timestamp_str); g_free(d);
+  g_free(d->user_id); g_free(d->room_id); g_free(d->sender); g_free(d->message); g_free(d->timestamp_str); g_free(d);
   return FALSE;
 }
 
-void search_result_cb(const char *room_id, const char *sender, const char *message, const char *timestamp_str) {
+void search_result_cb(const char *user_id, const char *room_id, const char *sender, const char *message, const char *timestamp_str) {
   SearchData *d = g_new0(SearchData, 1);
-  d->room_id = g_strdup(room_id); d->sender = g_strdup(sender); d->message = g_strdup(message); d->timestamp_str = g_strdup(timestamp_str);
+  d->user_id = g_strdup(user_id); d->room_id = g_strdup(room_id); d->sender = g_strdup(sender); d->message = g_strdup(message); d->timestamp_str = g_strdup(timestamp_str);
   g_idle_add(process_search_item_cb, d);
 }
 
@@ -333,4 +287,105 @@ guint32 get_history_page_size(PurpleAccount *account) {
   long n = raw ? strtol(raw, NULL, 10) : 50;
   if (n < 1) n = 1; if (n > 500) n = 500;
   return (guint32)n;
+}
+
+PurpleAccount *find_matrix_account_by_id(const char *user_id) {
+  if (!user_id || strlen(user_id) == 0) return find_matrix_account();
+  
+  GList *l;
+  for (l = purple_accounts_get_all(); l != NULL; l = l->next) {
+    PurpleAccount *account = (PurpleAccount *)l->data;
+    if (strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
+      const char *username = purple_account_get_username(account);
+      if (g_strcmp0(username, user_id) == 0) {
+          return account;
+      }
+      /* Fuzzy match: check if username is a substring or vice versa (common for localpart vs full ID) */
+      if (strstr(user_id, username) || strstr(username, user_id)) {
+          return account;
+      }
+    }
+  }
+  
+  return find_matrix_account();
+}
+
+PurpleAccount *find_matrix_account(void) {
+  GList *accounts = purple_accounts_get_all();
+  for (GList *l = accounts; l != NULL; l = l->next) {
+    PurpleAccount *account = (PurpleAccount *)l->data;
+    if (strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
+      if (purple_account_is_connected(account)) return account;
+    }
+  }
+  for (GList *l = accounts; l != NULL; l = l->next) {
+    PurpleAccount *account = (PurpleAccount *)l->data;
+    if (strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) return account;
+  }
+  return NULL;
+}
+
+int get_chat_id(const char *room_id) {
+  if (!room_id) return 0;
+  if (!room_id_map) room_id_map = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+  gpointer val = g_hash_table_lookup(room_id_map, room_id);
+  if (val) return GPOINTER_TO_INT(val);
+  static int next_id = 1;
+  int id = next_id++;
+  g_hash_table_insert(room_id_map, g_strdup(room_id), GINT_TO_POINTER(id));
+  return id;
+}
+
+gboolean is_virtual_room_id(const char *room_id) { return (room_id && strchr(room_id, '|')); }
+
+char *dup_base_room_id(const char *room_id) {
+  if (!room_id) return NULL;
+  char *sep = strchr(room_id, '|');
+  if (sep) return g_strndup(room_id, sep - room_id);
+  return g_strdup(room_id);
+}
+
+char *derive_base_group_from_threads_group(const char *group_name) {
+  if (!group_name) return g_strdup("Matrix Rooms");
+  char *sep = strstr(group_name, " / ");
+  if (sep) return g_strndup(group_name, sep - group_name);
+  return g_strdup(group_name);
+}
+
+char *sanitize_markup_text(const char *input) {
+  if (!input) return g_strdup("");
+  char *tmp = purple_markup_strip_html(input);
+  char *ret = g_strdup(tmp);
+  g_free(tmp);
+  return ret;
+}
+
+char *strip_emojis(const char *input) {
+    if (!input) return NULL;
+    if (!g_utf8_validate(input, -1, NULL)) {
+        purple_debug_warning("matrix", "strip_emojis: Invalid UTF-8 string detected, returning empty string.\n");
+        return g_strdup("");
+    }
+    GString *out = g_string_new(NULL);
+    const char *p = input;
+    while (*p) {
+        gunichar c = g_utf8_get_char(p);
+        if (c < 0x10000) {
+            // Keep only characters in the Basic Multilingual Plane
+            g_string_append_unichar(out, c);
+        } else {
+            // Skip emojis and other high-plane chars
+            g_string_append(out, " ");
+        }
+        p = g_utf8_next_char(p);
+    }
+    return g_string_free(out, FALSE);
+}
+
+void matrix_request_field_set_help_string(PurpleRequestField *field, const char *hint) {
+}
+
+char *matrix_get_chat_name(GHashTable *components) {
+  const char *room_id = g_hash_table_lookup(components, "room_id");
+  return room_id ? g_strdup(room_id) : NULL;
 }

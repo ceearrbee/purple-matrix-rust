@@ -5,19 +5,19 @@
 #include <stdbool.h>
 
 // Rust FFI declarations
-extern void purple_matrix_rust_init_invite_cb(void (*cb)(const char *, const char *));
+extern void purple_matrix_rust_init_invite_cb(void (*cb)(const char *user_id, const char *room_id, const char *inviter));
 extern void purple_matrix_rust_send_im(const char *account_user_id, const char *target_user_id, const char *text);
 extern void purple_matrix_rust_fetch_room_members(const char *user_id, const char *room_id);
 extern void purple_matrix_rust_send_file(const char *user_id, const char *room_id, const char *filename);
 extern void purple_matrix_rust_init(void);
-extern void purple_matrix_rust_set_msg_callback(void (*cb)(const char *sender, const char *msg, const char *room_id, const char *thread_root_id, const char *event_id, guint64 timestamp));
+extern void purple_matrix_rust_set_msg_callback(void (*cb)(const char *user_id, const char *sender, const char *msg, const char *room_id, const char *thread_root_id, const char *event_id, guint64 timestamp));
 extern int purple_matrix_rust_login(const char *user, const char *pass, const char *hs, const char *data_dir);
 extern void purple_matrix_rust_send_message(const char *user_id, const char *room_id, const char *text);
-extern void purple_matrix_rust_set_typing_callback(void (*cb)(const char *room_id, const char *user_id, bool is_typing));
+extern void purple_matrix_rust_set_typing_callback(void (*cb)(const char *user_id, const char *room_id, const char *who, bool is_typing));
 extern void purple_matrix_rust_send_typing(const char *user_id, const char *room_id, bool is_typing);
-extern void purple_matrix_rust_set_room_joined_callback(void (*cb)(const char *room_id, const char *name, const char *group_name, const char *avatar_url, const char *topic, bool encrypted));
-extern void purple_matrix_rust_set_room_left_callback(void (*cb)(const char *room_id));
-extern void purple_matrix_rust_set_read_marker_callback(void (*cb)(const char *room_id, const char *event_id, const char *user_id));
+extern void purple_matrix_rust_set_room_joined_callback(void (*cb)(const char *user_id, const char *room_id, const char *name, const char *group_name, const char *avatar_url, const char *topic, bool encrypted));
+extern void purple_matrix_rust_set_room_left_callback(void (*cb)(const char *user_id, const char *room_id));
+extern void purple_matrix_rust_set_read_marker_callback(void (*cb)(const char *user_id, const char *room_id, const char *event_id, const char *who));
 extern void purple_matrix_rust_join_room(const char *user_id, const char *room_id);
 extern void purple_matrix_rust_leave_room(const char *user_id, const char *room_id);
 extern void purple_matrix_rust_invite_user(const char *user_id, const char *room_id, const char *invitee_id);
@@ -44,11 +44,11 @@ extern void purple_matrix_rust_unignore_user(const char *user_id, const char *ig
 extern void purple_matrix_rust_set_avatar_bytes(const char *user_id, const unsigned char *data, size_t len);
 extern void purple_matrix_rust_deactivate_account(bool erase_data);
 extern void purple_matrix_rust_fetch_public_rooms_for_list(const char *user_id);
-extern void purple_matrix_rust_set_roomlist_add_callback(void (*cb)(const char *name, const char *id, const char *topic, guint64 count));
-extern void purple_matrix_rust_set_room_preview_callback(void (*cb)(const char *room_id_or_alias, const char *html_body));
-extern void purple_matrix_rust_set_thread_list_callback(void (*cb)(const char *room_id, const char *thread_root_id, const char *latest_msg, guint64 count, guint64 ts));
+extern void purple_matrix_rust_set_roomlist_add_callback(void (*cb)(const char *user_id, const char *name, const char *id, const char *topic, guint64 count));
+extern void purple_matrix_rust_set_room_preview_callback(void (*cb)(const char *user_id, const char *room_id_or_alias, const char *html_body));
+extern void purple_matrix_rust_set_thread_list_callback(void (*cb)(const char *user_id, const char *room_id, const char *thread_root_id, const char *latest_msg, guint64 count, guint64 ts));
 extern void purple_matrix_rust_list_threads(const char *user_id, const char *room_id);
-extern void purple_matrix_rust_set_poll_list_callback(void (*cb)(const char *room_id, const char *event_id, const char *sender, const char *question, const char *options_str));
+extern void purple_matrix_rust_set_poll_list_callback(void (*cb)(const char *user_id, const char *room_id, const char *event_id, const char *sender, const char *question, const char *options_str));
 extern void purple_matrix_rust_get_active_polls(const char *user_id, const char *room_id);
 extern void purple_matrix_rust_send_read_receipt(const char *user_id, const char *room_id, const char *event_id);
 extern void purple_matrix_rust_send_reaction(const char *user_id, const char *room_id, const char *event_id, const char *key);
@@ -91,16 +91,16 @@ extern void purple_matrix_rust_get_my_profile(const char *user_id);
 extern void purple_matrix_rust_set_room_avatar(const char *user_id, const char *room_id, const char *filename);
 
 // New callbacks
-extern void purple_matrix_rust_init_connected_cb(void (*cb)(void));
-extern void purple_matrix_rust_init_login_failed_cb(void (*cb)(const char *));
-extern void purple_matrix_rust_set_show_user_info_callback(void (*cb)(const char *, const char *, const char *, bool));
-extern void purple_matrix_rust_set_chat_topic_callback(void (*cb)(const char *, const char *, const char *));
-extern void purple_matrix_rust_set_chat_user_callback(void (*cb)(const char *, const char *, bool, const char *, const char *));
-extern void purple_matrix_rust_set_presence_callback(void (*cb)(const char *, bool));
+extern void purple_matrix_rust_init_connected_cb(void (*cb)(const char *user_id));
+extern void purple_matrix_rust_init_login_failed_cb(void (*cb)(const char *reason));
+extern void purple_matrix_rust_set_show_user_info_callback(void (*cb)(const char *user_id, const char *display_name, const char *avatar_url, const char *target_user_id, bool is_online));
+extern void purple_matrix_rust_set_chat_topic_callback(void (*cb)(const char *user_id, const char *room_id, const char *topic, const char *sender));
+extern void purple_matrix_rust_set_chat_user_callback(void (*cb)(const char *user_id, const char *room_id, const char *member_id, bool add, const char *alias, const char *avatar_path));
+extern void purple_matrix_rust_set_presence_callback(void (*cb)(const char *user_id, const char *target_user_id, bool is_online));
 extern void purple_matrix_rust_init_verification_cbs(
-    void (*req_cb)(const char *, const char *),
-    void (*emoji_cb)(const char *, const char *, const char *),
-    void (*qr_cb)(const char *, const char *)
+    void (*req_cb)(const char *user_id, const char *target, const char *flow_id),
+    void (*emoji_cb)(const char *user_id, const char *target, const char *flow_id, const char *emojis),
+    void (*qr_cb)(const char *user_id, const char *target, const char *html_data)
 );
 extern void purple_matrix_rust_accept_sas(const char *user_id, const char *target, const char *flow_id);
 extern void purple_matrix_rust_confirm_sas(const char *user_id, const char *target, const char *flow_id, bool is_match);
@@ -109,9 +109,12 @@ extern void purple_matrix_rust_get_my_profile(const char *user_id);
 extern void purple_matrix_rust_set_status(const char *user_id, int status, const char *msg);
 
 extern void purple_matrix_rust_search_messages(const char *user_id, const char *room_id, const char *term);
-extern void purple_matrix_rust_set_search_callback(void (*cb)(const char *room_id, const char *sender, const char *message, const char *timestamp_str));
+extern void purple_matrix_rust_set_search_callback(void (*cb)(const char *user_id, const char *room_id, const char *sender, const char *message, const char *timestamp_str));
+extern void purple_matrix_rust_set_room_mute_callback(void (*cb)(const char *user_id, const char *room_id, bool muted));
+extern void purple_matrix_rust_set_room_tag_callback(void (*cb)(const char *user_id, const char *room_id, const char *tag));
 
-// UI integration FFI
-extern void purple_matrix_rust_ui_show_dashboard(const char *room_id);
+extern void purple_matrix_rust_get_space_hierarchy(const char *user_id, const char *space_id);
+extern void purple_matrix_rust_search_room_members(const char *user_id, const char *room_id, const char *term);
+extern void purple_matrix_rust_search_stickers(const char *user_id, const char *term);
 
 #endif // MATRIX_FFI_WRAPPERS_H

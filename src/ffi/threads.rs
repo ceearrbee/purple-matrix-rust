@@ -25,10 +25,11 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
                     if let Ok(threads) = room.list_threads(options).await {
                         let guard = THREAD_LIST_CALLBACK.lock().unwrap();
                         if let Some(cb) = *guard {
-                            let c_room_id = CString::new(room_id_str.clone()).unwrap_or_default();
+                            let c_user_id = CString::new(crate::sanitize_string(&user_id_str)).unwrap_or_default();
+                            let c_room_id = CString::new(crate::sanitize_string(&room_id_str)).unwrap_or_default();
                             for thread_root in threads.chunk {
                                 let root_id = thread_root.event_id().map(|e| e.to_string()).unwrap_or_default();
-                                let c_root_id = CString::new(root_id).unwrap_or_default();
+                                let c_root_id = CString::new(crate::sanitize_string(&root_id)).unwrap_or_default();
                                 
                                 // Get a summary from the latest message in the thread
                                 let mut body = String::new();
@@ -45,18 +46,19 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
                                     body = "No message summary available".to_string();
                                 }
 
-                                let c_msg = CString::new(body).unwrap_or_default();
-                                cb(c_room_id.as_ptr(), c_root_id.as_ptr(), c_msg.as_ptr(), 0, 0);
+                                let c_msg = CString::new(crate::sanitize_string(&body)).unwrap_or_default();
+                                cb(c_user_id.as_ptr(), c_room_id.as_ptr(), c_root_id.as_ptr(), c_msg.as_ptr(), 0, 0);
                             }
                             // End marker
-                            cb(c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), 0, 0);
+                            cb(c_user_id.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), 0, 0);
                         }
                     } else {
                         log::error!("list_threads API failed for {}", room_id_str);
-                        let c_room_id = CString::new(room_id_str).unwrap_or_default();
+                        let c_user_id = CString::new(crate::sanitize_string(&user_id_str)).unwrap_or_default();
+                        let c_room_id = CString::new(crate::sanitize_string(&room_id_str)).unwrap_or_default();
                         let guard = THREAD_LIST_CALLBACK.lock().unwrap();
                         if let Some(cb) = *guard {
-                            cb(c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), 0, 0);
+                            cb(c_user_id.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), 0, 0);
                         }
                     }
                 }
@@ -65,8 +67,4 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
     });
 }
 
-#[no_mangle]
-pub extern "C" fn purple_matrix_rust_set_thread_list_callback(cb: ThreadListCallback) {
-    let mut guard = THREAD_LIST_CALLBACK.lock().unwrap();
-    *guard = Some(cb);
-}
+

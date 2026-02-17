@@ -180,8 +180,6 @@ pub extern "C" fn purple_matrix_rust_login(
 
     log::info!("Attempting login for {} at {}", username, homeserver);
     
-    // Spawn the login process on the runtime to avoid blocking the UI
-    // We return '2' (Pending) immediately.
     RUNTIME.spawn(async move {
         perform_login(username, password, homeserver, data_dir).await;
     });
@@ -278,6 +276,10 @@ fn safe_wipe_data_dir(path: &std::path::Path) {
     // Safety check: Ensure we are only wiping directories that look like our expected data path.
     // It must contain 'matrix_rust_data' and must not be a top-level system directory.
     if path_str.contains("matrix_rust_data") && path.components().count() > 3 {
+        if path.is_symlink() {
+            log::error!("Safety wipe BLOCKED: Path {:?} is a symlink.", path);
+            return;
+        }
         log::warn!("Safety wipe: Deleting directory {:?}", path);
         let _ = std::fs::remove_dir_all(path);
     } else {
@@ -333,7 +335,8 @@ async fn perform_login(username: String, password: String, homeserver: String, d
          let session_path = data_path.join("session.json");
          if let Some(json) = load_session_json_secure(&session_path, &username) {
               log::info!("Found potential session data for {}", username);
-              if let Ok(saved) = serde_json::from_str::<SavedSession>(&json) {
+              match serde_json::from_str::<SavedSession>(&json) {
+                  Ok(saved) => {
                        log::info!("Parsed saved session for {}, restoring...", saved.user_id);
                        
                        use matrix_sdk::authentication::matrix::MatrixSession;
@@ -356,7 +359,7 @@ async fn perform_login(username: String, password: String, homeserver: String, d
                                let load_settings = matrix_sdk::store::RoomLoadSettings::default(); 
                                
                                if let Err(e) = client.matrix_auth().restore_session(session, load_settings).await {
-                                   log::error!("Failed to restore session for {}: {:?}", username, e);
+                                   log::error!("Failed to restore session for {}: {:?}. Falling back to SSO.", username, e);
                                    // Fall through to Case C
                                } else {
                                    log::info!("Session successfully restored for {}!", username);
@@ -365,10 +368,12 @@ async fn perform_login(username: String, password: String, homeserver: String, d
                                }
                            }
                        } else {
-                           log::error!("Stored User ID is invalid: {}", saved.user_id);
+                           log::error!("Stored User ID is invalid: {}. Falling back to SSO.", saved.user_id);
                        }
-              } else {
-                  log::error!("Failed to deserialize saved session for {}", username);
+                  },
+                  Err(e) => {
+                      log::error!("Failed to deserialize saved session for {}: {:?}. Falling back to SSO.", username, e);
+                  }
               }
          } else {
              log::info!("No saved session found in keyring or file for {}", username);
@@ -382,7 +387,7 @@ async fn perform_login(username: String, password: String, homeserver: String, d
          return;
     }
 
-    log::warn!("No password and no valid saved session found for {}. Transitioning to SSO...", username);
+    log::warn!("No valid password or saved session found for {}. Transitioning to SSO...", username);
     start_sso_flow(client);
 }
 
@@ -395,7 +400,8 @@ async fn proceed_with_login(client: Client, username: String, password: String) 
                 finish_login_success(client).await;
             },
             Err(e) => {
-                report_login_failure(format!("Login failed: {:?}", e));
+                log::warn!("Password login failed: {:?}. Falling back to SSO as a last resort.", e);
+                start_sso_flow(client);
             }
         }
     } else {
@@ -455,7 +461,8 @@ async fn finish_login_success(client: Client) {
     {
          let guard = CONNECTED_CALLBACK.lock().unwrap();
          if let Some(cb) = *guard {
-              cb();
+              let c_user_id = CString::new(username).unwrap_or_default();
+              cb(c_user_id.as_ptr());
          }
     }
     sync_logic::start_sync_loop(client).await;

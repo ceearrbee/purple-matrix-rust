@@ -16,9 +16,8 @@ pub extern "C" fn purple_matrix_rust_poll_create(user_id: *const c_char, room_id
     with_client(&user_id_str.clone(), |client| {
         RUNTIME.spawn(async move {
             use matrix_sdk::ruma::RoomId;
-            use matrix_sdk::ruma::events::poll::start::{PollStartEventContent, PollAnswer, PollContentBlock, PollAnswers};
+            use matrix_sdk::ruma::events::poll::start::{PollAnswer, PollContentBlock, PollAnswers};
             use matrix_sdk::ruma::events::message::TextContentBlock;
-            use matrix_sdk::ruma::events::AnyMessageLikeEventContent;
             
             if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
                 if let Some(room) = client.get_room(rid) {
@@ -37,15 +36,9 @@ pub extern "C" fn purple_matrix_rust_poll_create(user_id: *const c_char, room_id
                          }
                          fallback_body.push_str("\n(Use a Matrix client that supports polls to vote)");
 
-                         use matrix_sdk::ruma::events::room::message::{RoomMessageEventContent, MessageType, TextMessageEventContent};
                          use matrix_sdk::ruma::events::poll::start::PollStartEventContent;
-                         
-                         let mut content = RoomMessageEventContent::new(MessageType::Text(TextMessageEventContent::plain(fallback_body)));
-                         // SDK 0.16.0 might not have Relation::PollStart yet in the helper, 
-                         // but we can try to send it as a custom event if the above is insufficient.
-                         // Actually, let's try sending it as a PollStart event but ensure it's fully spec-compliant.
-                         
                          use matrix_sdk::ruma::events::AnyMessageLikeEventContent;
+                         
                          let poll_content = PollStartEventContent::new(TextContentBlock::plain(question_str), poll);
                          let any_content = AnyMessageLikeEventContent::PollStart(poll_content);
 
@@ -112,12 +105,12 @@ pub extern "C" fn purple_matrix_rust_get_active_polls(user_id: *const c_char, ro
                                         let options: Vec<String> = ev.content.poll.answers.iter().map(|a| a.text.find_plain().unwrap_or("Option").to_string()).collect();
                                         let options_str = options.join(", ");
                                         
-                                        if let (Ok(c_room_id), Ok(c_event_id), Ok(c_sender), Ok(c_question), Ok(c_options)) =
-                                           (CString::new(room_id_str.clone()), CString::new(ev.event_id.as_str()), CString::new(ev.sender.as_str()), CString::new(question), CString::new(options_str))
+                                        if let (Ok(c_user_id), Ok(c_room_id), Ok(c_event_id), Ok(c_sender), Ok(c_question), Ok(c_options)) =
+                                           (CString::new(user_id_str.clone()), CString::new(room_id_str.clone()), CString::new(ev.event_id.as_str()), CString::new(ev.sender.as_str()), CString::new(question), CString::new(options_str))
                                         {
                                             let guard = POLL_LIST_CALLBACK.lock().unwrap();
                                             if let Some(cb) = *guard {
-                                                cb(c_room_id.as_ptr(), c_event_id.as_ptr(), c_sender.as_ptr(), c_question.as_ptr(), c_options.as_ptr());
+                                                cb(c_user_id.as_ptr(), c_room_id.as_ptr(), c_event_id.as_ptr(), c_sender.as_ptr(), c_question.as_ptr(), c_options.as_ptr());
                                             }
                                         }
                                     }
@@ -127,10 +120,10 @@ pub extern "C" fn purple_matrix_rust_get_active_polls(user_id: *const c_char, ro
                     }
                     
                     // End of list marker
-                    if let Ok(c_room_id) = CString::new(room_id_str) {
+                    if let (Ok(c_user_id), Ok(c_room_id)) = (CString::new(user_id_str), CString::new(room_id_str)) {
                         let guard = POLL_LIST_CALLBACK.lock().unwrap();
                         if let Some(cb) = *guard {
-                            cb(c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), std::ptr::null(), std::ptr::null());
+                            cb(c_user_id.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), std::ptr::null(), std::ptr::null());
                         }
                     }
                 }
@@ -139,8 +132,4 @@ pub extern "C" fn purple_matrix_rust_get_active_polls(user_id: *const c_char, ro
     });
 }
 
-#[no_mangle]
-pub extern "C" fn purple_matrix_rust_set_poll_list_callback(cb: PollListCallback) {
-    let mut guard = POLL_LIST_CALLBACK.lock().unwrap();
-    *guard = Some(cb);
-}
+

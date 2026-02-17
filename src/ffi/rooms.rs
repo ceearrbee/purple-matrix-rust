@@ -24,6 +24,7 @@ pub extern "C" fn purple_matrix_rust_fetch_room_members(user_id: *const c_char, 
                             let display_name = member.display_name().unwrap_or(user_id);
                             let avatar_url = member.avatar_url().map(|u| u.to_string()).unwrap_or_default();
                             
+                            let c_local_id = CString::new(user_id_str.clone()).unwrap_or_default();
                             let c_room_id = CString::new(room_id_str.clone()).unwrap_or_default();
                             let c_user_id = CString::new(user_id).unwrap_or_default();
                             let c_alias = CString::new(display_name).unwrap_or_default();
@@ -31,7 +32,7 @@ pub extern "C" fn purple_matrix_rust_fetch_room_members(user_id: *const c_char, 
 
                             let guard = CHAT_USER_CALLBACK.lock().unwrap();
                             if let Some(cb) = *guard {
-                                cb(c_room_id.as_ptr(), c_user_id.as_ptr(), true, c_alias.as_ptr(), c_avatar.as_ptr());
+                                cb(c_local_id.as_ptr(), c_room_id.as_ptr(), c_user_id.as_ptr(), true, c_alias.as_ptr(), c_avatar.as_ptr());
                             }
                         }
                     }
@@ -728,6 +729,7 @@ pub extern "C" fn purple_matrix_rust_search_room_members(user_id: *const c_char,
                             let m_id = member.user_id().as_str();
                             let display_name = member.display_name().unwrap_or(m_id).to_lowercase();
                             if m_id.to_lowercase().contains(&term_str) || display_name.contains(&term_str) {
+                                let c_local_id = CString::new(user_id_str.clone()).unwrap_or_default();
                                 let c_room_id = CString::new(room_id_str.clone()).unwrap_or_default();
                                 let c_user_id = CString::new(m_id).unwrap_or_default();
                                 let c_alias = CString::new(member.display_name().unwrap_or(m_id)).unwrap_or_default();
@@ -735,7 +737,7 @@ pub extern "C" fn purple_matrix_rust_search_room_members(user_id: *const c_char,
 
                                 let guard = CHAT_USER_CALLBACK.lock().unwrap();
                                 if let Some(cb) = *guard {
-                                    cb(c_room_id.as_ptr(), c_user_id.as_ptr(), true, c_alias.as_ptr(), c_avatar.as_ptr());
+                                    cb(c_local_id.as_ptr(), c_room_id.as_ptr(), c_user_id.as_ptr(), true, c_alias.as_ptr(), c_avatar.as_ptr());
                                 }
                             }
                         }
