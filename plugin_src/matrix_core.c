@@ -37,25 +37,8 @@ static void conversation_displayed_cb(PurpleConversation *conv) {
 static void conversation_created_cb(PurpleConversation *conv) {
   PurpleAccount *account = purple_conversation_get_account(conv);
   if (account && strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
-    /* Inject Welcome Banner - Temporarily disabled to debug crash */
-    /*
-    char *banner = g_strdup_printf(
-      "<div style=\"background-color: #e1eaf2; border: 1px solid #a3b8cc; padding: 8px; margin: 5px; font-family: sans-serif;\">"
-      "<b>Welcome to this Matrix Room!</b><br/>"
-      "<span style=\"font-size: smaller;\">Matrix supports advanced features like threads and polls.</span><br/>"
-      "<ul style=\"font-size: smaller; margin-top: 5px;\">"
-      "<li>Use <b>/thread &lt;msg&gt;</b> to reply in a new thread.</li>"
-      "<li>Use <b>/poll</b> to create a new poll.</li>"
-      "<li>Right-click the room in your buddy list for the <b>Room Dashboard</b>.</li>"
-      "</ul>"
-      "</div>"
-    );
-    purple_conversation_write(conv, "Matrix", banner, PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_NO_LOG, time(NULL));
-    g_free(banner);
-    */
-
     if (purple_account_get_bool(account, "auto_fetch_history_on_open", TRUE)) {
-      /* redundant call removed to prevent UI hammer */
+      purple_matrix_rust_fetch_history(purple_account_get_username(account), purple_conversation_get_name(conv));
     }
   }
 }
@@ -84,12 +67,6 @@ static void handle_reply_signal(const char *room_id, gpointer user_data) {
     if (conv) menu_action_reply_conv_cb(conv, NULL);
 }
 
-static void handle_thread_signal(const char *room_id, gpointer user_data) {
-    PurpleAccount *account = find_matrix_account();
-    PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
-    if (conv) menu_action_thread_conv_cb(conv, NULL);
-}
-
 static void handle_sticker_signal(const char *room_id, gpointer user_data) {
     PurpleAccount *account = find_matrix_account();
     PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
@@ -102,8 +79,15 @@ static void handle_poll_signal(const char *room_id, gpointer user_data) {
     if (conv) menu_action_poll_conv_cb(conv, NULL);
 }
 
+static void handle_list_threads_signal(const char *room_id, gpointer user_data) {
+    PurpleAccount *account = find_matrix_account();
+    if (account && room_id) {
+        purple_matrix_rust_list_threads(purple_account_get_username(account), room_id);
+    }
+}
+
 /**
- * Custom marshaller for UI actions.
+ * Custom marshallers for UI signals.
  */
 static void
 handle_ui_action_marshal(PurpleCallback cb, va_list args, void *data, void **return_val)
@@ -111,6 +95,25 @@ handle_ui_action_marshal(PurpleCallback cb, va_list args, void *data, void **ret
     void (*callback)(const char *, void *) = (void (*)(const char *, void *))cb;
     const char *arg1 = va_arg(args, const char *);
     callback(arg1, data);
+}
+
+static void
+handle_room_typing_marshal(PurpleCallback cb, va_list args, void *data, void **return_val)
+{
+    void (*callback)(const char *, const char *, gboolean, void *) = (void (*)(const char *, const char *, gboolean, void *))cb;
+    const char *arg1 = va_arg(args, const char *);
+    const char *arg2 = va_arg(args, const char *);
+    gboolean arg3 = va_arg(args, gboolean);
+    callback(arg1, arg2, arg3, data);
+}
+
+static void
+handle_room_encrypted_marshal(PurpleCallback cb, va_list args, void *data, void **return_val)
+{
+    void (*callback)(const char *, gboolean, void *) = (void (*)(const char *, gboolean, void *))cb;
+    const char *arg1 = va_arg(args, const char *);
+    gboolean arg2 = va_arg(args, gboolean);
+    callback(arg1, arg2, data);
 }
 
 static gboolean plugin_load(PurplePlugin *plugin) {
@@ -132,20 +135,27 @@ static gboolean plugin_load(PurplePlugin *plugin) {
   purple_matrix_rust_set_search_callback(search_result_cb);
   purple_matrix_rust_set_room_mute_callback(room_mute_callback);
   purple_matrix_rust_set_room_tag_callback(room_tag_callback);
+  purple_matrix_rust_set_update_buddy_callback(update_buddy_callback);
   purple_matrix_rust_init_invite_cb(invite_callback);
   matrix_init_sso_callbacks();
   register_matrix_commands(plugin);
 
-  /* Register Matrix UI Signals */
+  /* Register Matrix UI Internal Signals */
   purple_signal_register(plugin, "matrix-ui-action-show-dashboard", handle_ui_action_marshal, NULL, 1, purple_value_new(PURPLE_TYPE_STRING));
   purple_signal_register(plugin, "matrix-ui-action-reply", handle_ui_action_marshal, NULL, 1, purple_value_new(PURPLE_TYPE_STRING));
-  purple_signal_register(plugin, "matrix-ui-action-thread", handle_ui_action_marshal, NULL, 1, purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-list-threads", handle_ui_action_marshal, NULL, 1, purple_value_new(PURPLE_TYPE_STRING));
   purple_signal_register(plugin, "matrix-ui-action-sticker", handle_ui_action_marshal, NULL, 1, purple_value_new(PURPLE_TYPE_STRING));
   purple_signal_register(plugin, "matrix-ui-action-poll", handle_ui_action_marshal, NULL, 1, purple_value_new(PURPLE_TYPE_STRING));
 
+  /* Signals from Core to UI plugin */
+  purple_signal_register(plugin, "matrix-ui-room-typing", handle_room_typing_marshal, NULL, 3, 
+      purple_value_new(PURPLE_TYPE_STRING), purple_value_new(PURPLE_TYPE_STRING), purple_value_new(PURPLE_TYPE_BOOLEAN));
+  purple_signal_register(plugin, "matrix-ui-room-encrypted", handle_room_encrypted_marshal, NULL, 2,
+      purple_value_new(PURPLE_TYPE_STRING), purple_value_new(PURPLE_TYPE_BOOLEAN));
+
   purple_signal_connect(plugin, "matrix-ui-action-show-dashboard", plugin, PURPLE_CALLBACK(handle_show_dashboard_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-reply", plugin, PURPLE_CALLBACK(handle_reply_signal), NULL);
-  purple_signal_connect(plugin, "matrix-ui-action-thread", plugin, PURPLE_CALLBACK(handle_thread_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-list-threads", plugin, PURPLE_CALLBACK(handle_list_threads_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-sticker", plugin, PURPLE_CALLBACK(handle_sticker_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-poll", plugin, PURPLE_CALLBACK(handle_poll_signal), NULL);
 
@@ -167,7 +177,7 @@ static PurplePluginProtocolInfo prpl_info = {
     .protocol_options = NULL,
     .icon_spec = { .format = "png", .min_width = 30, .min_height = 30, .max_width = 96, .max_height = 96, .scale_rules = PURPLE_ICON_SCALE_SEND | PURPLE_ICON_SCALE_DISPLAY },
     .list_icon = matrix_list_icon, .list_emblem = matrix_list_emblem, .status_text = matrix_status_text, .tooltip_text = matrix_tooltip_text, .status_types = matrix_status_types, .blist_node_menu = blist_node_menu_cb,
-    .chat_info = matrix_chat_info, .chat_info_defaults = matrix_chat_info_defaults, .login = matrix_login, .close = matrix_close, .send_im = matrix_send_im, .send_typing = matrix_send_typing, .get_info = matrix_get_info, .set_status = matrix_set_status, .set_idle = matrix_set_idle, .change_passwd = matrix_change_passwd, .add_buddy = matrix_add_buddy, .remove_buddy = matrix_remove_buddy, .add_deny = matrix_add_deny, .rem_deny = matrix_rem_deny, .join_chat = matrix_join_chat, .get_chat_name = matrix_get_chat_name, .chat_invite = matrix_chat_invite, .chat_leave = matrix_chat_leave, .chat_whisper = matrix_chat_whisper, .chat_send = matrix_chat_send, .set_chat_topic = matrix_set_chat_topic, .send_file = matrix_send_file, .roomlist_get_list = matrix_roomlist_get_list, .roomlist_cancel = matrix_roomlist_cancel, .unregister_user = matrix_unregister_user, .set_public_alias = (void *)matrix_set_public_alias, .set_buddy_icon = matrix_set_buddy_icon, .struct_size = sizeof(PurplePluginProtocolInfo)
+    .chat_info = matrix_chat_info, .chat_info_defaults = matrix_chat_info_defaults, .login = matrix_login, .close = matrix_close, .send_im = matrix_send_im, .send_typing = matrix_send_typing, .get_info = matrix_get_info, .set_status = matrix_set_status, .set_idle = matrix_set_idle, .change_passwd = matrix_change_passwd, .add_buddy = matrix_add_buddy, .remove_buddy = matrix_remove_buddy, .add_deny = matrix_add_deny, .rem_deny = matrix_rem_deny, .join_chat = matrix_join_chat, .reject_chat = matrix_reject_chat, .get_chat_name = matrix_get_chat_name, .chat_invite = matrix_chat_invite, .chat_leave = NULL, .chat_whisper = matrix_chat_whisper, .chat_send = matrix_chat_send, .set_chat_topic = matrix_set_chat_topic, .send_file = matrix_send_file, .roomlist_get_list = matrix_roomlist_get_list, .roomlist_cancel = matrix_roomlist_cancel, .unregister_user = matrix_unregister_user, .set_public_alias = (void *)matrix_set_public_alias, .set_buddy_icon = matrix_set_buddy_icon, .struct_size = sizeof(PurplePluginProtocolInfo)
 };
 
 static PurplePluginInfo info = {

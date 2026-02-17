@@ -20,51 +20,78 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
                 if let Some(room) = client_clone.get_room(rid) {
                     log::info!("Listing all threads for {} using server API", room_id_str);
                     
-                    let options = ListThreadsOptions::default();
-                    
-                    if let Ok(threads) = room.list_threads(options).await {
-                        let guard = THREAD_LIST_CALLBACK.lock().unwrap();
-                        if let Some(cb) = *guard {
-                            let c_user_id = CString::new(crate::sanitize_string(&user_id_str)).unwrap_or_default();
-                            let c_room_id = CString::new(crate::sanitize_string(&room_id_str)).unwrap_or_default();
-                            for thread_root in threads.chunk {
-                                let root_id = thread_root.event_id().map(|e| e.to_string()).unwrap_or_default();
-                                let c_root_id = CString::new(crate::sanitize_string(&root_id)).unwrap_or_default();
+                    let mut from_token: Option<String> = None;
+                    let mut all_threads_found = false;
+
+                    while !all_threads_found {
+                        let mut options = ListThreadsOptions::default();
+                        options.from = from_token.clone();
+
+                        if let Ok(threads) = room.list_threads(options).await {
+                            let guard = THREAD_LIST_CALLBACK.lock().unwrap();
+                            if let Some(cb) = *guard {
+                                let c_user_id = CString::new(crate::sanitize_string(&user_id_str)).unwrap_or_default();
+                                let c_room_id = CString::new(crate::sanitize_string(&room_id_str)).unwrap_or_default();
                                 
-                                // Get a summary from the latest message in the thread
-                                let mut body = String::new();
-                                if let Some(ev) = thread_root.bundled_latest_thread_event {
-                                    let raw_event: Result<AnySyncTimelineEvent, _> = ev.raw().deserialize();
-                                    if let Ok(AnySyncTimelineEvent::MessageLike(msg_ev)) = raw_event {
+                                for thread_root in &threads.chunk {
+                                    let root_id = thread_root.event_id().map(|e| e.to_string()).unwrap_or_default();
+                                    let c_root_id = CString::new(crate::sanitize_string(&root_id)).unwrap_or_default();
+                                    
+                                    // 1. Get First Message (the root event itself)
+                                    let mut first_msg = String::new();
+                                    let raw_root: Result<AnySyncTimelineEvent, _> = thread_root.raw().deserialize();
+                                    if let Ok(AnySyncTimelineEvent::MessageLike(msg_ev)) = raw_root {
                                         if let AnySyncMessageLikeEvent::RoomMessage(original) = msg_ev {
-                                            body = original.as_original().map(|o| o.content.body().to_string()).unwrap_or_default();
+                                            first_msg = original.as_original().map(|o| o.content.body().to_string()).unwrap_or_default();
                                         }
                                     }
-                                }
-                                
-                                if body.is_empty() {
-                                    body = "No message summary available".to_string();
-                                }
+                                    if first_msg.is_empty() { first_msg = "Root message unavailable".to_string(); }
 
-                                let c_msg = CString::new(crate::sanitize_string(&body)).unwrap_or_default();
-                                cb(c_user_id.as_ptr(), c_room_id.as_ptr(), c_root_id.as_ptr(), c_msg.as_ptr(), 0, 0);
+                                    // 2. Get Latest Message
+                                    let mut latest_msg = String::new();
+                                    if let Some(ev) = &thread_root.bundled_latest_thread_event {
+                                        let raw_event: Result<AnySyncTimelineEvent, _> = ev.raw().deserialize();
+                                        if let Ok(AnySyncTimelineEvent::MessageLike(msg_ev)) = raw_event {
+                                            if let AnySyncMessageLikeEvent::RoomMessage(original) = msg_ev {
+                                                latest_msg = original.as_original().map(|o| o.content.body().to_string()).unwrap_or_default();
+                                            }
+                                        }
+                                    }
+                                    if latest_msg.is_empty() { latest_msg = "No replies yet".to_string(); }
+
+                                    // Descriptive label
+                                    let body = format!("Start: {} ... End: {}", first_msg, latest_msg);
+
+                                    // Placeholder for msg_count while we debug enum structure
+                                    log::info!("DEBUG: thread_summary structure for {}: {:?}", root_id, thread_root.thread_summary);
+                                    let msg_count: u64 = 0; 
+
+                                    let ts: u64 = thread_root.timestamp().map(|t| t.0.into()).unwrap_or(0);
+
+                                    let c_msg = CString::new(crate::sanitize_string(&body)).unwrap_or_default();
+                                    cb(c_user_id.as_ptr(), c_room_id.as_ptr(), c_root_id.as_ptr(), c_msg.as_ptr(), msg_count, ts);
+                                }
                             }
-                            // End marker
-                            cb(c_user_id.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), 0, 0);
+                            
+                            if let Some(next_token) = threads.prev_batch_token {
+                                from_token = Some(next_token);
+                            } else {
+                                all_threads_found = true;
+                            }
+                        } else {
+                            log::error!("list_threads API failed for {}", room_id_str);
+                            all_threads_found = true; 
                         }
-                    } else {
-                        log::error!("list_threads API failed for {}", room_id_str);
+                    }
+                    
+                    let guard = THREAD_LIST_CALLBACK.lock().unwrap();
+                    if let Some(cb) = *guard {
                         let c_user_id = CString::new(crate::sanitize_string(&user_id_str)).unwrap_or_default();
                         let c_room_id = CString::new(crate::sanitize_string(&room_id_str)).unwrap_or_default();
-                        let guard = THREAD_LIST_CALLBACK.lock().unwrap();
-                        if let Some(cb) = *guard {
-                            cb(c_user_id.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), 0, 0);
-                        }
+                        cb(c_user_id.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), 0, 0);
                     }
                 }
             }
         });
     });
 }
-
-

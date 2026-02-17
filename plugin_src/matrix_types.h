@@ -15,6 +15,7 @@ typedef struct {
   char *thread_root_id;
   char *event_id;
   guint64 timestamp;
+  gboolean encrypted;
 } MatrixMsgData;
 
 typedef struct {
@@ -35,7 +36,8 @@ typedef struct {
 } MatrixRoomData;
 
 typedef struct {
-  char *user_id;
+  char *user_id;        /* The local account ID */
+  char *target_user_id; /* The profile being viewed */
   char *display_name;
   char *avatar_url;
   gboolean is_online;
@@ -90,6 +92,12 @@ typedef struct {
   char *flow_id;
   char *emojis;
 } MatrixEmojiData;
+
+typedef struct {
+  char *user_id;
+  char *flow_id;
+  char *method;
+} MatrixFlowData;
 
 typedef struct {
   char *user_id;

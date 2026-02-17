@@ -38,7 +38,7 @@ static void sticker_selected_cb(void *user_data, PurpleRequestFields *fields) {
     if (url) purple_matrix_rust_send_sticker(purple_account_get_username(purple_conversation_get_account(conv)), purple_conversation_get_name(conv), url);
   }
 }
-static void sticker_cb(const char *shortcode, const char *body, const char *url, void *user_data) {
+static void sticker_cb(const char *user_id, const char *shortcode, const char *body, const char *url, void *user_data) {
   PurpleRequestFields *fields = (PurpleRequestFields *)user_data;
   PurpleRequestField *field = purple_request_fields_get_field(fields, "sticker");
   char *label = g_strdup_printf("%s: %s", shortcode, body);
@@ -64,7 +64,7 @@ static void sticker_pack_selected_cb(void *user_data, PurpleRequestFields *field
     }
   }
 }
-static void sticker_pack_cb(const char *id, const char *name, void *user_data) {
+static void sticker_pack_cb(const char *user_id, const char *id, const char *name, void *user_data) {
   PurpleRequestFields *fields = (PurpleRequestFields *)user_data;
   PurpleRequestField *field = purple_request_fields_get_field(fields, "pack");
   purple_request_field_list_add(field, name, g_strdup(id));
@@ -111,13 +111,13 @@ static void dash_choice_cb(void *user_data, PurpleRequestFields *fields) {
   if (conv) {
     switch(choice) {
       case 0: menu_action_reply_conv_cb(conv, NULL); break;
-      case 1: menu_action_thread_conv_cb(conv, NULL); break;
+      case 1: menu_action_thread_start_cb(conv, NULL); break;
       case 2: menu_action_sticker_conv_cb(conv, NULL); break;
       case 3: menu_action_poll_conv_cb(conv, NULL); break;
       case 4: action_invite_user_cb(NULL); break;
       case 5: { PurpleBlistNode *node = (PurpleBlistNode *)purple_blist_find_chat(account, room_id); if (node) menu_action_room_settings_cb(node, NULL); break; }
       case 6: purple_matrix_rust_mark_unread(purple_account_get_username(account), room_id, TRUE); break;
-      case 7: purple_matrix_rust_list_threads(purple_account_get_username(account), room_id); break;
+      case 7: menu_action_thread_conv_cb(conv, NULL); break;
       case 8: purple_matrix_rust_e2ee_status(purple_account_get_username(account), room_id); break;
       case 9: purple_matrix_rust_get_power_levels(purple_account_get_username(account), room_id); break;
     }
@@ -140,15 +140,22 @@ void menu_action_reply_conv_cb(PurpleConversation *conv, gpointer data) {
   if (!conv) return;
   purple_request_input(my_plugin, "Reply Wizard", "Reply to Message", NULL, NULL, TRUE, FALSE, NULL, "_Send", G_CALLBACK(menu_action_reply_dialog_cb), "_Cancel", NULL, purple_conversation_get_account(conv), NULL, conv, g_strdup(purple_conversation_get_name(conv)));
 }
-void menu_action_thread_conv_cb(PurpleConversation *conv, gpointer data) {
-  if (!conv) return;
-  purple_request_input(my_plugin, "Thread Wizard", "Start Thread", NULL, NULL, TRUE, FALSE, NULL, "_Start", G_CALLBACK(menu_action_thread_dialog_cb), "_Cancel", NULL, purple_conversation_get_account(conv), NULL, conv, g_strdup(purple_conversation_get_name(conv)));
-}
 static void menu_action_reply_dialog_cb(void *user_data, const char *text) {
   char *room_id = (char *)user_data; PurpleAccount *account = find_matrix_account();
   PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
   if (conv && text && *text) { const char *last_id = purple_conversation_get_data(conv, "last_event_id"); if (last_id) purple_matrix_rust_send_reply(purple_account_get_username(account), room_id, last_id, text); }
   g_free(room_id);
+}
+
+void menu_action_thread_conv_cb(PurpleConversation *conv, gpointer data) {
+  if (!conv) return;
+  PurpleAccount *account = purple_conversation_get_account(conv);
+  purple_matrix_rust_list_threads(purple_account_get_username(account), purple_conversation_get_name(conv));
+}
+
+void menu_action_thread_start_cb(PurpleConversation *conv, gpointer data) {
+  if (!conv) return;
+  purple_request_input(my_plugin, "Thread Wizard", "Start Thread", "Start a new thread from the latest message in this room.", NULL, TRUE, FALSE, NULL, "_Start", G_CALLBACK(menu_action_thread_dialog_cb), "_Cancel", NULL, purple_conversation_get_account(conv), NULL, conv, g_strdup(purple_conversation_get_name(conv)));
 }
 static void menu_action_thread_dialog_cb(void *user_data, const char *text) {
   char *room_id = (char *)user_data; PurpleAccount *account = find_matrix_account();
@@ -156,6 +163,7 @@ static void menu_action_thread_dialog_cb(void *user_data, const char *text) {
   if (conv && text && *text) { const char *last_id = purple_conversation_get_data(conv, "last_event_id"); if (last_id) { char *vid = g_strdup_printf("%s|%s", room_id, last_id); ensure_thread_in_blist(account, vid, "Thread", room_id); purple_matrix_rust_send_message(purple_account_get_username(account), vid, text); g_free(vid); } }
   g_free(room_id);
 }
+
 void conversation_extended_menu_cb(PurpleConversation *conv, GList **list) {
   if (!conv || strcmp(purple_account_get_protocol_id(purple_conversation_get_account(conv)), "prpl-matrix-rust") != 0) return;
   *list = g_list_append(*list, purple_menu_action_new("Room Dashboard...", PURPLE_CALLBACK(menu_action_room_dashboard_conv_cb), conv, NULL));

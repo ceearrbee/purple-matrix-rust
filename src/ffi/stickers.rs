@@ -11,7 +11,6 @@ pub extern "C" fn purple_matrix_rust_list_sticker_packs(user_id: *const c_char, 
 
     with_client(&user_id_str.clone(), |_client| {
         RUNTIME.spawn(async move {
-            // Simplified: Return a default pack since complex account data variants are version-sensitive
             if let (Ok(c_user_id), Ok(c_id), Ok(c_name)) = (CString::new(user_id_str.clone()), CString::new("default"), CString::new("Matrix Stickers")) {
                  cb(c_user_id.as_ptr(), c_id.as_ptr(), c_name.as_ptr(), u_data_usize as *mut c_void);
             }
@@ -35,10 +34,11 @@ pub extern "C" fn purple_matrix_rust_list_stickers_in_pack(user_id: *const c_cha
                 ("heart", "❤️", "mxc://matrix.org/heart_sticker_mxc"),
             ];
 
-            let c_user_id = CString::new(user_id_str).unwrap_or_default();
-            for (short, body, url) in stickers {
-                if let (Ok(c_short), Ok(c_body), Ok(c_url)) = (CString::new(short), CString::new(body), CString::new(url)) {
-                    cb(c_user_id.as_ptr(), c_short.as_ptr(), c_body.as_ptr(), c_url.as_ptr(), u_data_usize as *mut c_void);
+            if let Ok(c_user_id) = CString::new(user_id_str) {
+                for (short, body, url) in stickers {
+                    if let (Ok(c_short), Ok(c_body), Ok(c_url)) = (CString::new(short), CString::new(body), CString::new(url)) {
+                        cb(c_user_id.as_ptr(), c_short.as_ptr(), c_body.as_ptr(), c_url.as_ptr(), u_data_usize as *mut c_void);
+                    }
                 }
             }
             

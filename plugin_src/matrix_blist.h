@@ -14,6 +14,7 @@ void room_mute_callback(const char *user_id, const char *room_id, bool muted);
 void room_tag_callback(const char *user_id, const char *room_id, const char *tag);
 void invite_callback(const char *user_id, const char *room_id, const char *inviter);
 void roomlist_add_cb(const char *user_id, const char *name, const char *id, const char *topic, guint64 count);
+void update_buddy_callback(const char *user_id, const char *alias, const char *avatar_url);
 void cleanup_stale_thread_labels(PurpleAccount *account);
 
 PurpleRoomlist *matrix_roomlist_get_list(PurpleConnection *gc);
