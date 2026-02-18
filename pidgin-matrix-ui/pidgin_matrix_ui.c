@@ -29,6 +29,20 @@ static void on_menu_threads(gpointer d);
 static void on_menu_sticker(gpointer d);
 static void on_menu_poll(gpointer d);
 
+/* Helper to find a Matrix account */
+static PurpleAccount *
+find_matrix_account(void)
+{
+    GList *l;
+    for (l = purple_accounts_get_all(); l != NULL; l = l->next) {
+        PurpleAccount *account = (PurpleAccount *)l->data;
+        if (strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
+            return account;
+        }
+    }
+    return NULL;
+}
+
 static gboolean
 emit_signal_idle_cb(gpointer data)
 {
@@ -37,7 +51,10 @@ emit_signal_idle_cb(gpointer data)
         const char *room_id = purple_conversation_get_name(sd->conv);
         PurplePlugin *matrix_plugin = purple_plugins_find_with_id("prpl-matrix-rust");
         if (matrix_plugin && purple_plugin_is_loaded(matrix_plugin)) {
+            purple_debug_info("matrix-ui", "emit_signal_idle_cb: Emitting signal %s for room %s\n", sd->signal_name, room_id);
             purple_signal_emit(matrix_plugin, sd->signal_name, room_id);
+        } else {
+            purple_debug_warning("matrix-ui", "emit_signal_idle_cb: Matrix plugin not found or not loaded (signal %s failed)\n", sd->signal_name);
         }
     }
     g_free(sd->signal_name);
@@ -103,7 +120,7 @@ handle_room_encrypted_cb(const char *room_id, gboolean is_encrypted, gpointer da
                 GtkWidget *label = purple_conversation_get_data(conv, MATRIX_UI_ENCRYPTED_LABEL_KEY);
                 if (label && GTK_IS_LABEL(label)) {
                     if (is_encrypted) {
-                        gtk_label_set_markup(GTK_LABEL(label), "<span color='darkgreen' title='End-to-End Encrypted'>🔒</span>");
+                        gtk_label_set_markup(GTK_LABEL(label), "<span color='darkgreen'>🔒</span>");
                     } else {
                         gtk_label_set_text(GTK_LABEL(label), "");
                     }
@@ -121,8 +138,17 @@ inject_action_bar_idle_cb(gpointer data)
     if (purple_conversation_get_data(conv, MATRIX_UI_ACTION_BAR_KEY)) return FALSE;
 
     PidginConversation *gtkconv = PIDGIN_CONVERSATION(conv);
-    if (!gtkconv || !gtkconv->lower_hbox || !GTK_IS_WIDGET(gtkconv->lower_hbox)) return FALSE;
-    if (!GTK_WIDGET_REALIZED(gtkconv->lower_hbox)) return TRUE; 
+    if (!gtkconv || !gtkconv->lower_hbox || !GTK_IS_WIDGET(gtkconv->lower_hbox)) {
+        purple_debug_info("matrix-ui", "inject_action_bar_idle_cb: lower_hbox not ready yet, retrying...\n");
+        return TRUE; 
+    }
+    
+    if (!GTK_WIDGET_REALIZED(gtkconv->lower_hbox)) {
+        purple_debug_info("matrix-ui", "inject_action_bar_idle_cb: lower_hbox not realized yet, retrying...\n");
+        return TRUE; 
+    }
+
+    purple_debug_info("matrix-ui", "inject_action_bar_idle_cb: Injecting action bar into room %s\n", purple_conversation_get_name(conv));
 
     GtkWidget *vbox = gtk_widget_get_parent(gtkconv->lower_hbox);
     if (!vbox || !GTK_IS_VBOX(vbox)) return FALSE;

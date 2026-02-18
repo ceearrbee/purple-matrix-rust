@@ -33,6 +33,7 @@ pub type SearchCallback = extern "C" fn(user_id: *const c_char, room_id: *const 
 pub type RoomMuteCallback = extern "C" fn(user_id: *const c_char, room_id: *const c_char, muted: bool);
 pub type RoomTagCallback = extern "C" fn(user_id: *const c_char, room_id: *const c_char, tag: *const c_char);
 pub type UpdateBuddyCallback = extern "C" fn(user_id: *const c_char, alias: *const c_char, avatar_url: *const c_char);
+pub type ImgStoreAddCallback = extern "C" fn(data: *const c_void, size: usize) -> i32;
 
 pub type StickerPackCallback = extern "C" fn(user_id: *const c_char, pack_id: *const c_char, pack_name: *const c_char, user_data: *mut c_void);
 pub type StickerCallback = extern "C" fn(user_id: *const c_char, short_name: *const c_char, body: *const c_char, url: *const c_char, user_data: *mut c_void);
@@ -63,6 +64,7 @@ pub(crate) static SEARCH_CALLBACK: Lazy<Mutex<Option<SearchCallback>>> = Lazy::n
 pub(crate) static ROOM_MUTE_CALLBACK: Lazy<Mutex<Option<RoomMuteCallback>>> = Lazy::new(|| Mutex::new(None));
 pub(crate) static ROOM_TAG_CALLBACK: Lazy<Mutex<Option<RoomTagCallback>>> = Lazy::new(|| Mutex::new(None));
 pub(crate) static UPDATE_BUDDY_CALLBACK: Lazy<Mutex<Option<UpdateBuddyCallback>>> = Lazy::new(|| Mutex::new(None));
+pub(crate) static IMGSTORE_ADD_CALLBACK: Lazy<Mutex<Option<ImgStoreAddCallback>>> = Lazy::new(|| Mutex::new(None));
 
 pub(crate) static SSO_CALLBACK: Lazy<Mutex<Option<SsoCallback>>> = Lazy::new(|| Mutex::new(None));
 pub(crate) static CONNECTED_CALLBACK: Lazy<Mutex<Option<ConnectedCallback>>> = Lazy::new(|| Mutex::new(None));
@@ -81,14 +83,13 @@ pub(crate) static SHOW_VERIFICATION_QR_CALLBACK: Lazy<Mutex<Option<ShowVerificat
 #[no_mangle] pub extern "C" fn purple_matrix_rust_init_invite_cb(cb: InviteCallback) { *INVITE_CALLBACK.lock().unwrap() = Some(cb); }
 #[no_mangle] pub extern "C" fn purple_matrix_rust_set_roomlist_add_callback(cb: RoomListAddCallback) { *ROOMLIST_ADD_CALLBACK.lock().unwrap() = Some(cb); }
 #[no_mangle] pub extern "C" fn purple_matrix_rust_set_room_preview_callback(cb: RoomPreviewCallback) { *ROOM_PREVIEW_CALLBACK.lock().unwrap() = Some(cb); }
-#[no_mangle] pub extern "C" fn purple_matrix_rust_set_login_failed_callback(cb: LoginFailedCallback) { *LOGIN_FAILED_CALLBACK.lock().unwrap() = Some(cb); }
-#[no_mangle] pub extern "C" fn purple_matrix_rust_set_show_user_info_callback(cb: ShowUserInfoCallback) { *SHOW_USER_INFO_CALLBACK.lock().unwrap() = Some(cb); }
-#[no_mangle] pub extern "C" fn purple_matrix_rust_set_thread_list_callback(cb: ThreadListCallback) { *THREAD_LIST_CALLBACK.lock().unwrap() = Some(cb); }
-#[no_mangle] pub extern "C" fn purple_matrix_rust_set_poll_list_callback(cb: PollListCallback) { *POLL_LIST_CALLBACK.lock().unwrap() = Some(cb); }
 #[no_mangle] pub extern "C" fn purple_matrix_rust_set_search_callback(cb: SearchCallback) { *SEARCH_CALLBACK.lock().unwrap() = Some(cb); }
 #[no_mangle] pub extern "C" fn purple_matrix_rust_set_room_mute_callback(cb: RoomMuteCallback) { *ROOM_MUTE_CALLBACK.lock().unwrap() = Some(cb); }
 #[no_mangle] pub extern "C" fn purple_matrix_rust_set_room_tag_callback(cb: RoomTagCallback) { *ROOM_TAG_CALLBACK.lock().unwrap() = Some(cb); }
 #[no_mangle] pub extern "C" fn purple_matrix_rust_set_update_buddy_callback(cb: UpdateBuddyCallback) { *UPDATE_BUDDY_CALLBACK.lock().unwrap() = Some(cb); }
+#[no_mangle] pub extern "C" fn purple_matrix_rust_set_imgstore_add_callback(cb: ImgStoreAddCallback) { *IMGSTORE_ADD_CALLBACK.lock().unwrap() = Some(cb); }
+#[no_mangle] pub extern "C" fn purple_matrix_rust_set_thread_list_callback(cb: ThreadListCallback) { *THREAD_LIST_CALLBACK.lock().unwrap() = Some(cb); }
+#[no_mangle] pub extern "C" fn purple_matrix_rust_set_poll_list_callback(cb: PollListCallback) { *POLL_LIST_CALLBACK.lock().unwrap() = Some(cb); }
 
 #[no_mangle] pub extern "C" fn purple_matrix_rust_init_sso_cb(cb: SsoCallback) { *SSO_CALLBACK.lock().unwrap() = Some(cb); }
 #[no_mangle] pub extern "C" fn purple_matrix_rust_init_connected_cb(cb: ConnectedCallback) { *CONNECTED_CALLBACK.lock().unwrap() = Some(cb); }

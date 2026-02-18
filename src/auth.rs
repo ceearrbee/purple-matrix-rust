@@ -465,6 +465,29 @@ async fn finish_login_success(client: Client) {
               cb(c_user_id.as_ptr());
          }
     }
+
+    // 2. Bootstrap Crypto
+    let client_for_crypto = client.clone();
+    RUNTIME.spawn(async move {
+        log::info!("Bootstrapping crypto state for {}...", client_for_crypto.user_id().unwrap());
+        
+        let encryption = client_for_crypto.encryption();
+        
+        // Use bootstrap_cross_signing_if_needed if it exists, otherwise bootstrap_cross_signing(None)
+        // Based on grep, it exists.
+        if let Err(e) = encryption.bootstrap_cross_signing_if_needed(None).await {
+            log::warn!("Crypto bootstrap skipped or failed: {:?}. This is normal if device is not yet verified.", e);
+        }
+
+        if let Ok(Some(device)) = encryption.get_own_device().await {
+            log::info!("Device ID: {} (Verified: {})", device.device_id(), device.is_verified());
+        }
+        
+        if let Some(status) = encryption.cross_signing_status().await {
+            log::info!("Cross-signing identity: {:?}", status);
+        }
+    });
+
     sync_logic::start_sync_loop(client).await;
 }
 

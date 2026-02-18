@@ -75,7 +75,7 @@ pub extern "C" fn purple_matrix_rust_poll_vote(user_id: *const c_char, room_id: 
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_get_active_polls(user_id: *const c_char, room_id: *const c_char) {
+pub extern "C" fn purple_matrix_rust_list_polls(user_id: *const c_char, room_id: *const c_char) {
     if user_id.is_null() || room_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
     let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
@@ -131,5 +131,3 @@ pub extern "C" fn purple_matrix_rust_get_active_polls(user_id: *const c_char, ro
         });
     });
 }
-
-

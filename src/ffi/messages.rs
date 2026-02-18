@@ -363,7 +363,6 @@ pub extern "C" fn purple_matrix_rust_send_file(user_id: *const c_char, id: *cons
         RUNTIME.spawn(async move {
              use matrix_sdk::ruma::{RoomId, UserId};
              use std::path::Path;
-             use mime_guess::mime;
              
              let room_opt = if let Ok(room_id) = <&RoomId>::try_from(id_str.as_str()) {
                  client.get_room(room_id)
@@ -392,40 +391,26 @@ pub extern "C" fn purple_matrix_rust_send_file(user_id: *const c_char, id: *cons
                  
                  if let Ok(bytes) = std::fs::read(path) {
                      let mime = mime_guess::from_path(path).first_or_octet_stream();
-                     log::info!("Uploading file {} ({} bytes, mime: {})", filename_str, bytes.len(), mime);
+                     let file_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                     log::info!("Sending attachment {} ({} bytes, mime: {})", file_name, bytes.len(), mime);
                      
-                     if let Ok(response) = client.media().upload(&mime, bytes, None).await {
-                         let uri = response.content_uri;
-                         let file_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-                         
-                         // Construct appropriate message content
-                         use matrix_sdk::ruma::events::room::message::{RoomMessageEventContent, MessageType, ImageMessageEventContent, VideoMessageEventContent, AudioMessageEventContent, FileMessageEventContent};
-                         
-                         let msg_type = if mime.type_() == mime::IMAGE {
-                             MessageType::Image(ImageMessageEventContent::plain(file_name.clone(), uri))
-                         } else if mime.type_() == mime::VIDEO {
-                             MessageType::Video(VideoMessageEventContent::plain(file_name.clone(), uri))
-                         } else if mime.type_() == mime::AUDIO {
-                             MessageType::Audio(AudioMessageEventContent::plain(file_name.clone(), uri))
-                         } else {
-                             MessageType::File(FileMessageEventContent::plain(file_name.clone(), uri))
-                         };
-                         
-                         let content = RoomMessageEventContent::new(msg_type);
-                         
-                         if let Err(e) = room.send(content).await {
-                             log::error!("Failed to send file event: {:?}", e);
-                         } else {
-                             log::info!("File sent successfully");
-                             
+                     use matrix_sdk::attachment::AttachmentConfig;
+                     let config = AttachmentConfig::new();
+                     
+                     match room.send_attachment(&file_name, &mime, bytes, config).await {
+                         Ok(response) => {
+                             log::info!("Attachment sent successfully: {:?}", response.event_id);
                              // Delete temporary pasted images
                              if file_name.starts_with("matrix_pasted_") {
                                  log::info!("Cleaning up temporary pasted file: {}", filename_str);
                                  let _ = std::fs::remove_file(path);
                              }
+                         },
+                         Err(e) => {
+                             log::error!("Failed to send attachment {}: {:?}", file_name, e);
+                             let msg = format!("Failed to send attachment: {:?}", e);
+                             crate::ffi::send_system_message(&user_id_str, &msg);
                          }
-                     } else {
-                         log::error!("Failed to upload file");
                      }
                  }
              } else {
@@ -585,7 +570,7 @@ pub extern "C" fn purple_matrix_rust_send_location(user_id: *const c_char, room_
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_search_messages(user_id: *const c_char, room_id: *const c_char, term: *const c_char) {
+pub extern "C" fn purple_matrix_rust_search_room_messages(user_id: *const c_char, room_id: *const c_char, term: *const c_char) {
     if user_id.is_null() || room_id.is_null() || term.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
     let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };

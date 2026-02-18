@@ -57,7 +57,7 @@ pub fn sanitize_matrix_html(input: &str) -> String {
     use regex::Regex;
     use once_cell::sync::Lazy;
 
-    static RE_ALLOWED_TAG: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)<(/?)(b|strong|i|em|u|s|strike|del|blockquote|p|br|span|a|code|pre|font|hr|ul|ol|li)(\s+[^>]*)?>").unwrap());
+    static RE_ALLOWED_TAG: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)<(/?)(b|strong|i|em|u|s|strike|del|blockquote|p|br|span|a|img|code|pre|font|hr|ul|ol|li)(\s+[^>]*)?>").unwrap());
     
     let mut output = String::new();
     let mut last_end = 0;
@@ -83,6 +83,16 @@ pub fn sanitize_matrix_html(input: &str) -> String {
         } else if (tag_name == "code" || tag_name == "pre") && !is_close {
             // Give code blocks some visual distinction in Pidgin
             output.push_str(&format!("<{} style=\"font-family: monospace; background-color: #f8f8f8; border: 1px solid #ddd; padding: 2px;\">", tag_name));
+        } else if tag_name == "span" && !is_close {
+            // Filter span attributes: keep style, but remove title and others that break Pidgin's strict parser
+            let mut clean_attrs = String::new();
+            for attr in attrs.split_whitespace() {
+                if attr.to_lowercase().starts_with("style=") {
+                    clean_attrs.push(' ');
+                    clean_attrs.push_str(attr);
+                }
+            }
+            output.push_str(&format!("<span{}>", clean_attrs));
         } else {
             output.push_str(tag_full);
         }

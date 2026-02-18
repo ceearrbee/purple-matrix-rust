@@ -370,9 +370,17 @@ static void menu_action_room_leave_blist_cb(PurpleBlistNode *node, gpointer data
     }
 }
 
+static void menu_action_room_dashboard_buddy_cb(PurpleBlistNode *node, gpointer data) {
+    if (!PURPLE_BLIST_NODE_IS_BUDDY(node)) return;
+    PurpleBuddy *buddy = (PurpleBuddy *)node;
+    open_room_dashboard(purple_buddy_get_account(buddy), purple_buddy_get_name(buddy));
+}
+
 GList *blist_node_menu_cb(PurpleBlistNode *node) {
     GList *m = NULL;
     PurpleMenuAction *action;
+
+    purple_debug_info("matrix", "blist_node_menu_cb: node type=%d\n", node->type);
 
     if (PURPLE_BLIST_NODE_IS_CHAT(node)) {
         action = purple_menu_action_new("Room Settings...", PURPLE_CALLBACK(menu_action_room_settings_cb), node, NULL);
@@ -383,6 +391,13 @@ GList *blist_node_menu_cb(PurpleBlistNode *node) {
 
         action = purple_menu_action_new("Leave Matrix Room...", PURPLE_CALLBACK(menu_action_room_leave_blist_cb), node, NULL);
         m = g_list_append(m, action);
+    } else if (PURPLE_BLIST_NODE_IS_BUDDY(node)) {
+        PurpleBuddy *buddy = (PurpleBuddy *)node;
+        PurpleAccount *account = purple_buddy_get_account(buddy);
+        if (account && strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
+            action = purple_menu_action_new("Matrix Room Dashboard...", PURPLE_CALLBACK(menu_action_room_dashboard_buddy_cb), node, NULL);
+            m = g_list_append(m, action);
+        }
     }
     return m;
 }

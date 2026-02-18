@@ -43,11 +43,17 @@ static void conversation_created_cb(PurpleConversation *conv) {
   }
 }
 
+static int imgstore_add_cb(const void *data, size_t size) {
+    if (!data || size == 0) return 0;
+    return purple_imgstore_add_with_id(g_memdup(data, size), size, NULL);
+}
+
 static void connect_signals(void) {
   void *conv_handle = purple_conversations_get_handle();
   if (conv_handle) {
     purple_signal_connect(conv_handle, "conversation-created", my_plugin, PURPLE_CALLBACK(conversation_created_cb), NULL);
     purple_signal_connect(conv_handle, "conversation-displayed", my_plugin, PURPLE_CALLBACK(conversation_displayed_cb), NULL);
+    purple_signal_connect(conv_handle, "conversation-extended-menu", my_plugin, PURPLE_CALLBACK(conversation_extended_menu_cb), NULL);
   }
 }
 
@@ -127,7 +133,7 @@ static gboolean plugin_load(PurplePlugin *plugin) {
   purple_matrix_rust_set_presence_callback(presence_callback);
   purple_matrix_rust_set_chat_topic_callback(chat_topic_callback);
   purple_matrix_rust_set_chat_user_callback(chat_user_callback);
-  purple_matrix_rust_set_show_user_info_callback(show_user_info_cb);
+  purple_matrix_rust_init_show_user_info_cb(show_user_info_cb);
   purple_matrix_rust_set_roomlist_add_callback(roomlist_add_cb);
   purple_matrix_rust_set_room_preview_callback(room_preview_cb);
   purple_matrix_rust_set_thread_list_callback(thread_list_cb);
@@ -136,7 +142,12 @@ static gboolean plugin_load(PurplePlugin *plugin) {
   purple_matrix_rust_set_room_mute_callback(room_mute_callback);
   purple_matrix_rust_set_room_tag_callback(room_tag_callback);
   purple_matrix_rust_set_update_buddy_callback(update_buddy_callback);
+  purple_matrix_rust_set_imgstore_add_callback(imgstore_add_cb);
   purple_matrix_rust_init_invite_cb(invite_callback);
+  
+  purple_matrix_rust_init_connected_cb(connected_cb);
+  purple_matrix_rust_init_login_failed_cb(login_failed_cb);
+
   matrix_init_sso_callbacks();
   register_matrix_commands(plugin);
 
@@ -172,7 +183,7 @@ static gboolean plugin_unload(PurplePlugin *plugin) {
 }
 
 static PurplePluginProtocolInfo prpl_info = {
-    .options = OPT_PROTO_CHAT_TOPIC | OPT_PROTO_PASSWORD_OPTIONAL,
+    .options = OPT_PROTO_CHAT_TOPIC | OPT_PROTO_PASSWORD_OPTIONAL | OPT_PROTO_IM_IMAGE,
     .user_splits = NULL,
     .protocol_options = NULL,
     .icon_spec = { .format = "png", .min_width = 30, .min_height = 30, .max_width = 96, .max_height = 96, .scale_rules = PURPLE_ICON_SCALE_SEND | PURPLE_ICON_SCALE_DISPLAY },

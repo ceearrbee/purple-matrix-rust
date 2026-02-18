@@ -92,7 +92,6 @@ static gboolean thread_list_ui_idle_cb(gpointer data) {
   purple_notify_searchresults_column_add(results, purple_notify_searchresults_column_new("Last Mention"));
   purple_notify_searchresults_column_add(results, purple_notify_searchresults_column_new("Root Event ID"));
   
-  /* Pidgin 2.x fix: use CONTINUE for opening. Explicitly tell user to use Forward button. */
   purple_notify_searchresults_button_add(results, PURPLE_NOTIFY_BUTTON_CONTINUE, thread_search_result_cb);
 
   for (GList *it = list; it; it = it->next) {
@@ -404,7 +403,15 @@ PurpleAccount *find_matrix_account_by_id(const char *user_id) {
     if (strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
       const char *username = purple_account_get_username(account);
       if (g_strcmp0(username, user_id) == 0) return account;
-      if (username && (strstr(user_id, username) || strstr(username, user_id))) return account;
+      // Robust MXID matching: extract localpart if needed, or match substring
+      if (user_id[0] == '@' && username) {
+          if (strstr(user_id, username)) return account;
+          char *mxid_local = g_strdup(user_id + 1);
+          char *sep = strchr(mxid_local, ':');
+          if (sep) *sep = '\0';
+          if (g_strcmp0(username, mxid_local) == 0) { g_free(mxid_local); return account; }
+          g_free(mxid_local);
+      }
     }
   }
   return find_matrix_account();
@@ -418,6 +425,7 @@ PurpleAccount *find_matrix_account(void) {
       if (purple_account_is_connected(account)) return account;
     }
   }
+  // Diagnostic fallback
   for (GList *l = accounts; l != NULL; l = l->next) {
     PurpleAccount *account = (PurpleAccount *)l->data;
     if (strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) return account;

@@ -26,7 +26,6 @@ pub extern "C" fn purple_matrix_rust_set_status(user_id: *const c_char, status: 
                  _ => matrix_sdk::ruma::presence::PresenceState::Online,
              };
              
-             // Presence
              use matrix_sdk::ruma::api::client::presence::set_presence::v3::Request as PresenceRequest;
              use matrix_sdk::ruma::UserId;
 
@@ -82,7 +81,6 @@ pub extern "C" fn purple_matrix_rust_set_avatar(user_id: *const c_char, path: *c
             }
 
             let mime = mime_guess::from_path(&path_buf).first_or_octet_stream();
-            // Read file content
             let data = match std::fs::read(&path_buf) {
                 Ok(d) => d,
                 Err(e) => {
@@ -91,7 +89,6 @@ pub extern "C" fn purple_matrix_rust_set_avatar(user_id: *const c_char, path: *c
                 }
             };
 
-            // Upload to media repo first
             let response = match client.media().upload(&mime, data, None).await {
                  Ok(r) => r,
                  Err(e) => {
@@ -100,7 +97,6 @@ pub extern "C" fn purple_matrix_rust_set_avatar(user_id: *const c_char, path: *c
                  }
             };
 
-            // Set the avatar URL
             if let Err(e) = client.account().set_avatar_url(Some(&response.content_uri)).await {
                 log::error!("Failed to set avatar URL: {:?}", e);
             } else {
@@ -234,7 +230,6 @@ pub extern "C" fn purple_matrix_rust_get_user_info(account_user_id: *const c_cha
                     },
                     Err(e) => {
                         log::error!("Failed to fetch profile for {}: {:?}", user_id_str, e);
-                        // Fallback
                         let c_local_user_id = CString::new(account_user_id_str).unwrap_or_default();
                         let c_user_id = CString::new(user_id_str.clone()).unwrap_or_default();
                         let c_display_name = CString::new(user_id_str).unwrap_or_default();
@@ -251,6 +246,11 @@ pub extern "C" fn purple_matrix_rust_get_user_info(account_user_id: *const c_cha
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_init_show_user_info_cb(cb: ShowUserInfoCallback) {
+    *SHOW_USER_INFO_CALLBACK.lock().unwrap() = Some(cb);
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_get_my_profile(user_id: *const c_char) {
     if user_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
@@ -260,8 +260,6 @@ pub extern "C" fn purple_matrix_rust_get_my_profile(user_id: *const c_char) {
             if let Ok(profile) = client.account().fetch_user_profile().await {
                  let display_name = profile.get("displayname").and_then(|v| v.as_str()).unwrap_or("N/A");
                  let avatar_url = profile.get("avatar_url").and_then(|v| v.as_str()).unwrap_or("N/A");
-                 
-                 // MSC4133: Check for extended fields like "m.social_links" or "m.status" if available
                  let status = profile.get("m.status").and_then(|v| v.as_str()).unwrap_or("None");
                  
                  let msg = format!("<b>My Profile</b>:<br/>Display Name: {}<br/>Avatar URL: {}<br/>Status: {}<br/>User ID: {}", display_name, avatar_url, status, user_id_str);
@@ -321,8 +319,6 @@ pub extern "C" fn purple_matrix_rust_set_avatar_bytes(user_id: *const c_char, da
     with_client(&user_id_str.clone(), |client| {
         
         RUNTIME.spawn(async move {
-            // Assume PNG/JPEG/OctetStream. Mime guess from bytes is harder without magic library
-            // Default to application/octet-stream or image/png
             let mime = "image/png".parse().unwrap(); 
             
             match client.media().upload(&mime, bytes, None).await {

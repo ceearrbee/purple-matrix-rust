@@ -19,6 +19,9 @@
 static void action_join_room_cb(PurplePluginAction *action);
 static void action_invite_user_cb(PurplePluginAction *action);
 static void action_sso_token_cb(PurplePluginAction *action);
+static void action_restore_backup_cb(PurplePluginAction *action);
+static PurpleCmdRet cmd_verify(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_crypto_status(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
 static void menu_action_reply_dialog_cb(void *user_data, const char *text);
 static void menu_action_thread_dialog_cb(void *user_data, const char *text);
 static void menu_action_room_dashboard_conv_cb(PurpleConversation *conv, gpointer data);
@@ -101,7 +104,31 @@ void menu_action_poll_conv_cb(PurpleConversation *conv, gpointer data) {
   purple_request_fields(my_plugin, "Poll Creation Wizard", "Create a New Poll", NULL, fields, "Create Poll", G_CALLBACK(poll_create_dialog_cb), "Cancel", NULL, purple_conversation_get_account(conv), NULL, conv, g_strdup(purple_conversation_get_name(conv)));
 }
 
+static void action_send_file_cb(void *user_data, const char *filename) {
+    if (!filename || !*filename) return;
+    char *room_id = (char *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && room_id) {
+        purple_matrix_rust_send_file(purple_account_get_username(account), room_id, filename);
+    }
+    g_free(room_id);
+}
+
 /* Dashboard */
+static void restore_backup_dialog_cb(void *user_data, const char *key) {
+    if (!key || !*key) return;
+    PurpleAccount *account = find_matrix_account();
+    if (account) {
+        purple_matrix_rust_restore_backup(purple_account_get_username(account), key);
+    }
+}
+
+static void action_restore_backup_cb(PurplePluginAction *action) {
+    purple_request_input(my_plugin, "Matrix Security", "Restore Key Backup", 
+        "Enter your Matrix Security Key (Recovery Key) to decrypt historical messages and threads.", 
+        NULL, FALSE, FALSE, NULL, "Restore", G_CALLBACK(restore_backup_dialog_cb), "Cancel", NULL, find_matrix_account(), NULL, NULL, NULL);
+}
+
 static void dash_choice_cb(void *user_data, PurpleRequestFields *fields) {
   char *room_id = (char *)user_data;
   PurpleRequestField *f = purple_request_fields_get_field(fields, "action");
@@ -120,9 +147,16 @@ static void dash_choice_cb(void *user_data, PurpleRequestFields *fields) {
       case 7: menu_action_thread_conv_cb(conv, NULL); break;
       case 8: purple_matrix_rust_e2ee_status(purple_account_get_username(account), room_id); break;
       case 9: purple_matrix_rust_get_power_levels(purple_account_get_username(account), room_id); break;
+      case 10: {
+          purple_request_file(my_plugin, "Select File to Send", NULL, FALSE, G_CALLBACK(action_send_file_cb), NULL, account, NULL, conv, g_strdup(room_id));
+          break;
+      }
+      case 11: action_restore_backup_cb(NULL); break;
+      case 12: cmd_verify(conv, "matrix_verify", NULL, NULL, NULL); break;
+      case 13: cmd_crypto_status(conv, "matrix_debug_crypto", NULL, NULL, NULL); break;
     }
   }
-  g_free(room_id);
+  if (choice != 10) g_free(room_id);
 }
 void open_room_dashboard(PurpleAccount *account, const char *room_id) {
   if (!room_id || !account) return;
@@ -130,8 +164,8 @@ void open_room_dashboard(PurpleAccount *account, const char *room_id) {
   PurpleRequestFieldGroup *group = purple_request_field_group_new("Available Tasks");
   purple_request_fields_add_group(fields, group);
   PurpleRequestField *field = purple_request_field_choice_new("action", "What would you like to do?", 0);
-  const char *tasks[] = { "Reply to latest", "Start new thread", "Send sticker", "Create poll", "Invite user", "Room settings", "Mark as read", "View threads", "E2EE status", "Power levels" };
-  for (int i = 0; i < 10; i++) purple_request_field_choice_add(field, tasks[i]);
+  const char *tasks[] = { "Reply to latest", "Start new thread", "Send sticker", "Create poll", "Invite user", "Room settings", "Mark as read", "View threads", "E2EE status", "Power levels", "Send File...", "Restore Key Backup...", "Verify This Device...", "Check Crypto Status" };
+  for (int i = 0; i < 14; i++) purple_request_field_choice_add(field, tasks[i]);
   purple_request_field_group_add_field(group, field);
   purple_request_fields(my_plugin, "Room Dashboard", "Matrix Room Tasks", NULL, fields, "_Execute", G_CALLBACK(dash_choice_cb), "_Cancel", NULL, account, NULL, NULL, g_strdup(room_id));
 }
@@ -229,6 +263,9 @@ static PurpleCmdRet cmd_reply(PurpleConversation *conv, const gchar *cmd, gchar 
 static PurpleCmdRet cmd_thread(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
   menu_action_thread_conv_cb(conv, NULL); return PURPLE_CMD_RET_OK;
 }
+static PurpleCmdRet cmd_dashboard(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+  open_room_dashboard(purple_conversation_get_account(conv), purple_conversation_get_name(conv)); return PURPLE_CMD_RET_OK;
+}
 
 static PurpleCmdRet cmd_join(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
     if (args[0] && *args[0]) {
@@ -276,16 +313,43 @@ static PurpleCmdRet cmd_shrug(PurpleConversation *conv, const gchar *cmd, gchar 
     return PURPLE_CMD_RET_OK;
 }
 
+static PurpleCmdRet cmd_restore_backup(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    if (args[0] && *args[0]) {
+        PurpleAccount *account = purple_conversation_get_account(conv);
+        purple_matrix_rust_restore_backup(purple_account_get_username(account), args[0]);
+        return PURPLE_CMD_RET_OK;
+    }
+    return PURPLE_CMD_RET_FAILED;
+}
+
+static PurpleCmdRet cmd_verify(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    /* Verify self by default */
+    purple_matrix_rust_verify_user(purple_account_get_username(account), purple_account_get_username(account));
+    purple_conversation_write(conv, "System", "Verification request sent to your other devices. Please check Element or another client to approve.", PURPLE_MESSAGE_SYSTEM, time(NULL));
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_crypto_status(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    purple_matrix_rust_debug_crypto_status(purple_account_get_username(account));
+    return PURPLE_CMD_RET_OK;
+}
+
 void register_matrix_commands(PurplePlugin *plugin) {
   purple_cmd_register("matrix_help", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_help, "help", NULL);
   purple_cmd_register("sticker", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_sticker, "sticker: Browse and send stickers", NULL);
   purple_cmd_register("poll", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_poll, "poll: Create a new poll", NULL);
   purple_cmd_register("reply", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_reply, "reply: Reply to the latest message", NULL);
   purple_cmd_register("thread", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_thread, "thread: Start a new thread from the latest message", NULL);
+  purple_cmd_register("dashboard", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_dashboard, "dashboard: Open the Matrix room dashboard", NULL);
   
   purple_cmd_register("join", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_join, "join <room_id_or_alias>: Join a room", NULL);
   purple_cmd_register("invite", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_invite, "invite <user_id>: Invite a user", NULL);
   purple_cmd_register("shrug", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_shrug, "shrug [message]: Add a shrug emoji", NULL);
+  purple_cmd_register("matrix_restore_backup", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_restore_backup, "matrix_restore_backup <security_key>: Restore E2EE keys from backup", NULL);
+  purple_cmd_register("matrix_verify", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_verify, "matrix_verify: Start device verification", NULL);
+  purple_cmd_register("matrix_debug_crypto", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_crypto_status, "matrix_debug_crypto: Show detailed E2EE status", NULL);
 }
 
 GList *matrix_actions(PurplePlugin *plugin, gpointer context) {
@@ -296,6 +360,9 @@ GList *matrix_actions(PurplePlugin *plugin, gpointer context) {
     m = g_list_append(m, act);
 
     act = purple_plugin_action_new("Invite User...", action_invite_user_cb);
+    m = g_list_append(m, act);
+
+    act = purple_plugin_action_new("Restore E2EE Backup...", action_restore_backup_cb);
     m = g_list_append(m, act);
 
     act = purple_plugin_action_new("Enter Manual SSO Token...", action_sso_token_cb);

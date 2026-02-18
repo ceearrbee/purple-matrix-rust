@@ -39,16 +39,35 @@ pub extern "C" fn purple_matrix_rust_verify_user(user_id: *const c_char, target_
         RUNTIME.spawn(async move {
              use matrix_sdk::ruma::UserId;
              if let Ok(uid) = <&UserId>::try_from(target_user_id_str.as_str()) {
-                 match client.encryption().get_user_identity(uid).await {
+                 let encryption = client.encryption();
+                 
+                 // Try to request identity first to ensure it's tracked
+                 let _ = encryption.request_user_identity(uid).await;
+
+                 match encryption.get_user_identity(uid).await {
                      Ok(Some(identity)) => {
-                         if let Err(e) = identity.request_verification().await {
-                             log::error!("Failed to request verification: {:?}", e);
-                         } else {
-                             log::info!("Verification request sent to {}", target_user_id_str);
+                         log::info!("Identity found for {}, requesting verification...", target_user_id_str);
+                         match identity.request_verification().await {
+                             Ok(_) => {
+                                 log::info!("Verification request sent to {}", target_user_id_str);
+                                 crate::ffi::send_system_message(&user_id_str, &format!("Verification request sent to {}. Please check your other devices.", target_user_id_str));
+                             },
+                             Err(e) => {
+                                 log::error!("Failed to request verification: {:?}", e);
+                                 crate::ffi::send_system_message(&user_id_str, &format!("Verification failed to start: {:?}", e));
+                             }
                          }
                      },
-                     Ok(None) => log::warn!("User identity not found for {}. Please ensure you share a room.", target_user_id_str),
-                     Err(e) => log::error!("Failed to get user identity: {:?}", e),
+                     Ok(None) => {
+                         log::warn!("User identity not found for {}. Checking for other devices...", target_user_id_str);
+                         // If it's self-verification and no identity found, maybe try verifying against another device directly?
+                         // For now, just report failure.
+                         crate::ffi::send_system_message(&user_id_str, &format!("Could not find a valid Matrix identity for {}. Ensure they share a room with you.", target_user_id_str));
+                     },
+                     Err(e) => {
+                         log::error!("Failed to get user identity: {:?}", e);
+                         crate::ffi::send_system_message(&user_id_str, &format!("Error retrieving identity: {:?}", e));
+                     },
                  }
              }
         });
@@ -146,6 +165,41 @@ pub extern "C" fn purple_matrix_rust_e2ee_status(user_id: *const c_char, room_id
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_debug_crypto_status(user_id: *const c_char) {
+    if user_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            let encryption = client.encryption();
+            let mut msg = format!("<b>Crypto Status for {}:</b><br/>", user_id_str);
+            
+            if let Ok(Some(device)) = encryption.get_own_device().await {
+                msg.push_str(&format!("- Device ID: {}<br/>", device.device_id()));
+                msg.push_str(&format!("- Locally Trusted: {}<br/>", device.is_locally_trusted()));
+                msg.push_str(&format!("- Verified: {}<br/>", device.is_verified()));
+            } else {
+                msg.push_str("- Own device not found!<br/>");
+            }
+
+            if let Some(status) = encryption.cross_signing_status().await {
+                msg.push_str(&format!("- Cross-signing: Active<br/>"));
+                msg.push_str(&format!("  - Master Key: {}<br/>", status.has_master));
+                msg.push_str(&format!("  - Self-signing Key: {}<br/>", status.has_self_signing));
+                msg.push_str(&format!("  - User-signing Key: {}<br/>", status.has_user_signing));
+            } else {
+                msg.push_str("- Cross-signing: Not initialized<br/>");
+            }
+            
+            let backups = encryption.backups();
+            msg.push_str(&format!("- Key Backup: {}<br/>", backups.are_enabled().await));
+
+            crate::ffi::send_system_message(&user_id_str, &msg);
+        });
+    });
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_export_keys(user_id: *const c_char, path: *const c_char, passphrase: *const c_char) {
     if user_id.is_null() || path.is_null() || passphrase.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
@@ -162,6 +216,47 @@ pub extern "C" fn purple_matrix_rust_export_keys(user_id: *const c_char, path: *
                 log::info!("Room keys exported successfully");
                 crate::ffi::send_system_message(&user_id_str, "Room keys exported successfully.");
              }
+        });
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_restore_backup(user_id: *const c_char, recovery_key: *const c_char) {
+    if user_id.is_null() || recovery_key.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let key_str = unsafe { CStr::from_ptr(recovery_key).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            let encryption = client.encryption();
+            let recovery = encryption.recovery();
+            
+            log::info!("Attempting to restore keys from backup for {}...", user_id_str);
+            
+            // 1. Recover the secrets (this imports the recovery key into the store)
+            match recovery.recover(&key_str).await {
+                Ok(_) => {
+                    log::info!("Successfully imported recovery key for {}", user_id_str);
+                    
+                    // 2. Trigger key download from backup for all joined rooms
+                    let backups = encryption.backups();
+                    if backups.are_enabled().await {
+                         crate::ffi::send_system_message(&user_id_str, "Recovery key accepted! Downloading keys from backup...");
+                         
+                         let rooms = client.joined_rooms();
+                         for room in rooms {
+                             let _ = backups.download_room_keys_for_room(room.room_id()).await;
+                         }
+                         crate::ffi::send_system_message(&user_id_str, "Key download complete. Historical threads should now be visible.");
+                    } else {
+                         crate::ffi::send_system_message(&user_id_str, "Recovery key accepted, but online backup is not enabled on this account.");
+                    }
+                },
+                Err(e) => {
+                    log::error!("Failed to recover keys: {:?}", e);
+                    crate::ffi::send_system_message(&user_id_str, &format!("Failed to recover keys: {:?}", e));
+                }
+            }
         });
     });
 }

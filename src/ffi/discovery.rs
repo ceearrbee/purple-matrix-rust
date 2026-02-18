@@ -41,6 +41,53 @@ pub extern "C" fn purple_matrix_rust_fetch_public_rooms_for_list(user_id: *const
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_fetch_room_preview(user_id: *const c_char, room_id_or_alias: *const c_char) {
+    if user_id.is_null() || room_id_or_alias.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let room_id_or_alias_str = unsafe { CStr::from_ptr(room_id_or_alias).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::{RoomOrAliasId, RoomAliasId};
+            
+            if let Ok(id) = <&RoomOrAliasId>::try_from(room_id_or_alias_str.as_str()) {
+                if id.is_room_alias_id() {
+                    if let Ok(alias) = <&RoomAliasId>::try_from(room_id_or_alias_str.as_str()) {
+                        match client.resolve_room_alias(alias).await {
+                            Ok(response) => {
+                                let room_id = response.room_id.to_string();
+                                let html = format!("<b>Room Preview:</b><br/>ID: {}<br/>Server: {:?}", room_id, response.servers);
+                                
+                                let c_user_id = CString::new(user_id_str).unwrap_or_default();
+                                let c_room = CString::new(room_id_or_alias_str).unwrap_or_default();
+                                let c_html = CString::new(html).unwrap_or_default();
+                                
+                                let guard = ROOM_PREVIEW_CALLBACK.lock().unwrap();
+                                if let Some(cb) = *guard {
+                                    cb(c_user_id.as_ptr(), c_room.as_ptr(), c_html.as_ptr());
+                                }
+                            },
+                            Err(e) => log::error!("Failed to preview room alias: {:?}", e),
+                        }
+                    }
+                } else {
+                    // It's already a Room ID
+                    let html = format!("<b>Room Info:</b><br/>ID: {}", room_id_or_alias_str);
+                    let c_user_id = CString::new(user_id_str).unwrap_or_default();
+                    let c_room = CString::new(room_id_or_alias_str).unwrap_or_default();
+                    let c_html = CString::new(html).unwrap_or_default();
+                    
+                    let guard = ROOM_PREVIEW_CALLBACK.lock().unwrap();
+                    if let Some(cb) = *guard {
+                        cb(c_user_id.as_ptr(), c_room.as_ptr(), c_html.as_ptr());
+                    }
+                }
+            }
+        });
+    });
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_search_public_rooms(user_id: *const c_char, search_term: *const c_char, output_room_id: *const c_char) {
      if user_id.is_null() || search_term.is_null() { return; }
      let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
@@ -109,5 +156,3 @@ pub extern "C" fn purple_matrix_rust_search_users(user_id: *const c_char, search
         });
     });
 }
-
-
