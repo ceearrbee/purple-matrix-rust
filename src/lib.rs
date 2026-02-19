@@ -52,10 +52,10 @@ pub struct MatrixClientHandle {
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_init() {
     let _ = SimpleLogger::new()
-        .with_level(log::LevelFilter::Debug)
-        .with_module_level("matrix_sdk", log::LevelFilter::Info)
-        .with_module_level("matrix_sdk_crypto", log::LevelFilter::Debug)
-        .with_module_level("matrix_sdk_base", log::LevelFilter::Info)
+        .with_level(log::LevelFilter::Info)
+        .with_module_level("matrix_sdk", log::LevelFilter::Warn)
+        .with_module_level("matrix_sdk_crypto", log::LevelFilter::Warn)
+        .with_module_level("matrix_sdk_base", log::LevelFilter::Warn)
         .init();
     log::info!("Rust backend initialized");
     

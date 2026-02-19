@@ -85,8 +85,8 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
                                                             if let Ok(AnySyncTimelineEvent::MessageLike(msg_ev)) = root_raw.deserialize() {
                                                                 if let AnySyncMessageLikeEvent::RoomMessage(original) = msg_ev {
                                                                     first_msg = original.as_original().map(|o| o.content.body().to_string()).unwrap_or_default();
-                                                                } else if let AnySyncMessageLikeEvent::RoomEncrypted(ev) = msg_ev {
-                                                                    first_msg = format!("[Encrypted from {}]", ev.sender());
+                                                                } else if let AnySyncMessageLikeEvent::RoomEncrypted(_) = msg_ev {
+                                                                    first_msg = "[Encrypted]".to_string();
                                                                 }
                                                             }
                                                             if first_msg.is_empty() { 
@@ -132,8 +132,8 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
                                                                 if let Ok(AnySyncTimelineEvent::MessageLike(msg_ev)) = latest_raw_val.deserialize() {
                                                                     if let AnySyncMessageLikeEvent::RoomMessage(original) = msg_ev {
                                                                         latest_msg = original.as_original().map(|o| o.content.body().to_string()).unwrap_or_default();
-                                                                    } else if let AnySyncMessageLikeEvent::RoomEncrypted(ev) = msg_ev {
-                                                                        latest_msg = format!("[Encrypted from {}]", ev.sender());
+                                                                    } else if let AnySyncMessageLikeEvent::RoomEncrypted(_) = msg_ev {
+                                                                        latest_msg = "[Encrypted]".to_string();
                                                                     }
                                                                 }
                                                             }

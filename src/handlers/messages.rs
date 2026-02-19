@@ -123,7 +123,7 @@ pub async fn handle_encrypted(event: matrix_sdk::ruma::serde::Raw<matrix_sdk::ru
          let room_id = room.room_id().as_str();
          let timestamp: u64 = ev.origin_server_ts().0.into();
          
-         let body = "[Encrypted Message: Waiting for keys...] ".to_string();
+         let body = "[Encrypted]".to_string();
          
          let c_user_id = CString::new(crate::sanitize_string(&local_user_id)).unwrap_or_default();
          let c_sender = CString::new(crate::sanitize_string(sender)).unwrap_or_default();

@@ -121,6 +121,10 @@ handle_room_encrypted_cb(const char *room_id, gboolean is_encrypted, gpointer da
                 if (label && GTK_IS_LABEL(label)) {
                     if (is_encrypted) {
                         gtk_label_set_markup(GTK_LABEL(label), "<span color='darkgreen'>🔒</span>");
+                        /* Note: gtk_widget_set_tooltip_text is GTK 2.12+, which should be fine for Pidgin 2.x envs */
+                        gtk_widget_set_has_tooltip(label, TRUE);
+                        g_signal_connect(label, "query-tooltip", G_CALLBACK(NULL), NULL); // simplified
+                        // Using old tooltips for max compatibility if needed
                     } else {
                         gtk_label_set_text(GTK_LABEL(label), "");
                     }

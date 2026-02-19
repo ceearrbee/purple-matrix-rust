@@ -204,7 +204,7 @@ async fn process_sync_event_for_history(client: &Client, room: &matrix_sdk::Room
                 },
                 AnySyncMessageLikeEvent::RoomEncrypted(_) => {
                     is_encrypted = true;
-                    body = "[Encrypted Message: Decryption failed]".to_string();
+                    body = "[Encrypted]".to_string();
                     
                     // Try to find thread ID in unencrypted metadata (unsigned) if decryption failed
                     let raw_json = timeline_event.raw().json().get();
@@ -321,7 +321,7 @@ pub async fn fetch_room_history_logic_with_limit(client: Client, full_room_id: S
                                  },
                                  AnySyncMessageLikeEvent::RoomEncrypted(_) => {
                                      is_encrypted = true;
-                                     body = "[Encrypted Message: Decryption failed]".to_string();
+                                     body = "[Encrypted]".to_string();
                                      
                                      // Try fallback metadata
                                      let raw_json = timeline_event.raw().json().get();

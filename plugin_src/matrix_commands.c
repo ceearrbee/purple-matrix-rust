@@ -249,7 +249,25 @@ void menu_action_room_settings_cb(PurpleBlistNode *node, gpointer data) {
 
 /* Commands & Registration */
 static PurpleCmdRet cmd_help(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
-  purple_conversation_write(conv, "System", "<b>Matrix Help:</b> /reply, /thread, /poll, /sticker, /shrug, /join, /invite", PURPLE_MESSAGE_SYSTEM, time(NULL)); return PURPLE_CMD_RET_OK;
+  const char *msg = 
+    "<b>Matrix Protocol Commands:</b><br/>"
+    "<b>General:</b><br/>"
+    "  /dashboard - Open the Room Dashboard for quick tasks<br/>"
+    "  /join &lt;id/alias&gt; - Join a Matrix room<br/>"
+    "  /invite &lt;user_id&gt; - Invite a user to this room<br/>"
+    "  /shrug [msg] - Add a ¯\\_(ツ)_/¯ to your message<br/>"
+    "<b>Messaging:</b><br/>"
+    "  /reply - Reply to the latest message in this room<br/>"
+    "  /thread - Start a new thread from the latest message<br/>"
+    "  /sticker - Browse and send Matrix stickers<br/>"
+    "  /poll - Create a new poll in this room<br/>"
+    "<b>Security:</b><br/>"
+    "  /matrix_verify - Start interactive device verification<br/>"
+    "  /matrix_restore_backup &lt;key&gt; - Restore E2EE keys using your Security Key<br/>"
+    "  /matrix_debug_crypto - Show detailed encryption status for this session";
+  
+  purple_conversation_write(conv, "System", msg, PURPLE_MESSAGE_SYSTEM, time(NULL)); 
+  return PURPLE_CMD_RET_OK;
 }
 static PurpleCmdRet cmd_sticker(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
   return cmd_sticker_list(conv, cmd, args, error, data);
@@ -268,18 +286,22 @@ static PurpleCmdRet cmd_dashboard(PurpleConversation *conv, const gchar *cmd, gc
 }
 
 static PurpleCmdRet cmd_join(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
-    if (args[0] && *args[0]) {
-        PurpleAccount *account = purple_conversation_get_account(conv);
-        purple_matrix_rust_join_room(purple_account_get_username(account), args[0]);
-        return PURPLE_CMD_RET_OK;
+    if (!args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /join &lt;room_id_or_alias&gt;");
+        return PURPLE_CMD_RET_FAILED;
     }
-    return PURPLE_CMD_RET_FAILED;
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    purple_matrix_rust_join_room(purple_account_get_username(account), args[0]);
+    return PURPLE_CMD_RET_OK;
 }
 
 static PurpleCmdRet cmd_invite(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
-    if (args[0] && *args[0]) {
-        PurpleAccount *account = purple_conversation_get_account(conv);
-        // Ensure we are in a chat to know WHERE to invite (unless inviter is global context?)
+    if (!args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /invite &lt;user_id&gt;");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    // Ensure we are in a chat to know WHERE to invite (unless inviter is global context?)
         // If we act on a conversation, usually invite is to THAT room.
         // matrix_chat_invite uses conversation name.
         if (purple_conversation_get_type(conv) == PURPLE_CONV_TYPE_CHAT) {
@@ -292,8 +314,6 @@ static PurpleCmdRet cmd_invite(PurpleConversation *conv, const gchar *cmd, gchar
              *error = g_strdup("Invite command is currently only supported in Chat rooms.");
              return PURPLE_CMD_RET_FAILED;
         }
-    }
-    return PURPLE_CMD_RET_FAILED;
 }
 
 static PurpleCmdRet cmd_shrug(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
