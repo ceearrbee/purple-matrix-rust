@@ -164,11 +164,11 @@ inject_action_bar_idle_cb(gpointer data)
     purple_conversation_set_data(conv, MATRIX_UI_ENCRYPTED_LABEL_KEY, enc_label);
 
     const struct { const char *label; GCallback cb; const char *tooltip; } btns[] = {
-        { "Info", G_CALLBACK(on_info_clicked), "Room Details & Dashboard" },
-        { "Reply", G_CALLBACK(on_reply_clicked), "Reply to latest message" },
-        { "List Threads", G_CALLBACK(on_threads_clicked), "List active threads" },
-        { "Sticker", G_CALLBACK(on_sticker_clicked), "Send a sticker" },
-        { "Poll", G_CALLBACK(on_poll_clicked), "Create a poll" },
+        { "Dashboard", G_CALLBACK(on_info_clicked), "Open Room Dashboard (_Info)" },
+        { "Reply", G_CALLBACK(on_reply_clicked), "Reply to latest message (_Reply)" },
+        { "Threads", G_CALLBACK(on_threads_clicked), "Browse active threads (_Threads)" },
+        { "Sticker", G_CALLBACK(on_sticker_clicked), "Send a sticker (_Sticker)" },
+        { "Poll", G_CALLBACK(on_poll_clicked), "Create a poll (_Poll)" },
         { NULL, NULL, NULL }
     };
 

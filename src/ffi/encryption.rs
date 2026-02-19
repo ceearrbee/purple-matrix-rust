@@ -165,6 +165,37 @@ pub extern "C" fn purple_matrix_rust_e2ee_status(user_id: *const c_char, room_id
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_resync_room_keys(user_id: *const c_char, room_id: *const c_char) {
+    if user_id.is_null() || room_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::RoomId;
+            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                let encryption = client.encryption();
+                let backups = encryption.backups();
+                
+                log::info!("Manually requesting key sync for room {}...", room_id_str);
+                
+                if backups.are_enabled().await {
+                    crate::ffi::send_system_message(&user_id_str, "Downloading room keys from backup...");
+                    if let Err(e) = backups.download_room_keys_for_room(rid).await {
+                        log::error!("Failed to download room keys: {:?}", e);
+                        crate::ffi::send_system_message(&user_id_str, &format!("Failed to download keys: {:?}", e));
+                    } else {
+                        crate::ffi::send_system_message(&user_id_str, "Room keys updated! Try viewing threads again.");
+                    }
+                } else {
+                    crate::ffi::send_system_message(&user_id_str, "Key backup is not enabled. Other devices must be online to share keys.");
+                }
+            }
+        });
+    });
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_debug_crypto_status(user_id: *const c_char) {
     if user_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };

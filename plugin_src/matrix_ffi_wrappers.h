@@ -95,6 +95,7 @@ extern void purple_matrix_rust_set_room_guest_access(const char *user_id, const 
 // Crypto management
 extern void purple_matrix_rust_recover_keys(const char *user_id, const char *passphrase);
 extern void purple_matrix_rust_restore_backup(const char *user_id, const char *recovery_key);
+extern void purple_matrix_rust_resync_room_keys(const char *user_id, const char *room_id);
 extern void purple_matrix_rust_export_keys(const char *user_id, const char *path, const char *passphrase);
 extern void purple_matrix_rust_bootstrap_cross_signing(const char *user_id);
 extern void purple_matrix_rust_verify_user(const char *user_id, const char *target_user_id);

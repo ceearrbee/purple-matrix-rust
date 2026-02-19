@@ -251,7 +251,7 @@ async fn process_sync_event_for_history(client: &Client, room: &matrix_sdk::Room
 }
 
 pub async fn fetch_room_history_logic(client: Client, room_id: String) {
-    let limit = if room_id.contains('|') { 200 } else { 100 };
+    let limit = 200; // Increased default limit for all rooms
     fetch_room_history_logic_with_limit(client, room_id, limit).await;
 }
 
@@ -364,7 +364,7 @@ pub async fn fetch_room_history_logic_with_limit(client: Client, full_room_id: S
                                  cb(c_user_id.as_ptr(), c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), c_thread_id.as_ptr(), c_event_id.as_ptr(), timestamp, is_encrypted);
                              }
                          }
-                         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                         tokio::time::sleep(std::time::Duration::from_millis(2)).await;
                      }
                  }
              }

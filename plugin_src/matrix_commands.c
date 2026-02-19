@@ -5,6 +5,7 @@
 #include "matrix_utils.h"
 #include "matrix_blist.h"
 #include "matrix_account.h"
+#include "matrix_chat.h"
 
 #include <libpurple/debug.h>
 #include <libpurple/notify.h>
@@ -22,6 +23,8 @@ static void action_sso_token_cb(PurplePluginAction *action);
 static void action_restore_backup_cb(PurplePluginAction *action);
 static PurpleCmdRet cmd_verify(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
 static PurpleCmdRet cmd_crypto_status(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_leave(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_members(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
 static void action_my_profile_cb(PurplePluginAction *action);
 static void my_profile_avatar_cb(void *user_data, const char *filename);
 static void menu_action_reply_dialog_cb(void *user_data, const char *text);
@@ -199,9 +202,20 @@ static void dash_choice_cb(void *user_data, PurpleRequestFields *fields) {
           purple_request_file(my_plugin, "Select Avatar Image", NULL, FALSE, G_CALLBACK(my_profile_avatar_cb), NULL, account, NULL, conv, NULL);
           break;
       }
+      case 16: {
+          purple_request_input(my_plugin, "Room Settings", "Change Room Topic", NULL, NULL, TRUE, FALSE, NULL, "_Save", G_CALLBACK(room_settings_dialog_cb), "_Cancel", NULL, account, NULL, NULL, g_strdup(room_id));
+          break;
+      }
+      case 17: {
+          purple_request_input(my_plugin, "Room Settings", "Change Room Name", NULL, NULL, FALSE, FALSE, NULL, "_Save", G_CALLBACK(room_settings_dialog_cb), "_Cancel", NULL, account, NULL, NULL, g_strdup(room_id));
+          break;
+      }
+      case 18: purple_matrix_rust_resync_room_keys(purple_account_get_username(account), room_id); break;
+      case 19: cmd_members(conv, "members", NULL, NULL, NULL); break;
+      case 20: cmd_leave(conv, "leave", NULL, NULL, NULL); break;
     }
   }
-  if (choice != 10 && choice != 14 && choice != 15) g_free(room_id);
+  if (choice != 10 && choice != 14 && choice != 15 && choice != 16 && choice != 17) g_free(room_id);
 }
 void open_room_dashboard(PurpleAccount *account, const char *room_id) {
   if (!room_id || !account) return;
@@ -209,8 +223,8 @@ void open_room_dashboard(PurpleAccount *account, const char *room_id) {
   PurpleRequestFieldGroup *group = purple_request_field_group_new("Available Tasks");
   purple_request_fields_add_group(fields, group);
   PurpleRequestField *field = purple_request_field_choice_new("action", "What would you like to do?", 0);
-  const char *tasks[] = { "Reply to latest", "Start new thread", "Send sticker", "Create poll", "Invite user", "Room settings", "Mark as read", "View threads", "E2EE status", "Power levels", "Send File...", "Restore Key Backup...", "Verify This Device...", "Check Crypto Status", "Kick/Ban User...", "Set My Avatar..." };
-  for (int i = 0; i < 16; i++) purple_request_field_choice_add(field, tasks[i]);
+  const char *tasks[] = { "Reply to latest", "Start new thread", "Send sticker", "Create poll", "Invite user", "Room settings", "Mark as read", "View threads", "E2EE status", "Power levels", "Send File...", "Restore Key Backup...", "Verify This Device...", "Check Crypto Status", "Kick/Ban User...", "Set My Avatar...", "Set Room Topic...", "Set Room Name...", "Re-sync Room Keys", "Show Participants", "Leave Room" };
+  for (int i = 0; i < 21; i++) purple_request_field_choice_add(field, tasks[i]);
   purple_request_field_group_add_field(group, field);
   purple_request_fields(my_plugin, "Room Dashboard", "Matrix Room Tasks", NULL, fields, "_Execute", G_CALLBACK(dash_choice_cb), "_Cancel", NULL, account, NULL, NULL, g_strdup(room_id));
 }
@@ -563,6 +577,36 @@ static PurpleCmdRet cmd_redact(PurpleConversation *conv, const gchar *cmd, gchar
     return PURPLE_CMD_RET_OK;
 }
 
+static PurpleCmdRet cmd_topic(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    if (!args[0] || !*args[0]) { *error = g_strdup("Usage: /topic <new_topic>"); return PURPLE_CMD_RET_FAILED; }
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    purple_matrix_rust_set_room_topic(purple_account_get_username(account), purple_conversation_get_name(conv), args[0]);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_room_name(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    if (!args[0] || !*args[0]) { *error = g_strdup("Usage: /room_name <new_name>"); return PURPLE_CMD_RET_FAILED; }
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    purple_matrix_rust_set_room_name(purple_account_get_username(account), purple_conversation_get_name(conv), args[0]);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_leave(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    PurpleConnection *gc = purple_account_get_connection(account);
+    if (gc) {
+        matrix_chat_leave(gc, get_chat_id(purple_conversation_get_name(conv)));
+        return PURPLE_CMD_RET_OK;
+    }
+    return PURPLE_CMD_RET_FAILED;
+}
+
+static PurpleCmdRet cmd_members(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    purple_matrix_rust_fetch_room_members(purple_account_get_username(account), purple_conversation_get_name(conv));
+    return PURPLE_CMD_RET_OK;
+}
+
 void register_matrix_commands(PurplePlugin *plugin) {
   purple_cmd_register("matrix_help", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_help, "help", NULL);
   purple_cmd_register("sticker", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_sticker, "sticker: Browse and send stickers", NULL);
@@ -574,6 +618,9 @@ void register_matrix_commands(PurplePlugin *plugin) {
   
   purple_cmd_register("join", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_join, "join <room_id_or_alias>: Join a room", NULL);
   purple_cmd_register("invite", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_invite, "invite <user_id>: Invite a user", NULL);
+  purple_cmd_register("leave", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_leave, "leave: Leave the current room", NULL);
+  purple_cmd_register("members", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_members, "members: List participants in this room", NULL);
+  
   purple_cmd_register("shrug", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_shrug, "shrug [message]: Add a shrug emoji", NULL);
   purple_cmd_register("matrix_restore_backup", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_restore_backup, "matrix_restore_backup <security_key>: Restore E2EE keys from backup", NULL);
   purple_cmd_register("matrix_verify", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_verify, "matrix_verify: Start device verification", NULL);
@@ -586,6 +633,8 @@ void register_matrix_commands(PurplePlugin *plugin) {
   purple_cmd_register("ban", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_ban, "ban <user_id> [reason]: Ban a user from the room", NULL);
   purple_cmd_register("unban", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_unban, "unban <user_id>: Unban a user from the room", NULL);
   purple_cmd_register("redact", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_redact, "redact <event_id> [reason]: Delete a specific message", NULL);
+  purple_cmd_register("topic", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_topic, "topic <new_topic>: Set room topic", NULL);
+  purple_cmd_register("room_name", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_room_name, "room_name <new_name>: Set room display name", NULL);
 }
 
 GList *matrix_actions(PurplePlugin *plugin, gpointer context) {

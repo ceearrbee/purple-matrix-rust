@@ -20,6 +20,14 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
                 if let Some(room) = client_clone.get_room(rid) {
                     log::info!("Listing all threads for {} using server API", room_id_str);
                     
+                    // Proactively trigger key download for this room if backup is enabled
+                    let encryption = client_clone.encryption();
+                    let backups = encryption.backups();
+                    if backups.are_enabled().await {
+                        log::info!("Pre-fetching keys from backup for room {}", room_id_str);
+                        let _ = backups.download_room_keys_for_room(rid).await;
+                    }
+
                     let mut from_token: Option<String> = None;
                     let mut all_threads_found = false;
 
@@ -60,21 +68,24 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
                                                                                 root_decryption_failed = false;
                                                                                 break;
                                                                             },
-                                                                            Err(e) => { 
-                                                                                log::warn!("Failed to decrypt thread root {} (attempt {}): {:?}", root_id, attempt + 1, e);
-                                                                                root_decryption_failed = true; 
-                                                                                
-                                                                                if attempt == 0 {
-                                                                                    // First failure: Log session info and wait a bit
-                                                                                    if let Some(ev) = encrypted_ev.as_original() {
-                                                                                         use matrix_sdk::ruma::events::room::encrypted::EncryptedEventScheme;
-                                                                                         if let EncryptedEventScheme::MegolmV1AesSha2(megolm) = &ev.content.scheme {
-                                                                                             log::info!("Pending key for session {} in room {}. Waiting...", megolm.session_id, room.room_id());
-                                                                                         }
-                                                                                    }
-                                                                                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                                                                                }
-                                                                            }
+                                                                                                                            Err(e) => { 
+                                                                                                                                log::warn!("Failed to decrypt thread root {} (attempt {}): {:?}", root_id, attempt + 1, e);
+                                                                                                                                root_decryption_failed = true; 
+                                                                                                                                
+                                                                                                                                if attempt == 0 {
+                                                                                                                                    // First failure: Log session info and attempt targeted backup download
+                                                                                                                                    if let Some(ev) = encrypted_ev.as_original() {
+                                                                                                                                         use matrix_sdk::ruma::events::room::encrypted::EncryptedEventScheme;
+                                                                                                                                         if let EncryptedEventScheme::MegolmV1AesSha2(megolm) = &ev.content.scheme {
+                                                                                                                                             log::info!("Pending key for session {} in room {}. Attempting targeted backup recovery...", megolm.session_id, room.room_id());
+                                                                                                                                             // Try to download this specific key
+                                                                                                                                             let _ = backups.download_room_key(room.room_id(), &megolm.session_id).await;
+                                                                                                                                         }
+                                                                                                                                    }
+                                                                                                                                    tokio::time::sleep(std::time::Duration::from_millis(20)).await; // Shorter wait
+                                                                                                                                }
+                                                                                                                            }
+                                                                            
                                                                         }
                                                                     }
                                                                 } else {
@@ -117,11 +128,20 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
                                                                                     latest_decryption_failed = false;
                                                                                     break;
                                                                                 },
-                                                                                Err(e) => { 
-                                                                                    log::warn!("Failed to decrypt latest thread event {} (attempt {}): {:?}", latest_id, attempt + 1, e);
-                                                                                    latest_decryption_failed = true; 
-                                                                                    if attempt == 0 { tokio::time::sleep(std::time::Duration::from_millis(50)).await; }
-                                                                                }
+                                                                                                                                    Err(e) => { 
+                                                                                                                                        log::warn!("Failed to decrypt latest thread event {} (attempt {}): {:?}", latest_id, attempt + 1, e);
+                                                                                                                                        latest_decryption_failed = true; 
+                                                                                                                                        if attempt == 0 {
+                                                                                                                                            if let Some(e_ev) = encrypted_ev.as_original() {
+                                                                                                                                                use matrix_sdk::ruma::events::room::encrypted::EncryptedEventScheme;
+                                                                                                                                                if let EncryptedEventScheme::MegolmV1AesSha2(megolm) = &e_ev.content.scheme {
+                                                                                                                                                    let _ = backups.download_room_key(room.room_id(), &megolm.session_id).await;
+                                                                                                                                                }
+                                                                                                                                            }
+                                                                                                                                            tokio::time::sleep(std::time::Duration::from_millis(20)).await; 
+                                                                                                                                        }
+                                                                                                                                    }
+                                                                                
                                                                             }
                                                                         }
                                                                     } else {
