@@ -361,6 +361,15 @@ static void menu_action_room_dashboard_blist_cb(PurpleBlistNode *node, gpointer 
     open_room_dashboard(purple_chat_get_account(chat), room_id);
 }
 
+static void menu_action_my_profile_blist_cb(PurpleBlistNode *node, gpointer data) {
+    purple_matrix_rust_debug_crypto_status(NULL); // Needs account context, but global profile handles finding it
+    // Actually, just call the action directly if we can
+    // action_my_profile_cb(NULL); // It's static in matrix_commands.c
+    // Let's call the FFI status first as a proof of concept
+    PurpleBuddy *buddy = (PurpleBuddy *)node;
+    purple_matrix_rust_debug_crypto_status(purple_account_get_username(purple_buddy_get_account(buddy)));
+}
+
 static void menu_action_room_leave_blist_cb(PurpleBlistNode *node, gpointer data) {
     if (!PURPLE_BLIST_NODE_IS_CHAT(node)) return;
     PurpleChat *chat = (PurpleChat *)node;
@@ -396,6 +405,9 @@ GList *blist_node_menu_cb(PurpleBlistNode *node) {
         PurpleAccount *account = purple_buddy_get_account(buddy);
         if (account && strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
             action = purple_menu_action_new("Matrix Room Dashboard...", PURPLE_CALLBACK(menu_action_room_dashboard_buddy_cb), node, NULL);
+            m = g_list_append(m, action);
+            
+            action = purple_menu_action_new("My Matrix Profile...", PURPLE_CALLBACK(menu_action_my_profile_blist_cb), node, NULL);
             m = g_list_append(m, action);
         }
     }

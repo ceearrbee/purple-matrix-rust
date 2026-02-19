@@ -156,8 +156,7 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
                                     .unwrap_or(0);
 
                                 log::info!("Thread {} has {} replies. Summary JSON: {:?}", root_id, msg_count, summary_json);
-                                log::debug!("Thread preview body: {}", body);
-
+                                
                                 let ts: u64 = thread_root.timestamp().map(|t| t.0.into()).unwrap_or(0);
                                 let c_msg = CString::new(crate::sanitize_string(&body)).unwrap_or_default();
                                 

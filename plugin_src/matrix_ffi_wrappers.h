@@ -84,6 +84,13 @@ extern void purple_matrix_rust_mark_unread(const char *user_id, const char *room
 extern bool purple_matrix_rust_e2ee_status(const char *user_id, const char *room_id);
 extern void purple_matrix_rust_get_power_levels(const char *user_id, const char *room_id);
 extern void purple_matrix_rust_set_room_name(const char *user_id, const char *room_id, const char *name);
+extern void purple_matrix_rust_kick_user(const char *user_id, const char *room_id, const char *target_user_id, const char *reason);
+extern void purple_matrix_rust_ban_user(const char *user_id, const char *room_id, const char *target_user_id, const char *reason);
+extern void purple_matrix_rust_unban_user(const char *user_id, const char *room_id, const char *target_user_id, const char *reason);
+extern void purple_matrix_rust_set_room_avatar(const char *user_id, const char *room_id, const char *path);
+extern void purple_matrix_rust_set_room_join_rule(const char *user_id, const char *room_id, const char *rule);
+extern void purple_matrix_rust_set_room_history_visibility(const char *user_id, const char *room_id, const char *visibility);
+extern void purple_matrix_rust_set_room_guest_access(const char *user_id, const char *room_id, bool allow);
 
 // Crypto management
 extern void purple_matrix_rust_recover_keys(const char *user_id, const char *passphrase);

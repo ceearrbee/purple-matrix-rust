@@ -104,7 +104,16 @@ pub extern "C" fn purple_matrix_rust_send_message(user_id: *const c_char, room_i
                          }
                      }
                     
-                    let mut content = crate::create_message_content(final_text);
+                    let mut content = if final_text.starts_with("/me ") {
+                        let emote_body = final_text.strip_prefix("/me ").unwrap_or(&final_text).to_string();
+                        matrix_sdk::ruma::events::room::message::RoomMessageEventContent::new(
+                            matrix_sdk::ruma::events::room::message::MessageType::Emote(
+                                matrix_sdk::ruma::events::room::message::EmoteMessageEventContent::plain(emote_body)
+                            )
+                        )
+                    } else {
+                        crate::create_message_content(final_text)
+                    };
                     
                     // Attach Thread Relation if present
                     if let Some(thread_id_str) = thread_root_id_opt {
