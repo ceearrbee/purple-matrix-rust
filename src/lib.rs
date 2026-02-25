@@ -4,6 +4,7 @@ use matrix_sdk::Client;
 use once_cell::sync::Lazy;
 use simple_logger::SimpleLogger;
 use tokio::runtime::Runtime;
+use dashmap::{DashMap, DashSet};
 
 pub mod ffi;
 
@@ -16,22 +17,23 @@ pub mod grouping;
 pub mod html_fmt;
 
 // Global Runtime/Client
-pub(crate) static RUNTIME: Lazy<Runtime> = Lazy::new(|| Runtime::new().unwrap());
+pub(crate) static RUNTIME: Lazy<Runtime> = Lazy::new(|| Runtime::new().unwrap_or_else(|e| panic!("Failed to start Tokio runtime: {}", e)));
 // user_id -> Client
-pub(crate) static CLIENTS: Lazy<Mutex<std::collections::HashMap<String, Client>>> = Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
-pub(crate) static HISTORY_FETCHED_ROOMS: Lazy<Mutex<std::collections::HashSet<String>>> = Lazy::new(|| Mutex::new(std::collections::HashSet::new()));
-pub(crate) static PAGINATION_TOKENS: Lazy<Mutex<std::collections::HashMap<String, String>>> = Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
+pub(crate) static CLIENTS: Lazy<DashMap<String, Client>> = Lazy::new(DashMap::new);
+pub(crate) static HISTORY_FETCHED_ROOMS: Lazy<DashSet<String>> = Lazy::new(DashSet::new);
+pub(crate) static PAGINATION_TOKENS: Lazy<DashMap<String, String>> = Lazy::new(DashMap::new);
 pub(crate) static DATA_PATH: Lazy<Mutex<Option<std::path::PathBuf>>> = Lazy::new(|| Mutex::new(None));
 
 pub(crate) fn with_client<F, R>(user_id: &str, f: F) -> Option<R>
 where
     F: FnOnce(Client) -> R,
 {
-    let guard = CLIENTS.lock().unwrap();
-    if let Some(client) = guard.get(user_id) {
-        Some(f(client.clone()))
+    let client_opt = CLIENTS.get(user_id).map(|c| c.clone());
+    if let Some(client) = client_opt {
+        Some(f(client))
     } else {
-        log::warn!("No client found for user_id: '{}'", user_id);
+        let safe_user_id = sanitize_string(user_id);
+        log::warn!("No client found for user_id: '{}'", safe_user_id);
         if !user_id.is_empty() && user_id != "System" {
              send_system_message(user_id, "Matrix error: Account not connected or session lost.");
         }
@@ -45,9 +47,7 @@ pub fn send_system_message(user_id: &str, msg: &str) {
 
 
 #[repr(C)]
-pub struct MatrixClientHandle {
-    _private: [u8; 0],
-}
+pub struct MatrixClientHandle;
 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_init() {
@@ -65,12 +65,18 @@ pub extern "C" fn purple_matrix_rust_init() {
 }
 
 pub fn escape_html(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#x27;")
+    let mut escaped = String::with_capacity(input.len());
+    for c in input.chars() {
+        match c {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#x27;"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 pub fn sanitize_untrusted_html(input: &str) -> String {
@@ -93,11 +99,6 @@ pub(crate) fn create_message_content(text: String) -> matrix_sdk::ruma::events::
     use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
     use pulldown_cmark::{Parser, Options, html};
 
-    // Always attempt to render as Markdown.
-    // pulldown-cmark handles plain text gracefully (it just becomes <p>text</p> or similar, 
-    // but usually we want to preserve exact input if it's just text.
-    // However, Matrix clients usually expect HTML if `formatted_body` is present.
-    
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
@@ -107,23 +108,9 @@ pub(crate) fn create_message_content(text: String) -> matrix_sdk::ruma::events::
     let mut html_output = String::new();
     html::push_html(&mut html_output, parser);
 
-    // If the HTML output is identical to the input (wrapped in p or not), maybe send as plain?
-    // Actually, it's safer to always send both.
-    // But we need to be careful not to unnecessarily wrap simple text in <p> if it makes the UI look bad.
-    // Many clients strip the outer <p>.
-    
-    // Let's strip the surrounding <p> if it's the only tag, for cleaner display in some clients?
-    // Or just trust the client.
-    
-    // Ensure we don't treat the input as HTML if it wasn't intended.
-    // But the user *wants* markdown.
-
-    // trimming the resulting html often helps
     let html_trimmed = html_output.trim();
     
-    // Check if it actually produced any HTML tags differing from text
-    // (Simple heuristic: if it contains tags)
-    
+    // Fall back to plain text if the markdown parser produced nothing distinct
     if html_trimmed != text && (html_trimmed.contains('<') && html_trimmed.contains('>')) {
         RoomMessageEventContent::text_html(text.clone(), html_trimmed.to_string())
     } else {
@@ -244,5 +231,46 @@ mod tests {
         } else {
             panic!("Expected Text message");
         }
+    }
+
+    #[tokio::test]
+    async fn test_with_client_concurrency() {
+        use std::sync::Arc;
+        let c1 = matrix_sdk::Client::builder().homeserver_url("https://example.com").build().await.unwrap();
+        let c2 = matrix_sdk::Client::builder().homeserver_url("https://example.com").build().await.unwrap();
+        
+        crate::CLIENTS.insert("user1".to_string(), c1);
+        crate::CLIENTS.insert("user2".to_string(), c2);
+        
+        let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut handles = vec![];
+        
+        for _ in 0..100 {
+            let counter_clone = counter.clone();
+            handles.push(tokio::spawn(async move {
+                crate::with_client("user1", |client| {
+                    assert_eq!(client.homeserver().as_str(), "https://example.com/");
+                    counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                });
+            }));
+            let counter_clone = counter.clone();
+            handles.push(tokio::spawn(async move {
+                crate::with_client("user2", |client| {
+                    assert_eq!(client.homeserver().as_str(), "https://example.com/");
+                    counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                });
+            }));
+            handles.push(tokio::spawn(async move {
+                crate::with_client("user_missing", |_| {
+                    panic!("Should not be called");
+                });
+            }));
+        }
+        
+        for h in handles {
+            let _ = h.await;
+        }
+        
+        assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 200);
     }
 }

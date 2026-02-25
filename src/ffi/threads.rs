@@ -1,7 +1,7 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use crate::{RUNTIME, with_client};
-use crate::ffi::*;
+
 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_id: *const c_char) {
@@ -36,8 +36,8 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
                         options.from = from_token.clone();
 
                         if let Ok(threads) = room.list_threads(options).await {
-                            let c_user_id = CString::new(crate::sanitize_string(&user_id_str)).unwrap_or_default();
-                            let c_room_id = CString::new(crate::sanitize_string(&room_id_str)).unwrap_or_default();
+                            let _c_user_id = CString::new(crate::sanitize_string(&user_id_str)).unwrap_or_default();
+                            let _c_room_id = CString::new(crate::sanitize_string(&room_id_str)).unwrap_or_default();
                             
                             if threads.chunk.is_empty() {
                                 log::info!("No more threads found for {}", room_id_str);
@@ -47,7 +47,7 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
 
                                                         for thread_root in &threads.chunk {
                                                             let root_id = thread_root.event_id().map(|e| e.to_string()).unwrap_or_default();
-                                                            let c_root_id = CString::new(crate::sanitize_string(&root_id)).unwrap_or_default();
+                                                            let _c_root_id = CString::new(crate::sanitize_string(&root_id)).unwrap_or_default();
                                                             
                                                             // 1. Get First Message (the root event itself)
                                                             let mut first_msg = String::new();
@@ -178,12 +178,15 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
                                 log::info!("Thread {} has {} replies. Summary JSON: {:?}", root_id, msg_count, summary_json);
                                 
                                 let ts: u64 = thread_root.timestamp().map(|t| t.0.into()).unwrap_or(0);
-                                let c_msg = CString::new(crate::sanitize_string(&body)).unwrap_or_default();
-                                
-                                let guard = THREAD_LIST_CALLBACK.lock().unwrap();
-                                if let Some(cb) = *guard {
-                                    cb(c_user_id.as_ptr(), c_room_id.as_ptr(), c_root_id.as_ptr(), c_msg.as_ptr(), msg_count, ts);
-                                }
+                                let event = crate::ffi::FfiEvent::ThreadList {
+                                    user_id: user_id_str.clone(),
+                                    room_id: room_id_str.clone(),
+                                    thread_root_id: Some(root_id.clone()),
+                                    latest_msg: Some(body),
+                                    count: msg_count,
+                                    ts,
+                                };
+                                let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
                             }
                             
                             if let Some(next_token) = threads.prev_batch_token {
@@ -202,12 +205,15 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
                         }
                     }
                     
-                    let guard = THREAD_LIST_CALLBACK.lock().unwrap();
-                    if let Some(cb) = *guard {
-                        let c_user_id = CString::new(crate::sanitize_string(&user_id_str)).unwrap_or_default();
-                        let c_room_id = CString::new(crate::sanitize_string(&room_id_str)).unwrap_or_default();
-                        cb(c_user_id.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), 0, 0);
-                    }
+                    let event = crate::ffi::FfiEvent::ThreadList {
+                        user_id: user_id_str.clone(),
+                        room_id: room_id_str.clone(),
+                        thread_root_id: None,
+                        latest_msg: None,
+                        count: 0,
+                        ts: 0,
+                    };
+                    let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
                 }
             }
         });

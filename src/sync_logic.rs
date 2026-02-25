@@ -1,12 +1,9 @@
-use crate::ffi::{
-    MSG_CALLBACK, ROOM_JOINED_CALLBACK
-};
 use crate::{CLIENTS, DATA_PATH};
 use matrix_sdk::{
     config::SyncSettings,
     Client, 
 };
-use std::ffi::CString;
+
 use crate::handlers::{messages, presence, typing, reactions, room_state, account_data, polls, receipts};
 
 fn is_auth_failure(error_str: &str) -> bool {
@@ -17,22 +14,24 @@ fn is_auth_failure(error_str: &str) -> bool {
 }
 
 fn handle_auth_failure(client: &Client) {
-    if let Some(user_id) = client.user_id().map(|u| u.to_string()) {
-        CLIENTS.lock().unwrap().remove(&user_id);
-        let entry = keyring::Entry::new("purple-matrix-rust", &user_id).unwrap();
+    let user_id = client.user_id().map(|u| u.to_string());
+    if let Some(ref uid) = user_id {
+        CLIENTS.remove(uid);
+        let entry = keyring::Entry::new("purple-matrix-rust", uid).unwrap();
         let _ = entry.delete_password();
     }
 
-    if let Some(mut path) = DATA_PATH.lock().unwrap().clone() {
+    if let Some(mut path) = DATA_PATH.lock().unwrap_or_else(|e| e.into_inner()).clone() {
         path.push("session.json");
         if path.exists() { let _ = std::fs::read_dir(&path).ok().map(|_| ()); } // simplified
     }
 
     let msg = "Matrix session expired. Please re-login.";
-    if let Ok(c_msg) = CString::new(msg) {
-        let guard = crate::ffi::LOGIN_FAILED_CALLBACK.lock().unwrap();
-        if let Some(cb) = *guard { cb(c_msg.as_ptr()); }
-    }
+    let event = crate::ffi::FfiEvent::LoginFailed {
+        user_id: user_id.unwrap_or_default(),
+        message: msg.to_string(),
+    };
+    let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
 }
 
 pub async fn start_sync_loop(client: Client) {
@@ -49,8 +48,10 @@ pub async fn start_sync_loop(client: Client) {
         },
         Err(e) => {
             let error_str = e.to_string();
+            eprintln!("CRITICAL FALLBACK ERROR: Initial sync_once failed for {}: {}", user_id, error_str);
+            log::error!("Initial sync_once failed for {}: {}", user_id, error_str);
             if is_auth_failure(&error_str) { handle_auth_failure(&client_for_sync); return; }
-            None
+            panic!("FORCE PANIC ON SYNC ONCE FAILURE: {}", error_str);
         }
     };
 
@@ -66,20 +67,16 @@ pub async fn start_sync_loop(client: Client) {
         let topic = room.topic().unwrap_or_default();
         let is_encrypted = room.get_state_event_static::<matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent>().await.ok().flatten().is_some();
         
-        let s_user_id = crate::sanitize_string(&user_id);
-        let s_room_id = crate::sanitize_string(&room_id);
-        let s_name = crate::sanitize_string(&name);
-        let s_group = crate::sanitize_string(&group);
-        let s_topic = crate::sanitize_string(&topic);
-
-        if let (Ok(c_user_id), Ok(c_room_id), Ok(c_name), Ok(c_group), Ok(c_topic)) =
-           (CString::new(s_user_id), CString::new(s_room_id), CString::new(s_name), CString::new(s_group), CString::new(s_topic))
-        {
-            let guard = ROOM_JOINED_CALLBACK.lock().unwrap();
-            if let Some(cb) = *guard {
-                cb(c_user_id.as_ptr(), c_room_id.as_ptr(), c_name.as_ptr(), c_group.as_ptr(), std::ptr::null(), c_topic.as_ptr(), is_encrypted);
-            }
-        }
+        let event = crate::ffi::FfiEvent::RoomJoined {
+            user_id: user_id.clone(),
+            room_id: room_id.clone(),
+            name: name.clone(),
+            group_name: group.clone(),
+            avatar_url: None,
+            topic: Some(topic.clone()),
+            encrypted: is_encrypted,
+        };
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
 
         // Defer avatar and extra state
         let client_clone = client_for_sync.clone();
@@ -95,20 +92,16 @@ pub async fn start_sync_loop(client: Client) {
                 if let Some(room) = client_clone.get_room(ruma_room_id.as_ref()) {
                     if let Some(url) = room.avatar_url() {
                         if let Some(path) = crate::media_helper::download_avatar(&client_clone, &url, &room_id_clone).await {
-                             let s_user = crate::sanitize_string(&user_id_clone);
-                             let s_room = crate::sanitize_string(&room_id_clone);
-                             let s_name = crate::sanitize_string(&name_clone);
-                             let s_group = crate::sanitize_string(&group_clone);
-                             let s_topic = crate::sanitize_string(&topic_clone);
-
-                             if let (Ok(c_user_id), Ok(c_room_id), Ok(c_name), Ok(c_group), Ok(c_avatar), Ok(c_topic)) =
-                                (CString::new(s_user), CString::new(s_room), CString::new(s_name), CString::new(s_group), CString::new(path), CString::new(s_topic))
-                             {
-                                 let guard = ROOM_JOINED_CALLBACK.lock().unwrap();
-                                 if let Some(cb) = *guard {
-                                     cb(c_user_id.as_ptr(), c_room_id.as_ptr(), c_name.as_ptr(), c_group.as_ptr(), c_avatar.as_ptr(), c_topic.as_ptr(), is_encrypted_clone);
-                                 }
-                             }
+                             let event = crate::ffi::FfiEvent::RoomJoined {
+                                 user_id: user_id_clone,
+                                 room_id: room_id_clone,
+                                 name: name_clone,
+                                 group_name: group_clone,
+                                 avatar_url: Some(path.to_string()),
+                                 topic: Some(topic_clone),
+                                 encrypted: is_encrypted_clone,
+                             };
+                             let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
                         }
                     }
                 }
@@ -117,6 +110,10 @@ pub async fn start_sync_loop(client: Client) {
     }
 
     // 2. BACKFILL INSTANT HISTORY FROM SYNC RESPONSE - Medium Priority
+    // Audit Clarification: We MUST manually iterate over the sync_once response because
+    // `sync_once` must be executed *before* firing the `RoomJoined` events (Step 1). 
+    // If we registered the global event handlers before `sync_once`, FFI would dispatch
+    // messages to Pidgin for rooms that haven't been "joined" in the UI yet, causing crashes.
     if let Some(response) = sync_response {
         for (room_id, joined_room) in response.rooms.joined {
             if let Some(room) = client_for_sync.get_room(&room_id) {
@@ -150,6 +147,7 @@ pub async fn start_sync_loop(client: Client) {
 
     if let Err(e) = client_for_sync.sync(SyncSettings::default()).await {
          let error_str = e.to_string();
+         log::error!("Continuous sync loop crashed for {}: {}", user_id, error_str);
          if is_auth_failure(&error_str) { handle_auth_failure(&client_for_sync); }
     }
 }
@@ -223,30 +221,17 @@ async fn process_sync_event_for_history(client: &Client, room: &matrix_sdk::Room
 
         if body.is_empty() { return; }
 
-        let s_user_id = crate::sanitize_string(&user_id);
-        let s_sender = crate::sanitize_string(&sender);
-        let s_body = crate::sanitize_string(&body);
-        
-        let target_room_id = if let Some(tid) = &cur_thread_id {
-            format!("{}|{}", room_id, tid)
-        } else {
-            room_id.to_string()
+        let event = crate::ffi::FfiEvent::MessageReceived {
+            user_id,
+            sender,
+            msg: body,
+            room_id: Some(room_id.to_string()),
+            thread_root_id: cur_thread_id,
+            event_id,
+            timestamp,
+            encrypted: is_encrypted,
         };
-        
-        let s_room_id = crate::sanitize_string(&target_room_id);
-        let s_thread_id = crate::sanitize_string(cur_thread_id.as_deref().unwrap_or(""));
-        let s_event_id = crate::sanitize_string(&event_id);
-
-        if let (Ok(c_user_id), Ok(c_sender), Ok(c_body), Ok(c_room_id)) =
-            (CString::new(s_user_id), CString::new(s_sender), CString::new(s_body), CString::new(s_room_id))
-        {
-            let c_thread_id = CString::new(s_thread_id).unwrap_or_default();
-            let c_event_id = CString::new(s_event_id).unwrap_or_default();
-            let guard = MSG_CALLBACK.lock().unwrap();
-            if let Some(cb) = *guard {
-                cb(c_user_id.as_ptr(), c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), c_thread_id.as_ptr(), c_event_id.as_ptr(), timestamp, is_encrypted);
-            }
-        }
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
     }
 }
 
@@ -272,10 +257,10 @@ pub async fn fetch_room_history_logic_with_limit(client: Client, full_room_id: S
          if let Some(room) = client.get_room(ruma_room_id) {
              let mut options = matrix_sdk::room::MessagesOptions::backward();
              options.limit = limit.into();
-             if let Some(token) = crate::PAGINATION_TOKENS.lock().unwrap().get(&full_room_id) { options.from = Some(token.clone()); }
+             if let Some(token) = crate::PAGINATION_TOKENS.get(&full_room_id) { options.from = Some(token.clone()); }
              
              if let Ok(messages) = room.messages(options).await {
-                 if let Some(end) = &messages.end { crate::PAGINATION_TOKENS.lock().unwrap().insert(full_room_id.clone(), end.clone()); }
+                 if let Some(end) = &messages.end { crate::PAGINATION_TOKENS.insert(full_room_id.clone(), end.clone()); }
 
                  for timeline_event in messages.chunk.iter().rev() {
                      let mut any_event_opt = timeline_event.raw().deserialize().ok();
@@ -347,23 +332,17 @@ pub async fn fetch_room_history_logic_with_limit(client: Client, full_room_id: S
                              if cur_thread_id.is_some() { continue; }
                          }
 
-                         let s_user_id = crate::sanitize_string(&user_id);
-                         let s_sender = crate::sanitize_string(&sender);
-                         let s_body = crate::sanitize_string(&body);
-                         let s_room_id = crate::sanitize_string(&full_room_id);
-                         let s_thread_id = crate::sanitize_string(cur_thread_id.as_deref().unwrap_or(""));
-                         let s_event_id = crate::sanitize_string(&event_id);
-
-                         if let (Ok(c_user_id), Ok(c_sender), Ok(c_body), Ok(c_room_id)) =
-                            (CString::new(s_user_id), CString::new(s_sender), CString::new(s_body), CString::new(s_room_id))
-                         {
-                             let c_thread_id = CString::new(s_thread_id).unwrap_or_default();
-                             let c_event_id = CString::new(s_event_id).unwrap_or_default();
-                             let guard = MSG_CALLBACK.lock().unwrap();
-                             if let Some(cb) = *guard {
-                                 cb(c_user_id.as_ptr(), c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), c_thread_id.as_ptr(), c_event_id.as_ptr(), timestamp, is_encrypted);
-                             }
-                         }
+                         let event = crate::ffi::FfiEvent::MessageReceived {
+                             user_id: user_id.clone(),
+                             sender,
+                             msg: body,
+                             room_id: Some(full_room_id.clone()),
+                             thread_root_id: cur_thread_id,
+                             event_id,
+                             timestamp,
+                             encrypted: is_encrypted,
+                         };
+                         let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
                          tokio::time::sleep(std::time::Duration::from_millis(2)).await;
                      }
                  }

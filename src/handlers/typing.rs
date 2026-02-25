@@ -1,7 +1,6 @@
 use matrix_sdk::ruma::events::typing::SyncTypingEvent;
 use matrix_sdk::Room;
-use std::ffi::CString;
-use crate::ffi::TYPING_CALLBACK;
+// Removed CString and callback imports
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -52,19 +51,24 @@ pub async fn handle_typing(event: SyncTypingEvent, room: Room) {
 
     // Emit callbacks
     let user_id = room.client().user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
-    let guard = TYPING_CALLBACK.lock().unwrap();
-    if let Some(cb) = *guard {
-        let c_user_id = CString::new(crate::sanitize_string(&user_id)).unwrap_or_default();
-        let c_room_id = CString::new(crate::sanitize_string(room_id)).unwrap_or_default();
-        
-        for user in to_add {
-            let c_who = CString::new(crate::sanitize_string(&user)).unwrap_or_default();
-            cb(c_user_id.as_ptr(), c_room_id.as_ptr(), c_who.as_ptr(), true);
-        }
-        
-        for user in to_remove {
-            let c_who = CString::new(crate::sanitize_string(&user)).unwrap_or_default();
-            cb(c_user_id.as_ptr(), c_room_id.as_ptr(), c_who.as_ptr(), false);
-        }
+    
+    for user in to_add {
+        let event = crate::ffi::FfiEvent::Typing {
+            user_id: user_id.clone(),
+            room_id: room_id.to_string(),
+            who: user,
+            is_typing: true,
+        };
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+    }
+    
+    for user in to_remove {
+        let event = crate::ffi::FfiEvent::Typing {
+            user_id: user_id.clone(),
+            room_id: room_id.to_string(),
+            who: user,
+            is_typing: false,
+        };
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
     }
 }

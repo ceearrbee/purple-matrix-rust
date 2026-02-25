@@ -1,7 +1,7 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::os::raw::c_char;
 use crate::{RUNTIME, with_client};
-use crate::ffi::*;
+
 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_set_status(user_id: *const c_char, status: i32, msg: *const c_char) {
@@ -218,36 +218,30 @@ pub extern "C" fn purple_matrix_rust_get_user_info(account_user_id: *const c_cha
                         
                         let is_online = false; 
 
-                        let c_local_user_id = CString::new(account_user_id_str).unwrap_or_default();
-                        let c_user_id = CString::new(user_id_str).unwrap_or_default();
-                        let c_display_name = CString::new(display_name).unwrap_or_default();
-                        let c_avatar_url = CString::new(avatar_url).unwrap_or_default();
-                        
-                        let guard = SHOW_USER_INFO_CALLBACK.lock().unwrap();
-                        if let Some(cb) = *guard {
-                            cb(c_local_user_id.as_ptr(), c_user_id.as_ptr(), c_display_name.as_ptr(), c_avatar_url.as_ptr(), is_online);
-                        }
+                        let event = crate::ffi::FfiEvent::ShowUserInfo {
+                            user_id: account_user_id_str,
+                            target_user_id: user_id_str,
+                            display_name: Some(display_name),
+                            avatar_url: Some(avatar_url),
+                            is_online,
+                        };
+                        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
                     },
                     Err(e) => {
                         log::error!("Failed to fetch profile for {}: {:?}", user_id_str, e);
-                        let c_local_user_id = CString::new(account_user_id_str).unwrap_or_default();
-                        let c_user_id = CString::new(user_id_str.clone()).unwrap_or_default();
-                        let c_display_name = CString::new(user_id_str).unwrap_or_default();
-                        let c_avatar_url = CString::new("").unwrap_or_default();
-                        let guard = SHOW_USER_INFO_CALLBACK.lock().unwrap();
-                        if let Some(cb) = *guard {
-                            cb(c_local_user_id.as_ptr(), c_user_id.as_ptr(), c_display_name.as_ptr(), c_avatar_url.as_ptr(), false);
-                        }
+                        let event = crate::ffi::FfiEvent::ShowUserInfo {
+                            user_id: account_user_id_str,
+                            target_user_id: user_id_str.clone(),
+                            display_name: Some(user_id_str),
+                            avatar_url: Some("".to_string()),
+                            is_online: false,
+                        };
+                        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
                     }
                 }
             }
         });
     });
-}
-
-#[no_mangle]
-pub extern "C" fn purple_matrix_rust_init_show_user_info_cb(cb: ShowUserInfoCallback) {
-    *SHOW_USER_INFO_CALLBACK.lock().unwrap() = Some(cb);
 }
 
 #[no_mangle]

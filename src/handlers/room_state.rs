@@ -2,8 +2,6 @@ use matrix_sdk::ruma::events::room::topic::SyncRoomTopicEvent;
 use matrix_sdk::ruma::events::room::member::SyncRoomMemberEvent;
 use matrix_sdk::ruma::events::room::tombstone::SyncRoomTombstoneEvent;
 use matrix_sdk::Room;
-use std::ffi::CString;
-use crate::ffi::MSG_CALLBACK;
 
 pub async fn handle_room_topic(event: SyncRoomTopicEvent, room: Room) {
     if let SyncRoomTopicEvent::Original(ev) = event {
@@ -17,15 +15,17 @@ pub async fn handle_room_topic(event: SyncRoomTopicEvent, room: Room) {
 
         let body = format!("[System] {} set the topic to: {}", sender, topic);
 
-        let c_local_user_id = CString::new(crate::sanitize_string(&local_user_id)).unwrap_or_default();
-        let c_sender = CString::new("System").unwrap_or_default();
-        let c_body = CString::new(crate::sanitize_string(&body)).unwrap_or_default();
-        let c_room_id = CString::new(crate::sanitize_string(room_id)).unwrap_or_default();
-
-        let guard = MSG_CALLBACK.lock().unwrap();
-        if let Some(cb) = *guard {
-            cb(c_local_user_id.as_ptr(), c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), timestamp, false);
-        }
+        let event = crate::ffi::FfiEvent::MessageReceived {
+            user_id: local_user_id,
+            sender: "System".to_string(),
+            msg: body,
+            room_id: Some(room_id.to_string()),
+            thread_root_id: None,
+            event_id: "".to_string(),
+            timestamp,
+            encrypted: false,
+        };
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
     }
 }
 
@@ -48,15 +48,17 @@ pub async fn handle_room_member(event: SyncRoomMemberEvent, room: Room) {
             _ => format!("[System] Membership change for {}: {:?}", target, ev.content.membership),
         };
 
-        let c_local_user_id = CString::new(crate::sanitize_string(&local_user_id)).unwrap_or_default();
-        let c_sender = CString::new("System").unwrap_or_default();
-        let c_body = CString::new(crate::sanitize_string(&body)).unwrap_or_default();
-        let c_room_id = CString::new(crate::sanitize_string(room_id)).unwrap_or_default();
-
-        let guard = MSG_CALLBACK.lock().unwrap();
-        if let Some(cb) = *guard {
-            cb(c_local_user_id.as_ptr(), c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), timestamp, false);
-        }
+        let event = crate::ffi::FfiEvent::MessageReceived {
+            user_id: local_user_id,
+            sender: "System".to_string(),
+            msg: body,
+            room_id: Some(room_id.to_string()),
+            thread_root_id: None,
+            event_id: "".to_string(),
+            timestamp,
+            encrypted: false,
+        };
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
     }
 }
 
@@ -75,14 +77,16 @@ pub async fn handle_tombstone(event: SyncRoomTombstoneEvent, room: Room) {
 
         let body = format!("[System] This room has been upgraded. New room ID: {}", new_room);
 
-        let c_local_user_id = CString::new(crate::sanitize_string(&local_user_id)).unwrap_or_default();
-        let c_sender = CString::new("System").unwrap_or_default();
-        let c_body = CString::new(crate::sanitize_string(&body)).unwrap_or_default();
-        let c_room_id = CString::new(crate::sanitize_string(room_id)).unwrap_or_default();
-
-        let guard = MSG_CALLBACK.lock().unwrap();
-        if let Some(cb) = *guard {
-            cb(c_local_user_id.as_ptr(), c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), timestamp, false);
-        }
+        let event = crate::ffi::FfiEvent::MessageReceived {
+            user_id: local_user_id,
+            sender: "System".to_string(),
+            msg: body,
+            room_id: Some(room_id.to_string()),
+            thread_root_id: None,
+            event_id: "".to_string(),
+            timestamp,
+            encrypted: false,
+        };
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
     }
 }

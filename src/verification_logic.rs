@@ -1,7 +1,6 @@
 use matrix_sdk::encryption::verification::{SasVerification, Verification};
 use matrix_sdk::Client;
-use std::ffi::CString;
-use crate::ffi::{SAS_REQUEST_CALLBACK, SAS_HAVE_EMOJI_CALLBACK, SHOW_VERIFICATION_QR_CALLBACK};
+
 
 pub async fn handle_verification_request(client: Client, event: matrix_sdk::ruma::events::key::verification::request::ToDeviceKeyVerificationRequestEvent) {
     let user_id = client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
@@ -10,12 +9,12 @@ pub async fn handle_verification_request(client: Client, event: matrix_sdk::ruma
 
     log::info!("Received verification request from {} with flow {}", sender, flow_id);
 
-    if let (Ok(c_user_id), Ok(c_sender), Ok(c_flow)) = (CString::new(user_id), CString::new(sender), CString::new(flow_id)) {
-        let guard = SAS_REQUEST_CALLBACK.lock().unwrap();
-        if let Some(cb) = *guard {
-            cb(c_user_id.as_ptr(), c_sender.as_ptr(), c_flow.as_ptr());
-        }
-    }
+    let event = crate::ffi::FfiEvent::SasRequest {
+        user_id: user_id,
+        target_user_id: sender.to_string(),
+        flow_id: flow_id.to_string(),
+    };
+    let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
 }
 
 pub async fn handle_sas_verification(sas: SasVerification, client: Client) {
@@ -32,14 +31,13 @@ pub async fn handle_sas_verification(sas: SasVerification, client: Client) {
             emoji_str.push_str(&format!("{} ({}) ", emoji.symbol, emoji.description));
         }
 
-        if let (Ok(c_user_id), Ok(c_target), Ok(c_flow), Ok(c_emojis)) = 
-           (CString::new(user_id.clone()), CString::new(target), CString::new(flow_id), CString::new(emoji_str)) 
-        {
-            let guard = SAS_HAVE_EMOJI_CALLBACK.lock().unwrap();
-            if let Some(cb) = *guard {
-                cb(c_user_id.as_ptr(), c_target.as_ptr(), c_flow.as_ptr(), c_emojis.as_ptr());
-            }
-        }
+        let event = crate::ffi::FfiEvent::SasHaveEmoji {
+            user_id: user_id.clone(),
+            target_user_id: target.to_string(),
+            flow_id: flow_id.to_string(),
+            emojis: emoji_str,
+        };
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
     }
 }
 
@@ -52,14 +50,12 @@ pub async fn handle_verification_change(verification: Verification, client: Clie
                 let target = qr.other_user_id().as_str();
                 let html = format!("Scan this QR code in your other Matrix client to verify with {}: (QR data present)", target);
                 
-                if let (Ok(c_user_id), Ok(c_target), Ok(c_html)) = 
-                   (CString::new(user_id), CString::new(target), CString::new(html)) 
-                {
-                    let guard = SHOW_VERIFICATION_QR_CALLBACK.lock().unwrap();
-                    if let Some(cb) = *guard {
-                        cb(c_user_id.as_ptr(), c_target.as_ptr(), c_html.as_ptr());
-                    }
-                }
+                let event = crate::ffi::FfiEvent::ShowVerificationQr {
+                    user_id: user_id.clone(),
+                    target_user_id: target.to_string(),
+                    html_data: html,
+                };
+                let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
             }
         }
         _ => {}

@@ -1,7 +1,7 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::os::raw::c_char;
 use crate::{RUNTIME, with_client};
-use crate::ffi::*;
+
 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_fetch_public_rooms_for_list(user_id: *const c_char) {
@@ -17,22 +17,16 @@ pub extern "C" fn purple_matrix_rust_fetch_public_rooms_for_list(user_id: *const
 
              match client.send(request).await {
                  Ok(response) => {
-                      let guard = ROOMLIST_ADD_CALLBACK.lock().unwrap();
-                      if let Some(cb) = *guard {
-                          for chunk in response.chunk {
-                               let room_id = chunk.room_id.to_string();
-                               let name = chunk.name.or(chunk.canonical_alias.map(|a| a.to_string())).unwrap_or_else(|| room_id.clone());
-                               let topic = chunk.topic.unwrap_or_default();
-                               let members = chunk.num_joined_members;
-
-                               let c_user_id = CString::new(crate::sanitize_string(&user_id_str)).unwrap_or_default();
-                               let c_id = CString::new(crate::sanitize_string(&room_id)).unwrap_or_default();
-                               let c_name = CString::new(crate::sanitize_string(&name)).unwrap_or_default();
-                               let c_topic = CString::new(crate::sanitize_string(&topic)).unwrap_or_default();
-                               
-                               cb(c_user_id.as_ptr(), c_name.as_ptr(), c_id.as_ptr(), c_topic.as_ptr(), members.into());
-                          }
-                      }
+                     for room in response.chunk {
+                         let event = crate::ffi::FfiEvent::RoomListAdd {
+                             user_id: user_id_str.clone(),
+                             room_id: room.room_id.to_string(),
+                             name: room.name.unwrap_or_default(),
+                             topic: room.topic.unwrap_or_default(),
+                             member_count: u64::from(room.num_joined_members) as usize,
+                         };
+                         let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+                     }
                  },
                  Err(e) => log::error!("Failed to fetch public rooms: {:?}", e),
              }
@@ -58,14 +52,12 @@ pub extern "C" fn purple_matrix_rust_fetch_room_preview(user_id: *const c_char, 
                                 let room_id = response.room_id.to_string();
                                 let html = format!("<b>Room Preview:</b><br/>ID: {}<br/>Server: {:?}", room_id, response.servers);
                                 
-                                let c_user_id = CString::new(user_id_str).unwrap_or_default();
-                                let c_room = CString::new(room_id_or_alias_str).unwrap_or_default();
-                                let c_html = CString::new(html).unwrap_or_default();
-                                
-                                let guard = ROOM_PREVIEW_CALLBACK.lock().unwrap();
-                                if let Some(cb) = *guard {
-                                    cb(c_user_id.as_ptr(), c_room.as_ptr(), c_html.as_ptr());
-                                }
+                                let event = crate::ffi::FfiEvent::RoomPreview {
+                                    user_id: user_id_str.clone(),
+                                    room_id_or_alias: room_id_or_alias_str.clone(),
+                                    html_body: html,
+                                };
+                                let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
                             },
                             Err(e) => log::error!("Failed to preview room alias: {:?}", e),
                         }
@@ -73,14 +65,12 @@ pub extern "C" fn purple_matrix_rust_fetch_room_preview(user_id: *const c_char, 
                 } else {
                     // It's already a Room ID
                     let html = format!("<b>Room Info:</b><br/>ID: {}", room_id_or_alias_str);
-                    let c_user_id = CString::new(user_id_str).unwrap_or_default();
-                    let c_room = CString::new(room_id_or_alias_str).unwrap_or_default();
-                    let c_html = CString::new(html).unwrap_or_default();
-                    
-                    let guard = ROOM_PREVIEW_CALLBACK.lock().unwrap();
-                    if let Some(cb) = *guard {
-                        cb(c_user_id.as_ptr(), c_room.as_ptr(), c_html.as_ptr());
-                    }
+                    let event = crate::ffi::FfiEvent::RoomPreview {
+                        user_id: user_id_str.clone(),
+                        room_id_or_alias: room_id_or_alias_str.clone(),
+                        html_body: html,
+                    };
+                    let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
                 }
             }
         });

@@ -1,4 +1,4 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::io::Write;
 use std::os::raw::c_char;
 #[cfg(unix)]
@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use matrix_sdk::Client;
-use crate::ffi::{CONNECTED_CALLBACK, LOGIN_FAILED_CALLBACK, SSO_CALLBACK};
 use crate::{RUNTIME, DATA_PATH, CLIENTS};
 use crate::sync_logic;
 
@@ -118,7 +117,7 @@ async fn finish_sso_internal(client: Client, token: String) {
                 
                 // 3. Wipe Data
                 let path_opt = {
-                        let guard = DATA_PATH.lock().unwrap();
+                        let guard = DATA_PATH.lock().unwrap_or_else(|e| e.into_inner());
                         guard.clone()
                 };
                 
@@ -129,13 +128,12 @@ async fn finish_sso_internal(client: Client, token: String) {
                     
                     // 4. Rebuild Client
                     match build_client(&hs_url, &path).await {
-                        Ok(new_client) => {
-                            // Login tokens are one-time; after a mismatched-account
-                            // attempt, retrying with the same token can fail with
-                            // "Invalid login token". Start a fresh SSO round.
-                            log::info!("Client rebuilt. Requesting a fresh SSO token...");
+                        Ok(_new_client) => {
+                            // Attempt, retrying with the same token can fail with
+                            // "Invalid login token". Report the error so the user can start a fresh SSO round.
+                            log::info!("Client rebuilt. SSO requires a fresh manual login attempt.");
                             set_sso_in_progress(false);
-                            start_sso_flow(new_client);
+                            report_login_failure("Mismatched account session detected. Please restart the SSO login process from the UI.".to_string());
                         },
                         Err(e_build) => {
                             set_sso_in_progress(false);
@@ -147,11 +145,11 @@ async fn finish_sso_internal(client: Client, token: String) {
             } else {
                 set_sso_in_progress(false);
                 // Notify user of non-mismatch error
-                let guard = LOGIN_FAILED_CALLBACK.lock().unwrap();
-                if let Some(cb) = *guard {
-                    let c_err = CString::new(err_msg).unwrap_or_default();
-                    cb(c_err.as_ptr());
-                }
+                let event = crate::ffi::FfiEvent::LoginFailed {
+                    user_id: client.user_id().map(|u| u.to_string()).unwrap_or_default(),
+                    message: err_msg,
+                };
+                let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
             }
         }
     }
@@ -171,9 +169,9 @@ pub extern "C" fn purple_matrix_rust_login(
 
     let username = unsafe { CStr::from_ptr(username).to_string_lossy().into_owned() };
     let password = if password.is_null() {
-        String::new()
+        secrecy::SecretString::new("".to_string())
     } else {
-        unsafe { CStr::from_ptr(password).to_string_lossy().into_owned() }
+        secrecy::SecretString::new(unsafe { CStr::from_ptr(password).to_string_lossy().into_owned() })
     };
     let homeserver = unsafe { CStr::from_ptr(homeserver).to_string_lossy().into_owned() };
     let data_dir = unsafe { CStr::from_ptr(data_dir).to_string_lossy().into_owned() };
@@ -272,27 +270,31 @@ fn load_session_json_secure(path: &std::path::Path, username: &str) -> Option<St
 }
 
 fn safe_wipe_data_dir(path: &std::path::Path) {
-    let path_str = path.to_string_lossy();
-    // Safety check: Ensure we are only wiping directories that look like our expected data path.
-    // It must contain 'matrix_rust_data' and must not be a top-level system directory.
-    if path_str.contains("matrix_rust_data") && path.components().count() > 3 {
-        if path.is_symlink() {
-            log::error!("Safety wipe BLOCKED: Path {:?} is a symlink.", path);
-            return;
+    // 1. Resolve to absolute path, resolving symlinks
+    match std::fs::canonicalize(path) {
+        Ok(canon_path) => {
+            let path_str = canon_path.to_string_lossy();
+            // 2. Strict validation: Must end with or contain the specific folder name, and have adequate depth
+            if path_str.contains("matrix_rust_data") && canon_path.components().count() > 3 {
+                log::warn!("Safety wipe: Deleting directory {:?}", canon_path);
+                let _ = std::fs::remove_dir_all(&canon_path);
+            } else {
+                log::error!("Safety wipe BLOCKED: Canonical path {:?} does not appear to be a Matrix data folder.", canon_path);
+            }
+        },
+        Err(e) => {
+            // If the path doesn't exist, canonicalize fails, which is fine since there's nothing to wipe
+            log::debug!("Safety wipe skipped or blocked: {:?}", e);
         }
-        log::warn!("Safety wipe: Deleting directory {:?}", path);
-        let _ = std::fs::remove_dir_all(path);
-    } else {
-        log::error!("Safety wipe BLOCKED: Path {:?} looks suspicious or too high-level.", path);
     }
 }
 
-async fn perform_login(username: String, password: String, homeserver: String, data_dir: String) {
+async fn perform_login(username: String, password: secrecy::SecretString, homeserver: String, data_dir: String) {
     let data_path = PathBuf::from(&data_dir);
     
     // update global data path
     {
-        let mut guard = DATA_PATH.lock().unwrap();
+        let mut guard = DATA_PATH.lock().unwrap_or_else(|e| e.into_inner());
         *guard = Some(data_path.clone());
     }
 
@@ -323,7 +325,7 @@ async fn perform_login(username: String, password: String, homeserver: String, d
 
     // 2. Priority Logic:
     // Case A: User provided a password -> ALWAYS try fresh login.
-    if !password.is_empty() {
+    if !secrecy::ExposeSecret::expose_secret(&password).is_empty() {
         log::info!("Password provided for {}, attempting fresh login...", username);
         proceed_with_login(client, username, password).await;
         return;
@@ -391,10 +393,10 @@ async fn perform_login(username: String, password: String, homeserver: String, d
     start_sso_flow(client);
 }
 
-async fn proceed_with_login(client: Client, username: String, password: String) {
-    if !password.is_empty() {
+async fn proceed_with_login(client: Client, username: String, password: secrecy::SecretString) {
+    if !secrecy::ExposeSecret::expose_secret(&password).is_empty() {
         log::info!("Attempting Password Login...");
-        match client.matrix_auth().login_username(&username, &password).initial_device_display_name("Pidgin (Rust)").await {
+        match client.matrix_auth().login_username(&username, secrecy::ExposeSecret::expose_secret(&password)).initial_device_display_name("Pidgin (Rust)").await {
             Ok(_) => {
                 log::info!("Login Succeeded!");
                 finish_login_success(client).await;
@@ -436,7 +438,7 @@ async fn finish_login_success(client: Client) {
          };
          
          let path_opt = {
-              let guard = DATA_PATH.lock().unwrap();
+              let guard = DATA_PATH.lock().unwrap_or_else(|e| e.into_inner());
               guard.clone()
          };
          
@@ -453,17 +455,15 @@ async fn finish_login_success(client: Client) {
     }
 
     {
-         let mut clients = crate::CLIENTS.lock().unwrap();
          if let Some(user_id) = client.user_id() {
-             clients.insert(user_id.to_string(), client.clone());
+             crate::CLIENTS.insert(user_id.to_string(), client.clone());
          }
     }
     {
-         let guard = CONNECTED_CALLBACK.lock().unwrap();
-         if let Some(cb) = *guard {
-              let c_user_id = CString::new(username).unwrap_or_default();
-              cb(c_user_id.as_ptr());
-         }
+         let event = crate::ffi::FfiEvent::Connected {
+             user_id: username.clone(),
+         };
+         let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
     }
 
     // 2. Bootstrap Crypto
@@ -493,11 +493,11 @@ async fn finish_login_success(client: Client) {
 
 fn report_login_failure(msg: String) {
     log::error!("{}", msg);
-    let guard = LOGIN_FAILED_CALLBACK.lock().unwrap();
-    if let Some(cb) = *guard {
-        let c_err = CString::new(msg).unwrap_or_default();
-        cb(c_err.as_ptr());
-    }
+    let event = crate::ffi::FfiEvent::LoginFailed {
+        user_id: "".to_string(), // we don't always have user ID here, fallback to empty
+        message: msg,
+    };
+    let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
 }
 
 fn start_sso_flow(client: Client) {
@@ -547,11 +547,10 @@ fn start_sso_flow(client: Client) {
             
             // Emit Callback
             {
-                let guard = SSO_CALLBACK.lock().unwrap();
-                if let Some(cb) = *guard {
-                    let c_url = CString::new(sso_url.replace('\0', "")).unwrap_or_default();
-                    cb(c_url.as_ptr());
-                }
+                let event = crate::ffi::FfiEvent::SsoUrl {
+                    url: sso_url,
+                };
+                let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
             }
             
             let deadline = Instant::now() + Duration::from_secs(SSO_CALLBACK_TIMEOUT_SECS);
@@ -615,12 +614,11 @@ pub extern "C" fn purple_matrix_rust_finish_sso(token: *const c_char) {
     };
 
     let pending_client = {
-        let clients = CLIENTS.lock().unwrap();
-        clients
-            .values()
-            .find(|c| c.user_id().is_none())
-            .cloned()
-            .or_else(|| clients.values().next().cloned())
+        CLIENTS
+            .iter()
+            .find(|c| c.value().user_id().is_none())
+            .map(|c| c.value().clone())
+            .or_else(|| CLIENTS.iter().next().map(|c| c.value().clone()))
     };
 
     if let Some(client) = pending_client {
@@ -632,15 +630,8 @@ pub extern "C" fn purple_matrix_rust_finish_sso(token: *const c_char) {
 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_deactivate_account(erase_data: bool) {
-    let client_opt = {
-        let mut clients = CLIENTS.lock().unwrap();
-        if let Some((key, _)) = clients.iter().next() {
-            let key_owned = key.clone();
-            clients.remove(&key_owned)
-        } else {
-            None
-        }
-    };
+    let key_to_remove = CLIENTS.iter().next().map(|r| r.key().clone());
+    let client_opt = key_to_remove.and_then(|k| CLIENTS.remove(&k).map(|(_, c)| c));
 
     if let Some(client) = client_opt {
         RUNTIME.spawn(async move {
@@ -652,7 +643,7 @@ pub extern "C" fn purple_matrix_rust_deactivate_account(erase_data: bool) {
 
     if erase_data {
         let path_opt = {
-            let guard = DATA_PATH.lock().unwrap();
+            let guard = DATA_PATH.lock().unwrap_or_else(|e| e.into_inner());
             guard.clone()
         };
         if let Some(path) = path_opt {
@@ -662,25 +653,13 @@ pub extern "C" fn purple_matrix_rust_deactivate_account(erase_data: bool) {
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_login_with_qr(homeserver: *const c_char, data_dir: *const c_char) {
-    if homeserver.is_null() || data_dir.is_null() { return; }
-    let _homeserver = unsafe { CStr::from_ptr(homeserver).to_string_lossy().into_owned() };
-    let _data_dir = unsafe { CStr::from_ptr(data_dir).to_string_lossy().into_owned() };
-
-    RUNTIME.spawn(async move {
-        crate::ffi::send_system_message("System", "QR Code Login is supported by the protocol but direct SDK binding was not resolved in this build. Use OIDC or SSO.");
-    });
-}
-
-#[no_mangle]
 pub extern "C" fn purple_matrix_rust_logout(user_id: *const c_char) {
     if user_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
     log::info!("Disconnecting {}...", user_id_str);
-    let mut clients = crate::CLIENTS.lock().unwrap();
     
     // Just drop the client to stop the sync loop.
-    if let Some(client) = clients.remove(&user_id_str) {
+    if let Some((_, client)) = crate::CLIENTS.remove(&user_id_str) {
          log::info!("Dropping global client instance for disconnect.");
          // Ensure client is dropped within the Tokio runtime context to prevent
          // "there is no reactor running" panics from internal components (e.g. deadpool).
@@ -704,8 +683,7 @@ pub extern "C" fn purple_matrix_rust_destroy_session(user_id: *const c_char) {
         log::info!("Session removed from keyring.");
     }
 
-    let mut clients = crate::CLIENTS.lock().unwrap();
-    let client_opt = clients.remove(&user_id_str);
+    let client_opt = crate::CLIENTS.remove(&user_id_str).map(|(_, c)| c);
     
     RUNTIME.spawn(async move {
         // 2. Invalidate on server if client was active
@@ -719,7 +697,7 @@ pub extern "C" fn purple_matrix_rust_destroy_session(user_id: *const c_char) {
         
         // 3. Remove Local Session File and Data Dir
         let path_opt = {
-             let guard = DATA_PATH.lock().unwrap();
+             let guard = DATA_PATH.lock().unwrap_or_else(|e| e.into_inner());
              guard.clone()
         };
         if let Some(path) = path_opt {

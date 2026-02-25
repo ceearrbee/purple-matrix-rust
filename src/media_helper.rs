@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 
 pub fn get_media_dir() -> PathBuf {
-    let base_path = if let Some(path) = crate::DATA_PATH.lock().unwrap().clone() {
+    let base_path = if let Some(path) = crate::DATA_PATH.lock().unwrap_or_else(|e| e.into_inner()).clone() {
         path
     } else {
         std::env::temp_dir()

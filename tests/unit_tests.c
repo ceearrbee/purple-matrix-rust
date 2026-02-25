@@ -384,48 +384,27 @@ purple_plugin_action_new(const char *label,
 }
 
 // INCLUDE PLUGIN SOURCE
-// We include the source files directly to test static functions and internal logic
-// without linking the full plugin shared object or Libpurple.
+// We include the source files directly to test static functions and internal
+// logic without linking the full plugin shared object or Libpurple.
 
 // Globals defined in matrix_core.c that other files need
 PurplePlugin *my_plugin = NULL;
 GHashTable *room_id_map = NULL;
 
-#include "../plugin_src/matrix_utils.c"
+#include "../plugin_src/matrix_account.c"
 #include "../plugin_src/matrix_blist.c"
 #include "../plugin_src/matrix_chat.c"
-#include "../plugin_src/matrix_account.c"
-// #include "../plugin_src/matrix_commands.c" // Optional: if we want to test command registration logic
+#include "../plugin_src/matrix_utils.c"
+// #include "../plugin_src/matrix_commands.c" // Optional: if we want to test
+// command registration logic
 
 // --- Mocks for Rust FFI (using types from plugin_src) ---
 // ... (Mocks continue below) ...
 
 void purple_matrix_rust_init() {}
-void purple_matrix_rust_set_msg_callback(void (*cb)(const char *sender, const char *msg, const char *room_id, const char *thread_root_id, const char *event_id, guint64 timestamp)) {}
-void purple_matrix_rust_set_typing_callback(void (*cb)(const char *room_id, const char *user_id, bool is_typing)) {}
-void purple_matrix_rust_set_room_joined_callback(void (*cb)(const char *room_id, const char *name, const char *group_name, const char *avatar_url, const char *topic, bool encrypted)) {}
-void purple_matrix_rust_set_update_buddy_callback(void (*cb)(const char *user_id, const char *alias, const char *avatar_url)) {}
-void purple_matrix_rust_set_presence_callback(void (*cb)(const char *user_id, bool is_online)) {}
-void purple_matrix_rust_set_chat_topic_callback(void (*cb)(const char *room_id, const char *topic, const char *sender)) {}
-void purple_matrix_rust_set_chat_user_callback(void (*cb)(const char *room_id, const char *user_id, bool add, const char *alias, const char *avatar_path)) {}
-void purple_matrix_rust_init_invite_cb(void (*cb)(const char *, const char *)) {
-}
-void purple_matrix_rust_init_verification_cbs(
-    void (*req_cb)(const char *, const char *),
-    void (*emoji_cb)(const char *, const char *, const char *),
-    void (*qr_cb)(const char *, const char *)) {}
-void purple_matrix_rust_init_sso_cb(void (*cb)(const char *)) {}
-void purple_matrix_rust_init_connected_cb(void (*cb)()) {}
-void purple_matrix_rust_init_login_failed_cb(void (*cb)(const char *)) {}
-void purple_matrix_rust_set_read_marker_callback(void (*cb)(const char *room_id, const char *event_id, const char *user_id)) {}
-void purple_matrix_rust_set_show_user_info_callback(
-    void (*cb)(const char *, const char *, const char *, bool)) {}
-void purple_matrix_rust_set_roomlist_add_callback(
-    void (*cb)(const char *, const char *, const char *, guint64)) {}
-int purple_matrix_rust_login(const char *user, const char *pass, const char *hs,
-                             const char *data_dir) {
-  return 1;
-}
+
+void purple_matrix_rust_login(const char *user, const char *pass,
+                              const char *hs, const char *data_dir) {}
 void purple_matrix_rust_send_message(const char *user_id, const char *room_id,
                                      const char *text) {
   printf("[Rust Mock] send_message: %s -> %s\n", room_id, text);
@@ -441,7 +420,9 @@ void purple_matrix_rust_set_display_name(const char *user_id,
                                          const char *name) {}
 void purple_matrix_rust_set_avatar(const char *user_id, const char *path) {}
 void purple_matrix_rust_bootstrap_cross_signing(const char *user_id) {}
-void purple_matrix_rust_e2ee_status(const char *user_id, const char *room_id) {}
+bool purple_matrix_rust_e2ee_status(const char *user_id, const char *room_id) {
+  return true;
+}
 void purple_matrix_rust_verify_user(const char *user_id,
                                     const char *other_user_id) {}
 void purple_matrix_rust_recover_keys(const char *user_id,
@@ -454,8 +435,7 @@ void purple_matrix_rust_poll_create(const char *user_id, const char *room_id,
 }
 void purple_matrix_rust_poll_vote(const char *user_id, const char *room_id,
                                   const char *poll_event_id,
-                                  const char *option_text,
-                                  const char *selection_index_str) {}
+                                  guint64 option_index) {}
 void purple_matrix_rust_poll_end(const char *user_id, const char *room_id,
                                  const char *poll_event_id) {}
 void purple_matrix_rust_change_password(const char *user_id, const char *old_pw,
@@ -612,25 +592,25 @@ void test_matrix_status_text_topic() {
   char *status = matrix_status_text((PurpleBuddy *)chat);
   g_assert_cmpstr(status, ==, "Bold Topic"); // HTML stripped
   g_free(status);
-  
+
   // Cleanup mock state for next tests
   g_hash_table_remove_all(comp);
   g_free(chat);
 }
 
 void test_matrix_list_icon() {
-    const char *icon = matrix_list_icon(NULL, NULL);
-    g_assert_cmpstr(icon, ==, "matrix");
+  const char *icon = matrix_list_icon(NULL, NULL);
+  g_assert_cmpstr(icon, ==, "matrix");
 }
 
 void test_matrix_status_text_null_handling() {
-    // Test with a buddy that has no presence/status
-    // Mock purple_buddy_get_presence to return NULL (default mock behavior?)
-    // Our mock returns NULL by default.
-    PurpleBuddy *buddy = (PurpleBuddy *)g_new0(char, 128); // Dummy
-    char *status = matrix_status_text(buddy);
-    g_assert_null(status);
-    g_free(buddy);
+  // Test with a buddy that has no presence/status
+  // Mock purple_buddy_get_presence to return NULL (default mock behavior?)
+  // Our mock returns NULL by default.
+  PurpleBuddy *buddy = (PurpleBuddy *)g_new0(char, 128); // Dummy
+  char *status = matrix_status_text(buddy);
+  g_assert_null(status);
+  g_free(buddy);
 }
 
 int main(int argc, char **argv) {
@@ -644,7 +624,8 @@ int main(int argc, char **argv) {
   g_test_add_func("/matrix/ui/status_text_topic",
                   test_matrix_status_text_topic);
   g_test_add_func("/matrix/ui/list_icon", test_matrix_list_icon);
-  g_test_add_func("/matrix/ui/status_text_null", test_matrix_status_text_null_handling);
+  g_test_add_func("/matrix/ui/status_text_null",
+                  test_matrix_status_text_null_handling);
   return g_test_run();
 }
 // Additional Libpurple Mocks
@@ -670,11 +651,12 @@ void purple_matrix_rust_enable_key_backup(const char *user_id) {}
 void purple_matrix_rust_restore_from_backup(const char *user_id,
                                             const char *recovery_key) {}
 void purple_matrix_rust_list_sticker_packs(
-    const char *user_id, void (*cb)(const char *, const char *, void *),
+    const char *user_id,
+    void (*cb)(const char *, const char *, const char *, void *),
     void (*done_cb)(void *), void *user_data) {}
 void purple_matrix_rust_list_stickers_in_pack(
     const char *user_id, const char *pack_id,
-    void (*cb)(const char *, const char *, const char *, void *),
+    void (*cb)(const char *, const char *, const char *, const char *, void *),
     void (*done_cb)(void *), void *user_data) {}
 void purple_matrix_rust_list_threads(const char *user_id, const char *room_id) {
 }

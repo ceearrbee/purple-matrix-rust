@@ -1,7 +1,7 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::os::raw::c_char;
 use crate::{RUNTIME, with_client, sync_logic};
-use crate::ffi::*;
+
 use crate::{PAGINATION_TOKENS, HISTORY_FETCHED_ROOMS};
 use matrix_sdk::RoomState;
 
@@ -24,16 +24,15 @@ pub extern "C" fn purple_matrix_rust_fetch_room_members(user_id: *const c_char, 
                             let display_name = member.display_name().unwrap_or(user_id);
                             let avatar_url = member.avatar_url().map(|u| u.to_string()).unwrap_or_default();
                             
-                            let c_local_id = CString::new(user_id_str.clone()).unwrap_or_default();
-                            let c_room_id = CString::new(room_id_str.clone()).unwrap_or_default();
-                            let c_user_id = CString::new(user_id).unwrap_or_default();
-                            let c_alias = CString::new(display_name).unwrap_or_default();
-                            let c_avatar = CString::new(avatar_url).unwrap_or_default();
-
-                            let guard = CHAT_USER_CALLBACK.lock().unwrap();
-                            if let Some(cb) = *guard {
-                                cb(c_local_id.as_ptr(), c_room_id.as_ptr(), c_user_id.as_ptr(), true, c_alias.as_ptr(), c_avatar.as_ptr());
-                            }
+                            let event = crate::ffi::FfiEvent::ChatUser {
+                                user_id: user_id_str.clone(),
+                                room_id: room_id_str.clone(),
+                                member_id: user_id.to_string(),
+                                add: true,
+                                alias: Some(display_name.to_string()),
+                                avatar_path: Some(avatar_url),
+                            };
+                            let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
                         }
                     }
                 }
@@ -50,13 +49,10 @@ pub extern "C" fn purple_matrix_rust_fetch_history(user_id: *const c_char, room_
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
     let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
     
-    {
-        let mut fetched = HISTORY_FETCHED_ROOMS.lock().unwrap();
-        if fetched.contains(&room_id_str) {
-            return;
-        }
-        fetched.insert(room_id_str.clone());
+    if HISTORY_FETCHED_ROOMS.contains(&room_id_str) {
+        return;
     }
+    HISTORY_FETCHED_ROOMS.insert(room_id_str.clone());
     
     log::info!("Lazy fetching history for: {}", room_id_str);
 
@@ -106,14 +102,8 @@ pub extern "C" fn purple_matrix_rust_resync_recent_history(user_id: *const c_cha
         room_id_str = base.to_string();
     }
 
-    {
-        let mut fetched = HISTORY_FETCHED_ROOMS.lock().unwrap();
-        fetched.remove(&room_id_str);
-    }
-    {
-        let mut tokens = PAGINATION_TOKENS.lock().unwrap();
-        tokens.remove(&room_id_str);
-    }
+    HISTORY_FETCHED_ROOMS.remove(&room_id_str);
+    PAGINATION_TOKENS.remove(&room_id_str);
 
     with_client(&user_id_str.clone(), |client| {
         RUNTIME.spawn(async move {
@@ -324,7 +314,7 @@ pub extern "C" fn purple_matrix_rust_set_room_mute_state(user_id: *const c_char,
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
     let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
 
-    with_client(&user_id_str, |client| {
+    with_client(&user_id_str.clone(), |client| {
         RUNTIME.spawn(async move {
             use matrix_sdk::ruma::RoomId;
             
@@ -729,16 +719,15 @@ pub extern "C" fn purple_matrix_rust_search_room_members(user_id: *const c_char,
                             let m_id = member.user_id().as_str();
                             let display_name = member.display_name().unwrap_or(m_id).to_lowercase();
                             if m_id.to_lowercase().contains(&term_str) || display_name.contains(&term_str) {
-                                let c_local_id = CString::new(user_id_str.clone()).unwrap_or_default();
-                                let c_room_id = CString::new(room_id_str.clone()).unwrap_or_default();
-                                let c_user_id = CString::new(m_id).unwrap_or_default();
-                                let c_alias = CString::new(member.display_name().unwrap_or(m_id)).unwrap_or_default();
-                                let c_avatar = CString::new(member.avatar_url().map(|u| u.to_string()).unwrap_or_default()).unwrap_or_default();
-
-                                let guard = CHAT_USER_CALLBACK.lock().unwrap();
-                                if let Some(cb) = *guard {
-                                    cb(c_local_id.as_ptr(), c_room_id.as_ptr(), c_user_id.as_ptr(), true, c_alias.as_ptr(), c_avatar.as_ptr());
-                                }
+                                let event = crate::ffi::FfiEvent::ChatUser {
+                                    user_id: user_id_str.clone(),
+                                    room_id: room_id_str.clone(),
+                                    member_id: m_id.to_string(),
+                                    add: true,
+                                    alias: Some(member.display_name().unwrap_or(m_id).to_string()),
+                                    avatar_path: Some(member.avatar_url().map(|u| u.to_string()).unwrap_or_default()),
+                                };
+                                let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
                             }
                         }
                     }

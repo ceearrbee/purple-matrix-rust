@@ -1,7 +1,7 @@
 use std::ffi::CStr;
 use std::os::raw::c_char;
 use crate::{RUNTIME, with_client};
-use crate::ffi::*;
+
 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_poll_create(user_id: *const c_char, room_id: *const c_char, question: *const c_char, options: *const c_char) {
@@ -86,7 +86,7 @@ pub extern "C" fn purple_matrix_rust_list_polls(user_id: *const c_char, room_id:
             use matrix_sdk::ruma::RoomId;
             use matrix_sdk::room::MessagesOptions;
             use matrix_sdk::ruma::events::AnySyncTimelineEvent;
-            use std::ffi::CString;
+
 
             if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
                 if let Some(room) = client_clone.get_room(rid) {
@@ -105,14 +105,15 @@ pub extern "C" fn purple_matrix_rust_list_polls(user_id: *const c_char, room_id:
                                         let options: Vec<String> = ev.content.poll.answers.iter().map(|a| a.text.find_plain().unwrap_or("Option").to_string()).collect();
                                         let options_str = options.join(", ");
                                         
-                                        if let (Ok(c_user_id), Ok(c_room_id), Ok(c_event_id), Ok(c_sender), Ok(c_question), Ok(c_options)) =
-                                           (CString::new(user_id_str.clone()), CString::new(room_id_str.clone()), CString::new(ev.event_id.as_str()), CString::new(ev.sender.as_str()), CString::new(question), CString::new(options_str))
-                                        {
-                                            let guard = POLL_LIST_CALLBACK.lock().unwrap();
-                                            if let Some(cb) = *guard {
-                                                cb(c_user_id.as_ptr(), c_room_id.as_ptr(), c_event_id.as_ptr(), c_sender.as_ptr(), c_question.as_ptr(), c_options.as_ptr());
-                                            }
-                                        }
+                                        let event = crate::ffi::FfiEvent::PollList {
+                                            user_id: user_id_str.clone(),
+                                            room_id: room_id_str.clone(),
+                                            event_id: Some(ev.event_id.as_str().to_string()),
+                                            sender: Some(ev.sender.as_str().to_string()),
+                                            question: Some(question.to_string()),
+                                            options_str: Some(options_str),
+                                        };
+                                        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
                                     }
                                 }
                             }
@@ -120,12 +121,15 @@ pub extern "C" fn purple_matrix_rust_list_polls(user_id: *const c_char, room_id:
                     }
                     
                     // End of list marker
-                    if let (Ok(c_user_id), Ok(c_room_id)) = (CString::new(user_id_str), CString::new(room_id_str)) {
-                        let guard = POLL_LIST_CALLBACK.lock().unwrap();
-                        if let Some(cb) = *guard {
-                            cb(c_user_id.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), std::ptr::null(), std::ptr::null());
-                        }
-                    }
+                    let event = crate::ffi::FfiEvent::PollList {
+                        user_id: user_id_str.clone(),
+                        room_id: room_id_str.clone(),
+                        event_id: None,
+                        question: None,
+                        sender: None,
+                        options_str: None,
+                    };
+                    let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
                 }
             }
         });

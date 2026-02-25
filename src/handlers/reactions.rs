@@ -1,6 +1,4 @@
-use std::ffi::CString;
 use matrix_sdk::Room;
-use crate::ffi::MSG_CALLBACK;
 
 pub async fn handle_reaction(event: matrix_sdk::ruma::events::reaction::SyncReactionEvent, room: Room) {
     if let matrix_sdk::ruma::events::reaction::SyncReactionEvent::Original(ev) = event {
@@ -19,16 +17,17 @@ pub async fn handle_reaction(event: matrix_sdk::ruma::events::reaction::SyncReac
         let body = format!("[Reaction] {} reacted with {}", sender, ev.content.relates_to.key);
         let is_encrypted = room.get_state_event_static::<matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent>().await.ok().flatten().is_some();
         
-        let c_user_id = CString::new(crate::sanitize_string(&local_user_id)).unwrap_or_default();
-        let c_sender = CString::new("System").unwrap_or_default();
-        let c_body = CString::new(crate::sanitize_string(&body)).unwrap_or_default();
-        let c_room_id = CString::new(crate::sanitize_string(room_id)).unwrap_or_default();
-        let c_event_id = CString::new(crate::sanitize_string(ev.event_id.as_str())).unwrap_or_default();
-
-        let guard = MSG_CALLBACK.lock().unwrap();
-        if let Some(cb) = *guard {
-            cb(c_user_id.as_ptr(), c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), c_event_id.as_ptr(), timestamp, is_encrypted);
-        }
+        let event = crate::ffi::FfiEvent::MessageReceived {
+            user_id: local_user_id,
+            sender: "System".to_string(),
+            msg: body,
+            room_id: Some(room_id.to_string()),
+            thread_root_id: None,
+            event_id: ev.event_id.to_string(),
+            timestamp,
+            encrypted: is_encrypted,
+        };
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
     }
 }
 
@@ -46,15 +45,16 @@ pub async fn handle_sticker(event: matrix_sdk::ruma::events::sticker::SyncSticke
         let body = format!("[Sticker] {}", ev.content.body);
         let is_encrypted = room.get_state_event_static::<matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent>().await.unwrap_or(None).is_some();
         
-        let c_user_id = CString::new(crate::sanitize_string(&local_user_id)).unwrap_or_default();
-        let c_sender = CString::new(crate::sanitize_string(sender)).unwrap_or_default();
-        let c_body = CString::new(crate::sanitize_string(&body)).unwrap_or_default();
-        let c_room_id = CString::new(crate::sanitize_string(room_id)).unwrap_or_default();
-        let c_event_id = CString::new(crate::sanitize_string(ev.event_id.as_str())).unwrap_or_default();
-
-        let guard = MSG_CALLBACK.lock().unwrap();
-        if let Some(cb) = *guard {
-            cb(c_user_id.as_ptr(), c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), c_event_id.as_ptr(), timestamp, is_encrypted);
-        }
+        let event = crate::ffi::FfiEvent::MessageReceived {
+            user_id: local_user_id,
+            sender: sender.to_string(),
+            msg: body,
+            room_id: Some(room_id.to_string()),
+            thread_root_id: None,
+            event_id: ev.event_id.to_string(),
+            timestamp,
+            encrypted: is_encrypted,
+        };
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
     }
 }
