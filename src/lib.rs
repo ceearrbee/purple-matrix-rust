@@ -2,7 +2,6 @@
 use std::sync::Mutex;
 use matrix_sdk::Client;
 use once_cell::sync::Lazy;
-use simple_logger::SimpleLogger;
 use tokio::runtime::Runtime;
 use dashmap::{DashMap, DashSet};
 
@@ -51,13 +50,12 @@ pub struct MatrixClientHandle;
 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_init() {
-    let _ = SimpleLogger::new()
-        .with_level(log::LevelFilter::Info)
-        .with_module_level("matrix_sdk", log::LevelFilter::Warn)
-        .with_module_level("matrix_sdk_crypto", log::LevelFilter::Warn)
-        .with_module_level("matrix_sdk_base", log::LevelFilter::Warn)
+    tracing_subscriber::fmt()
+        .with_env_filter("info,matrix_sdk=debug,reqwest=debug,matrix_sdk_crypto=debug")
+        .with_writer(std::io::stderr)
         .init();
-    log::info!("Rust backend initialized");
+    
+    log::info!("Rust backend initialized using tracing_subscriber");
     
     RUNTIME.spawn(async {
         media_helper::cleanup_media_files().await;

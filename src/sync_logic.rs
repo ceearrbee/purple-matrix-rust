@@ -159,7 +159,7 @@ async fn process_sync_event_for_history(client: &Client, room: &matrix_sdk::Room
 
     let user_id = client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
     
-    let mut any_event_opt = timeline_event.raw().deserialize().ok();
+    let mut any_event_opt: Option<AnySyncTimelineEvent> = timeline_event.raw().deserialize().ok();
     let mut is_encrypted = false;
 
     if let Some(AnySyncTimelineEvent::MessageLike(matrix_sdk::ruma::events::AnySyncMessageLikeEvent::RoomEncrypted(_))) = &any_event_opt {
@@ -263,7 +263,7 @@ pub async fn fetch_room_history_logic_with_limit(client: Client, full_room_id: S
                  if let Some(end) = &messages.end { crate::PAGINATION_TOKENS.insert(full_room_id.clone(), end.clone()); }
 
                  for timeline_event in messages.chunk.iter().rev() {
-                     let mut any_event_opt = timeline_event.raw().deserialize().ok();
+                     let mut any_event_opt: Option<AnySyncTimelineEvent> = timeline_event.raw().deserialize().ok();
                      let mut is_encrypted = false;
 
                      if let Some(AnySyncTimelineEvent::MessageLike(matrix_sdk::ruma::events::AnySyncMessageLikeEvent::RoomEncrypted(_))) = &any_event_opt {

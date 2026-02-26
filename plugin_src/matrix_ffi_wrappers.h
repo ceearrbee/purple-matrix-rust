@@ -106,10 +106,10 @@ typedef struct {
 } CInvite;
 typedef struct {
   char *user_id;
+  char *room_id;
   char *name;
-  char *id;
   char *topic;
-  guint64 count;
+  guint64 member_count;
 } CRoomListAdd;
 typedef struct {
   char *user_id;
@@ -117,7 +117,8 @@ typedef struct {
   char *html_body;
 } CRoomPreview;
 typedef struct {
-  char *error_msg;
+  char *user_id;
+  char *message;
 } CLoginFailed;
 typedef struct {
   char *user_id;
@@ -174,9 +175,10 @@ typedef struct {
 typedef struct {
   size_t cb_ptr;
   char *user_id;
-  char *short_name;
-  char *body;
+  char *pack_id;
+  char *sticker_id;
   char *url;
+  char *description;
   size_t user_data;
 } CSticker;
 typedef struct {
@@ -284,6 +286,9 @@ extern void purple_matrix_rust_remove_buddy(const char *user_id,
 extern void purple_matrix_rust_set_room_topic(const char *user_id,
                                               const char *room_id,
                                               const char *topic);
+extern void purple_matrix_rust_set_room_mute_state(const char *user_id,
+                                                   const char *room_id,
+                                                   bool muted);
 extern void purple_matrix_rust_set_status(const char *user_id, int status,
                                           const char *msg);
 extern void purple_matrix_rust_set_idle(const char *user_id, int time);
@@ -372,6 +377,7 @@ purple_matrix_rust_bootstrap_cross_signing_with_password(const char *user_id,
                                                          const char *password);
 extern void purple_matrix_rust_verify_user(const char *user_id,
                                            const char *target_user_id);
+extern void purple_matrix_rust_list_own_devices(const char *user_id);
 extern void purple_matrix_rust_debug_crypto_status(const char *user_id);
 
 #endif // MATRIX_FFI_WRAPPERS_H

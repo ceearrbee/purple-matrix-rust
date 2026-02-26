@@ -69,44 +69,156 @@ pub extern "C" fn purple_matrix_rust_bootstrap_cross_signing_with_password(user_
 pub extern "C" fn purple_matrix_rust_verify_user(user_id: *const c_char, target_user_id: *const c_char) {
     if user_id.is_null() || target_user_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    let target_user_id_str = unsafe { CStr::from_ptr(target_user_id).to_string_lossy().into_owned() };
-    log::info!("Requesting verification for user: {}", target_user_id_str);
+    let target_selector = unsafe { CStr::from_ptr(target_user_id).to_string_lossy().trim().to_owned() };
+    if target_selector.is_empty() {
+        crate::ffi::send_system_message(&user_id_str, "Verification target is empty.");
+        return;
+    }
+    log::info!("Requesting verification for target selector: {}", target_selector);
 
     with_client(&user_id_str.clone(), |client| {
         RUNTIME.spawn(async move {
-             use matrix_sdk::ruma::UserId;
-             if let Ok(uid) = <&UserId>::try_from(target_user_id_str.as_str()) {
-                 let encryption = client.encryption();
-                 
-                 // Try to request identity first to ensure it's tracked
-                 let _ = encryption.request_user_identity(uid).await;
+            use matrix_sdk::ruma::{OwnedDeviceId, UserId};
+            let encryption = client.encryption();
 
-                 match encryption.get_user_identity(uid).await {
-                     Ok(Some(identity)) => {
-                         log::info!("Identity found for {}, requesting verification...", target_user_id_str);
-                         match identity.request_verification().await {
-                             Ok(_) => {
-                                 log::info!("Verification request sent to {}", target_user_id_str);
-                                 crate::ffi::send_system_message(&user_id_str, &format!("Verification request sent to {}. Please check your other devices.", target_user_id_str));
-                             },
-                             Err(e) => {
-                                 log::error!("Failed to request verification: {:?}", e);
-                                 crate::ffi::send_system_message(&user_id_str, &format!("Verification failed to start: {:?}", e));
-                             }
-                         }
-                     },
-                     Ok(None) => {
-                         log::warn!("User identity not found for {}. Checking for other devices...", target_user_id_str);
-                         // If it's self-verification and no identity found, maybe try verifying against another device directly?
-                         // For now, just report failure.
-                         crate::ffi::send_system_message(&user_id_str, &format!("Could not find a valid Matrix identity for {}. Ensure they share a room with you.", target_user_id_str));
-                     },
-                     Err(e) => {
-                         log::error!("Failed to get user identity: {:?}", e);
-                         crate::ffi::send_system_message(&user_id_str, &format!("Error retrieving identity: {:?}", e));
-                     },
-                 }
-             }
+            // If argument looks like a Matrix user ID, keep user-verification path.
+            if let Ok(uid) = <&UserId>::try_from(target_selector.as_str()) {
+                let _ = encryption.request_user_identity(uid).await;
+                match encryption.get_user_identity(uid).await {
+                    Ok(Some(identity)) => {
+                        log::info!("Identity found for {}, requesting verification...", target_selector);
+                        match identity.request_verification().await {
+                            Ok(_) => {
+                                crate::ffi::send_system_message(
+                                    &user_id_str,
+                                    &format!("Verification request sent to {}.", target_selector),
+                                );
+                            }
+                            Err(e) => {
+                                log::error!("Failed to request verification: {:?}", e);
+                                crate::ffi::send_system_message(
+                                    &user_id_str,
+                                    &format!("Verification failed to start: {:?}", e),
+                                );
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        crate::ffi::send_system_message(
+                            &user_id_str,
+                            &format!("No identity found for {}. Ensure you share an encrypted room.", target_selector),
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("Failed to get user identity: {:?}", e);
+                        crate::ffi::send_system_message(
+                            &user_id_str,
+                            &format!("Error retrieving identity: {:?}", e),
+                        );
+                    }
+                }
+                return;
+            }
+
+            // Otherwise interpret argument as a device ID of our own account.
+            let Some(own_user_id) = client.user_id().map(|u| u.to_owned()) else {
+                crate::ffi::send_system_message(&user_id_str, "Not logged in; cannot verify device.");
+                return;
+            };
+            let device_id: OwnedDeviceId = target_selector.as_str().into();
+
+            let mut device = match encryption.get_device(&own_user_id, device_id.as_ref()).await {
+                Ok(d) => d,
+                Err(e) => {
+                    crate::ffi::send_system_message(
+                        &user_id_str,
+                        &format!("Failed to load device {}: {:?}", target_selector, e),
+                    );
+                    return;
+                }
+            };
+
+            // If device is not present locally yet, force a user-device refresh and retry once.
+            if device.is_none() {
+                let _ = encryption.get_user_devices(&own_user_id).await;
+                device = match encryption.get_device(&own_user_id, device_id.as_ref()).await {
+                    Ok(d) => d,
+                    Err(e) => {
+                        crate::ffi::send_system_message(
+                            &user_id_str,
+                            &format!("Failed to refresh devices for {}: {:?}", own_user_id, e),
+                        );
+                        return;
+                    }
+                };
+            }
+
+            match device {
+                Some(dev) => {
+                    match dev.request_verification().await {
+                        Ok(_) => {
+                            crate::ffi::send_system_message(
+                                &user_id_str,
+                                &format!("Device verification request sent to {}", target_selector),
+                            );
+                        }
+                        Err(e) => {
+                            crate::ffi::send_system_message(
+                                &user_id_str,
+                                &format!("Failed to verify device {}: {:?}", target_selector, e),
+                            );
+                        }
+                    }
+                }
+                None => {
+                    crate::ffi::send_system_message(
+                        &user_id_str,
+                        &format!("Device {} not found for your account.", target_selector),
+                    );
+                }
+            }
+        });
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_list_own_devices(user_id: *const c_char) {
+    if user_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            let encryption = client.encryption();
+            let Some(own_user_id) = client.user_id().map(|u| u.to_owned()) else {
+                crate::ffi::send_system_message(&user_id_str, "Not logged in; cannot list devices.");
+                return;
+            };
+
+            match encryption.get_user_devices(own_user_id.as_ref()).await {
+                Ok(devices) => {
+                    let mut lines = vec![format!("<b>Devices for {}</b>", own_user_id)];
+                    for dev in devices.devices() {
+                        let name = dev.display_name().unwrap_or("Unnamed");
+                        lines.push(format!(
+                            "- {} | {} | verified={} | local_trust={:?}",
+                            dev.device_id(),
+                            name,
+                            dev.is_verified(),
+                            dev.local_trust_state()
+                        ));
+                    }
+                    if lines.len() == 1 {
+                        lines.push("- No devices found.".to_string());
+                    }
+                    crate::ffi::send_system_message(&user_id_str, &lines.join("<br/>"));
+                }
+                Err(e) => {
+                    crate::ffi::send_system_message(
+                        &user_id_str,
+                        &format!("Failed to list devices: {:?}", e),
+                    );
+                }
+            }
         });
     });
 }

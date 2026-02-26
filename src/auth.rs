@@ -76,14 +76,10 @@ async fn finish_sso_internal(client: Client, token: String) {
     }
 
     // 2. Extra guard to prevent race conditions between automatic and manual token submission
-    static FINISHING_SSO: Mutex<bool> = Mutex::new(false);
-    {
-        let mut guard = FINISHING_SSO.lock().unwrap();
-        if *guard {
-            log::warn!("SSO finalization already in progress, ignoring duplicate call.");
-            return;
-        }
-        *guard = true;
+    static FINISHING_SSO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if FINISHING_SSO.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        log::warn!("SSO finalization already in progress, ignoring duplicate call.");
+        return;
     }
 
     log::info!("Finishing SSO login with token...");
@@ -91,17 +87,11 @@ async fn finish_sso_internal(client: Client, token: String) {
         Ok(_) => {
             log::info!("SSO Login Successful! Persisting session...");
             set_sso_in_progress(false);
-            {
-                let mut guard = FINISHING_SSO.lock().unwrap();
-                *guard = false;
-            }
+            FINISHING_SSO.store(false, std::sync::atomic::Ordering::SeqCst);
             finish_login_success(client).await;
         },
         Err(e) => {
-            {
-                let mut guard = FINISHING_SSO.lock().unwrap();
-                *guard = false;
-            }
+            FINISHING_SSO.store(false, std::sync::atomic::Ordering::SeqCst);
             let err_msg = format!("SSO Login Failed: {:?}", e);
             log::error!("{}", err_msg);
             
@@ -273,9 +263,9 @@ fn safe_wipe_data_dir(path: &std::path::Path) {
     // 1. Resolve to absolute path, resolving symlinks
     match std::fs::canonicalize(path) {
         Ok(canon_path) => {
-            let path_str = canon_path.to_string_lossy();
-            // 2. Strict validation: Must end with or contain the specific folder name, and have adequate depth
-            if path_str.contains("matrix_rust_data") && canon_path.components().count() > 3 {
+            let components: Vec<_> = canon_path.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
+            // 2. Strict validation: Must contain the specific folder name as a distinct component, and have adequate depth
+            if components.contains(&"matrix_rust_data".to_string()) && components.len() > 3 {
                 log::warn!("Safety wipe: Deleting directory {:?}", canon_path);
                 let _ = std::fs::remove_dir_all(&canon_path);
             } else {
@@ -663,7 +653,7 @@ pub extern "C" fn purple_matrix_rust_logout(user_id: *const c_char) {
          log::info!("Dropping global client instance for disconnect.");
          // Ensure client is dropped within the Tokio runtime context to prevent
          // "there is no reactor running" panics from internal components (e.g. deadpool).
-         RUNTIME.block_on(async move {
+         RUNTIME.spawn(async move {
              drop(client);
          });
     }
