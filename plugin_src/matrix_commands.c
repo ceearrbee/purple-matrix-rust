@@ -24,11 +24,21 @@ static void action_bootstrap_crypto_cb(PurplePluginAction *action);
 static void action_restore_backup_cb(PurplePluginAction *action);
 static void action_resync_all_keys_cb(PurplePluginAction *action);
 static void action_sso_token_cb(PurplePluginAction *action);
-static void action_restore_backup_cb(PurplePluginAction *action);
+static void action_clear_session_cache_cb(PurplePluginAction *action);
+static void action_login_password_cb(PurplePluginAction *action);
+static void action_login_sso_cb(PurplePluginAction *action);
+static void action_set_account_defaults_cb(PurplePluginAction *action);
 static PurpleCmdRet cmd_verify(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
 static PurpleCmdRet cmd_crypto_status(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_matrix_devices(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
 static PurpleCmdRet cmd_leave(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
 static PurpleCmdRet cmd_members(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_matrix_login(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_matrix_sso(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_matrix_join(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_matrix_leave(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_matrix_create(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_matrix_clear_session(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
 static void action_my_profile_cb(PurplePluginAction *action);
 static void my_profile_avatar_cb(void *user_data, const char *filename);
 static void menu_action_reply_dialog_cb(void *user_data, const char *text);
@@ -38,6 +48,40 @@ static void join_room_dialog_cb(void *user_data, const char *room_id);
 static void invite_user_dialog_cb(void *user_data, const char *user_id);
 void room_settings_dialog_cb(void *user_data, PurpleRequestFields *fields);
 static PurpleCmdRet cmd_sticker_list(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+
+static PurpleAccount *matrix_action_account(PurplePluginAction *action) {
+    if (action && action->context) {
+        PurpleConnection *gc = (PurpleConnection *)action->context;
+        if (gc) {
+            PurpleAccount *acct = purple_connection_get_account(gc);
+            if (acct && strcmp(purple_account_get_protocol_id(acct), "prpl-matrix-rust") == 0) {
+                return acct;
+            }
+        }
+    }
+    return find_matrix_account();
+}
+
+static PurpleAccount *matrix_account_from_user_id(const char *user_id) {
+    if (user_id && *user_id) {
+        PurpleAccount *acct = find_matrix_account_by_id(user_id);
+        if (acct) return acct;
+    }
+    return find_matrix_account();
+}
+
+static char *matrix_build_data_dir_for_user(const char *username) {
+    char *safe_user = g_strdup(username ? username : "");
+    for (char *p = safe_user; *p; p++) {
+        if (*p == ':' || *p == '/' || *p == '\\') *p = '_';
+    }
+    char *data_dir = g_build_filename(purple_user_dir(), "matrix_rust_data", safe_user, NULL);
+    if (!g_file_test(data_dir, G_FILE_TEST_EXISTS)) {
+        g_mkdir_with_parents(data_dir, 0700);
+    }
+    g_free(safe_user);
+    return data_dir;
+}
 
 /* Sticker Selection Wizard */
 static void sticker_selected_cb(void *user_data, PurpleRequestFields *fields) {
@@ -164,12 +208,15 @@ static void bootstrap_pass_dialog_cb(void *user_data, const char *password) {
     }
 }
 
-static void open_user_mgmt_dialog(PurpleAccount *account, const char *room_id) {
+static void open_user_mgmt_dialog(PurpleAccount *account, const char *room_id,
+                                  const char *prefill_target_user_id) {
     PurpleRequestFields *fields = purple_request_fields_new();
     PurpleRequestFieldGroup *group = purple_request_field_group_new("Action Details");
     purple_request_fields_add_group(fields, group);
     
-    purple_request_field_group_add_field(group, purple_request_field_string_new("target", "Target User ID", NULL, FALSE));
+    purple_request_field_group_add_field(
+        group, purple_request_field_string_new("target", "Target User ID",
+                                               prefill_target_user_id, FALSE));
     purple_request_field_group_add_field(group, purple_request_field_string_new("reason", "Reason (Optional)", NULL, TRUE));
     
     PurpleRequestField *f_action = purple_request_field_choice_new("action", "Action", 0);
@@ -215,7 +262,7 @@ static void dash_choice_cb(void *user_data, PurpleRequestFields *fields) {
           break;
       }
       case 15: if (conv) cmd_crypto_status(conv, "matrix_debug_crypto", NULL, NULL, NULL); break;
-      case 16: open_user_mgmt_dialog(account, room_id); break;
+      case 16: open_user_mgmt_dialog(account, room_id, NULL); break;
       case 17: {
           purple_request_file(my_plugin, "Select Avatar Image", NULL, FALSE, G_CALLBACK(my_profile_avatar_cb), NULL, account, NULL, conv, NULL);
           break;
@@ -368,6 +415,338 @@ static void action_sso_token_cb(PurplePluginAction *action) {
     purple_request_fields(my_plugin, "SSO Login", "Authentication Required", "If you have a manual SSO login token, paste it below.", fields, "Submit", G_CALLBACK(manual_sso_token_action_cb), "Cancel", NULL, find_matrix_account(), NULL, NULL, find_matrix_account());
 }
 
+static void action_clear_session_cache_cb(PurplePluginAction *action) {
+    PurpleAccount *account = matrix_action_account(action);
+    if (!account) return;
+    purple_matrix_rust_destroy_session(purple_account_get_username(account));
+    purple_notify_info(my_plugin, "Matrix Session Cache", "Session cache cleared",
+                       "Your local Matrix session has been removed. Reconnect to log in again.");
+}
+
+static void action_login_password_dialog_cb(void *user_data, PurpleRequestFields *fields) {
+    PurpleAccount *account = (PurpleAccount *)user_data;
+    if (!account) account = find_matrix_account();
+    if (!account) return;
+
+    const char *homeserver = purple_request_fields_get_string(fields, "homeserver");
+    const char *username = purple_request_fields_get_string(fields, "username");
+    const char *password = purple_request_fields_get_string(fields, "password");
+
+    if (!homeserver || !*homeserver || !username || !*username || !password || !*password) {
+        purple_notify_error(my_plugin, "Matrix Login", "Missing required fields",
+                            "Homeserver, Username and Password are required.");
+        return;
+    }
+
+    purple_account_set_string(account, "server", homeserver);
+    purple_account_set_username(account, username);
+
+    char *data_dir = matrix_build_data_dir_for_user(username);
+    purple_matrix_rust_login(username, password, homeserver, data_dir);
+    g_free(data_dir);
+}
+
+static void action_login_password_cb(PurplePluginAction *action) {
+    PurpleAccount *account = matrix_action_account(action);
+    if (!account) return;
+
+    PurpleRequestFields *fields = purple_request_fields_new();
+    PurpleRequestFieldGroup *group = purple_request_field_group_new("Credentials");
+    purple_request_fields_add_group(fields, group);
+    purple_request_field_group_add_field(
+        group,
+        purple_request_field_string_new("homeserver", "Homeserver URL",
+            purple_account_get_string(account, "server", "https://matrix.org"), FALSE));
+    purple_request_field_group_add_field(
+        group,
+        purple_request_field_string_new("username", "Username",
+            purple_account_get_username(account), FALSE));
+    PurpleRequestField *pw = purple_request_field_string_new("password", "Password", NULL, FALSE);
+    purple_request_field_string_set_masked(pw, TRUE);
+    purple_request_field_group_add_field(group, pw);
+
+    purple_request_fields(my_plugin, "Matrix Login", "Login With Password", NULL,
+        fields, "_Login", G_CALLBACK(action_login_password_dialog_cb),
+        "_Cancel", NULL, account, NULL, NULL, account);
+}
+
+static void action_login_sso_dialog_cb(void *user_data, PurpleRequestFields *fields) {
+    PurpleAccount *account = (PurpleAccount *)user_data;
+    if (!account) account = find_matrix_account();
+    if (!account) return;
+
+    const char *homeserver = purple_request_fields_get_string(fields, "homeserver");
+    const char *username = purple_request_fields_get_string(fields, "username");
+    if (!homeserver || !*homeserver || !username || !*username) {
+        purple_notify_error(my_plugin, "Matrix SSO", "Missing required fields",
+                            "Homeserver and Username are required.");
+        return;
+    }
+
+    purple_account_set_string(account, "server", homeserver);
+    purple_account_set_username(account, username);
+
+    char *data_dir = matrix_build_data_dir_for_user(username);
+    /* Empty password intentionally triggers SSO flow in Rust auth. */
+    purple_matrix_rust_login(username, "", homeserver, data_dir);
+    g_free(data_dir);
+}
+
+static void action_login_sso_cb(PurplePluginAction *action) {
+    PurpleAccount *account = matrix_action_account(action);
+    if (!account) return;
+
+    PurpleRequestFields *fields = purple_request_fields_new();
+    PurpleRequestFieldGroup *group = purple_request_field_group_new("SSO Login");
+    purple_request_fields_add_group(fields, group);
+    purple_request_field_group_add_field(
+        group,
+        purple_request_field_string_new("homeserver", "Homeserver URL",
+            purple_account_get_string(account, "server", "https://matrix.org"), FALSE));
+    purple_request_field_group_add_field(
+        group,
+        purple_request_field_string_new("username", "Username",
+            purple_account_get_username(account), FALSE));
+
+    purple_request_fields(my_plugin, "Matrix SSO", "Start SSO Login", NULL,
+        fields, "_Start", G_CALLBACK(action_login_sso_dialog_cb),
+        "_Cancel", NULL, account, NULL, NULL, account);
+}
+
+static void action_set_account_defaults_dialog_cb(void *user_data, PurpleRequestFields *fields) {
+    PurpleAccount *account = (PurpleAccount *)user_data;
+    if (!account) account = find_matrix_account();
+    if (!account) return;
+
+    const char *homeserver = purple_request_fields_get_string(fields, "homeserver");
+    const char *username = purple_request_fields_get_string(fields, "username");
+
+    if (homeserver && *homeserver) {
+        purple_account_set_string(account, "server", homeserver);
+    }
+    if (username && *username) {
+        purple_account_set_username(account, username);
+    }
+
+    purple_notify_info(my_plugin, "Matrix Account Defaults", "Defaults updated",
+                       "Homeserver and username have been saved.");
+}
+
+static void action_set_account_defaults_cb(PurplePluginAction *action) {
+    PurpleAccount *account = matrix_action_account(action);
+    if (!account) return;
+
+    PurpleRequestFields *fields = purple_request_fields_new();
+    PurpleRequestFieldGroup *group = purple_request_field_group_new("Defaults");
+    purple_request_fields_add_group(fields, group);
+    purple_request_field_group_add_field(
+        group,
+        purple_request_field_string_new("homeserver", "Homeserver URL",
+            purple_account_get_string(account, "server", "https://matrix.org"), FALSE));
+    purple_request_field_group_add_field(
+        group,
+        purple_request_field_string_new("username", "Username",
+            purple_account_get_username(account), FALSE));
+
+    purple_request_fields(my_plugin, "Matrix Account Defaults", "Set Homeserver / Username", NULL,
+        fields, "_Save", G_CALLBACK(action_set_account_defaults_dialog_cb),
+        "_Cancel", NULL, account, NULL, NULL, account);
+}
+
+void matrix_action_login_password(PurplePluginAction *action) {
+    action_login_password_cb(action);
+}
+
+void matrix_action_login_sso(PurplePluginAction *action) {
+    action_login_sso_cb(action);
+}
+
+void matrix_action_set_account_defaults(PurplePluginAction *action) {
+    action_set_account_defaults_cb(action);
+}
+
+void matrix_action_clear_session_cache(PurplePluginAction *action) {
+    action_clear_session_cache_cb(action);
+}
+
+void matrix_action_login_password_for_user(const char *user_id) {
+    PurpleAccount *account = matrix_account_from_user_id(user_id);
+    if (!account) return;
+    PurplePluginAction action = {0};
+    PurpleConnection *gc = purple_account_get_connection(account);
+    action.context = gc;
+    action_login_password_cb(&action);
+}
+
+void matrix_action_login_sso_for_user(const char *user_id) {
+    PurpleAccount *account = matrix_account_from_user_id(user_id);
+    if (!account) return;
+    PurplePluginAction action = {0};
+    PurpleConnection *gc = purple_account_get_connection(account);
+    action.context = gc;
+    action_login_sso_cb(&action);
+}
+
+void matrix_action_set_account_defaults_for_user(const char *user_id) {
+    PurpleAccount *account = matrix_account_from_user_id(user_id);
+    if (!account) return;
+    PurplePluginAction action = {0};
+    PurpleConnection *gc = purple_account_get_connection(account);
+    action.context = gc;
+    action_set_account_defaults_cb(&action);
+}
+
+void matrix_action_clear_session_cache_for_user(const char *user_id) {
+    PurpleAccount *account = matrix_account_from_user_id(user_id);
+    if (!account) return;
+    PurplePluginAction action = {0};
+    PurpleConnection *gc = purple_account_get_connection(account);
+    action.context = gc;
+    action_clear_session_cache_cb(&action);
+}
+
+void matrix_ui_action_show_members(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    purple_matrix_rust_fetch_room_members(purple_account_get_username(account), room_id);
+}
+
+void matrix_ui_action_moderate(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    open_user_mgmt_dialog(account, room_id, NULL);
+}
+
+void matrix_ui_action_moderate_user(const char *room_id, const char *target_user_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    open_user_mgmt_dialog(account, room_id, target_user_id);
+}
+
+static void matrix_ui_user_info_prompt_cb(void *user_data, const char *target_user_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)user_data;
+    if (!account || !target_user_id || !*target_user_id) return;
+    purple_matrix_rust_get_user_info(purple_account_get_username(account), target_user_id);
+}
+
+void matrix_ui_action_user_info(const char *room_id, const char *target_user_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)room_id;
+    if (!account) return;
+    if (target_user_id && *target_user_id) {
+        purple_matrix_rust_get_user_info(purple_account_get_username(account), target_user_id);
+        return;
+    }
+    purple_request_input(my_plugin, "User Info", "Lookup Matrix User",
+        "Enter Matrix user ID (example: @user:matrix.org)", NULL, FALSE, FALSE, NULL,
+        "_Lookup", G_CALLBACK(matrix_ui_user_info_prompt_cb), "_Cancel", NULL,
+        account, NULL, NULL, NULL);
+}
+
+void matrix_ui_action_leave_room(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    PurpleConnection *gc = purple_account_get_connection(account);
+    if (!gc) return;
+    matrix_chat_leave(gc, get_chat_id(room_id));
+}
+
+void matrix_ui_action_verify_self(const char *room_id) {
+    (void)room_id;
+    PurpleAccount *account = find_matrix_account();
+    if (!account) return;
+    const char *uid = purple_account_get_username(account);
+    purple_matrix_rust_verify_user(uid, uid);
+}
+
+void matrix_ui_action_crypto_status(const char *room_id) {
+    (void)room_id;
+    PurpleAccount *account = find_matrix_account();
+    if (!account) return;
+    purple_matrix_rust_debug_crypto_status(purple_account_get_username(account));
+}
+
+void matrix_ui_action_list_devices(const char *room_id) {
+    (void)room_id;
+    PurpleAccount *account = find_matrix_account();
+    if (!account) return;
+    purple_matrix_rust_list_own_devices(purple_account_get_username(account));
+}
+
+void matrix_ui_action_room_settings(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    PurpleBlistNode *node = (PurpleBlistNode *)purple_blist_find_chat(account, room_id);
+    if (node) menu_action_room_settings_cb(node, NULL);
+}
+
+static void matrix_ui_invite_room_cb(void *user_data, const char *target_user_id) {
+    char *room_id = (char *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && room_id && target_user_id && *target_user_id) {
+        purple_matrix_rust_invite_user(purple_account_get_username(account), room_id, target_user_id);
+    }
+    g_free(room_id);
+}
+
+void matrix_ui_action_invite_user(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    purple_request_input(my_plugin, "Invite User", "Enter Matrix User ID",
+        "Example: @user:matrix.org", NULL, FALSE, FALSE, NULL,
+        "_Invite", G_CALLBACK(matrix_ui_invite_room_cb), "_Cancel", NULL,
+        account, NULL, NULL, g_strdup(room_id));
+}
+
+static void matrix_ui_send_file_cb(void *user_data, const char *filename) {
+    char *room_id = (char *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && room_id && filename && *filename) {
+        purple_matrix_rust_send_file(purple_account_get_username(account), room_id, filename);
+    }
+    g_free(room_id);
+}
+
+void matrix_ui_action_send_file(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = NULL;
+    if (!account || !room_id || !*room_id) return;
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    purple_request_file(my_plugin, "Select File to Send", NULL, FALSE,
+        G_CALLBACK(matrix_ui_send_file_cb), NULL, account, NULL, conv, g_strdup(room_id));
+}
+
+void matrix_ui_action_mark_unread(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    purple_matrix_rust_mark_unread(purple_account_get_username(account), room_id, TRUE);
+}
+
+void matrix_ui_action_set_room_mute(const char *room_id, bool muted) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    purple_matrix_rust_set_room_mute_state(purple_account_get_username(account), room_id, muted);
+}
+
+static void matrix_ui_search_room_cb(void *user_data, const char *term) {
+    char *room_id = (char *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && room_id && term && *term) {
+        purple_matrix_rust_search_room_messages(purple_account_get_username(account), room_id, term);
+    }
+    g_free(room_id);
+}
+
+void matrix_ui_action_search_room(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    purple_request_input(my_plugin, "Search Messages", "Search in this Room",
+        "Enter text to search recent messages.", NULL, FALSE, FALSE, NULL,
+        "_Search", G_CALLBACK(matrix_ui_search_room_cb), "_Cancel", NULL,
+        account, NULL, NULL, g_strdup(room_id));
+}
+
 void room_settings_dialog_cb(void *user_data, PurpleRequestFields *fields) { 
     char *room_id = (char *)user_data; 
     PurpleAccount *account = find_matrix_account(); 
@@ -446,6 +825,12 @@ static PurpleCmdRet cmd_help(PurpleConversation *conv, const gchar *cmd, gchar *
   const char *msg = 
     "<b>Matrix Protocol Commands:</b><br/>"
     "<b>General:</b><br/>"
+    "  /matrix_login &lt;homeserver&gt; &lt;user&gt; &lt;pass&gt; - Login with explicit credentials<br/>"
+    "  /matrix_sso [homeserver] [user] - Start SSO login (uses account defaults if omitted)<br/>"
+    "  /matrix_clear_session - Clear local session cache for this account<br/>"
+    "  /matrix_create &lt;name&gt; - Create a new private room<br/>"
+    "  /matrix_join &lt;id/alias&gt; - Join a Matrix room<br/>"
+    "  /matrix_leave - Leave the current Matrix room<br/>"
     "  /dashboard - Open the Room Dashboard for quick tasks<br/>"
     "  /nick &lt;name&gt; - Change your display name on Matrix<br/>"
     "  /join &lt;id/alias&gt; - Join a Matrix room<br/>"
@@ -460,7 +845,8 @@ static PurpleCmdRet cmd_help(PurpleConversation *conv, const gchar *cmd, gchar *
     "  /sticker - Browse and send Matrix stickers<br/>"
     "  /poll - Create a new poll in this room<br/>"
     "<b>Security:</b><br/>"
-    "  /matrix_verify - Start interactive device verification<br/>"
+    "  /matrix_verify [device_id_or_user_id] - Start interactive device verification<br/>"
+    "  /matrix_devices - List your device IDs for verification targeting<br/>"
     "  /matrix_restore_backup &lt;key&gt; - Restore E2EE keys using your Security Key<br/>"
     "  /matrix_debug_crypto - Show detailed encryption status for this session";
   
@@ -551,15 +937,27 @@ static PurpleCmdRet cmd_restore_backup(PurpleConversation *conv, const gchar *cm
 
 static PurpleCmdRet cmd_verify(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
     PurpleAccount *account = purple_conversation_get_account(conv);
-    /* Verify self by default */
-    purple_matrix_rust_verify_user(purple_account_get_username(account), purple_account_get_username(account));
-    purple_conversation_write(conv, "System", "Verification request sent to your other devices. Please check Element or another client to approve.", PURPLE_MESSAGE_SYSTEM, time(NULL));
+    const char *target = NULL;
+    if (args && args[0] && *args[0]) {
+        target = args[0];
+    } else {
+        /* Verify own device set by default when no explicit device/user is passed. */
+        target = purple_account_get_username(account);
+    }
+    purple_matrix_rust_verify_user(purple_account_get_username(account), target);
+    purple_conversation_write(conv, "System", "Verification request sent. Approve from your other Matrix client.", PURPLE_MESSAGE_SYSTEM, time(NULL));
     return PURPLE_CMD_RET_OK;
 }
 
 static PurpleCmdRet cmd_crypto_status(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
     PurpleAccount *account = purple_conversation_get_account(conv);
     purple_matrix_rust_debug_crypto_status(purple_account_get_username(account));
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_matrix_devices(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    purple_matrix_rust_list_own_devices(purple_account_get_username(account));
     return PURPLE_CMD_RET_OK;
 }
 
@@ -662,6 +1060,87 @@ static PurpleCmdRet cmd_members(PurpleConversation *conv, const gchar *cmd, gcha
     return PURPLE_CMD_RET_OK;
 }
 
+static PurpleCmdRet cmd_matrix_login(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    if (!args[0] || !*args[0] || !args[1] || !*args[1] || !args[2] || !*args[2]) {
+        *error = g_strdup("Usage: /matrix_login <homeserver> <user> <pass>");
+        return PURPLE_CMD_RET_FAILED;
+    }
+
+    char *safe_user = g_strdup(args[1]);
+    for (char *p = safe_user; *p; p++) {
+        if (*p == ':' || *p == '/' || *p == '\\') *p = '_';
+    }
+    char *data_dir = g_build_filename(purple_user_dir(), "matrix_rust_data", safe_user, NULL);
+    if (!g_file_test(data_dir, G_FILE_TEST_EXISTS)) {
+        g_mkdir_with_parents(data_dir, 0700);
+    }
+
+    purple_matrix_rust_login(args[1], args[2], args[0], data_dir);
+    purple_conversation_write(conv, "System", "Matrix login started.", PURPLE_MESSAGE_SYSTEM, time(NULL));
+    g_free(data_dir);
+    g_free(safe_user);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_matrix_sso(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+
+    const char *username = (args[1] && *args[1]) ? args[1] : purple_account_get_username(account);
+    const char *homeserver = (args[0] && *args[0]) ? args[0] : purple_account_get_string(account, "server", "https://matrix.org");
+
+    char *safe_user = g_strdup(username);
+    for (char *p = safe_user; *p; p++) {
+        if (*p == ':' || *p == '/' || *p == '\\') *p = '_';
+    }
+    char *data_dir = g_build_filename(purple_user_dir(), "matrix_rust_data", safe_user, NULL);
+    if (!g_file_test(data_dir, G_FILE_TEST_EXISTS)) {
+        g_mkdir_with_parents(data_dir, 0700);
+    }
+
+    /* Empty password intentionally triggers SSO path in Rust auth flow. */
+    purple_matrix_rust_login(username, "", homeserver, data_dir);
+    purple_conversation_write(conv, "System", "Matrix SSO flow started. Check browser prompt.", PURPLE_MESSAGE_SYSTEM, time(NULL));
+
+    g_free(data_dir);
+    g_free(safe_user);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_matrix_join(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    return cmd_join(conv, cmd, args, error, data);
+}
+
+static PurpleCmdRet cmd_matrix_leave(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    return cmd_leave(conv, cmd, args, error, data);
+}
+
+static PurpleCmdRet cmd_matrix_create(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    if (!args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /matrix_create <name>");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    purple_matrix_rust_create_room(purple_account_get_username(account), args[0], NULL, FALSE);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_matrix_clear_session(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_destroy_session(purple_account_get_username(account));
+    purple_conversation_write(conv, "System", "Local Matrix session cache cleared.", PURPLE_MESSAGE_SYSTEM, time(NULL));
+    return PURPLE_CMD_RET_OK;
+}
+
 void register_matrix_commands(PurplePlugin *plugin) {
   purple_cmd_register("matrix_help", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_help, "help", NULL);
   purple_cmd_register("sticker", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_sticker, "sticker: Browse and send stickers", NULL);
@@ -679,6 +1158,16 @@ void register_matrix_commands(PurplePlugin *plugin) {
   purple_cmd_register("shrug", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_shrug, "shrug [message]: Add a shrug emoji", NULL);
   purple_cmd_register("matrix_restore_backup", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_restore_backup, "matrix_restore_backup <security_key>: Restore E2EE keys from backup", NULL);
   purple_cmd_register("matrix_verify", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_verify, "matrix_verify: Start device verification", NULL);
+  purple_cmd_register("matrix_verify", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_verify, "matrix_verify [target]: Start device verification", NULL);
+  purple_cmd_register("matrix_sso", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_matrix_sso, "matrix_sso [homeserver] [user]: Start SSO login", NULL);
+  purple_cmd_register("matrix_sso", "w", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_matrix_sso, "matrix_sso [homeserver] [user]: Start SSO login", NULL);
+  purple_cmd_register("matrix_sso", "ww", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_matrix_sso, "matrix_sso [homeserver] [user]: Start SSO login", NULL);
+  purple_cmd_register("matrix_devices", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_matrix_devices, "matrix_devices: List your Matrix devices", NULL);
+  purple_cmd_register("matrix_login", "www", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_matrix_login, "matrix_login <homeserver> <user> <pass>: Login explicitly", NULL);
+  purple_cmd_register("matrix_join", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_matrix_join, "matrix_join <room_id_or_alias>: Join a room", NULL);
+  purple_cmd_register("matrix_leave", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_matrix_leave, "matrix_leave: Leave current room", NULL);
+  purple_cmd_register("matrix_create", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_matrix_create, "matrix_create <name>: Create a room", NULL);
+  purple_cmd_register("matrix_clear_session", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_matrix_clear_session, "matrix_clear_session: Clear local session cache", NULL);
   purple_cmd_register("matrix_debug_crypto", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_crypto_status, "matrix_debug_crypto: Show detailed E2EE status", NULL);
   purple_cmd_register("me", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_me, "me <action>: Send an emote", NULL);
   purple_cmd_register("redact_last", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_redact_last, "redact_last: Delete your most recent message", NULL);
@@ -696,28 +1185,52 @@ GList *matrix_actions(PurplePlugin *plugin, gpointer context) {
     GList *m = NULL;
     PurplePluginAction *act;
 
+    act = purple_plugin_action_new("Login (Password)...", action_login_password_cb);
+    act->context = context;
+    m = g_list_append(m, act);
+
+    act = purple_plugin_action_new("Login (SSO)...", action_login_sso_cb);
+    act->context = context;
+    m = g_list_append(m, act);
+
+    act = purple_plugin_action_new("Set Homeserver / Username...", action_set_account_defaults_cb);
+    act->context = context;
+    m = g_list_append(m, act);
+
     act = purple_plugin_action_new("Join Room...", action_join_room_cb);
+    act->context = context;
     m = g_list_append(m, act);
 
     act = purple_plugin_action_new("Invite User...", action_invite_user_cb);
+    act->context = context;
     m = g_list_append(m, act);
 
     act = purple_plugin_action_new("Verify This Device (Emoji)...", action_verify_device_cb);
+    act->context = context;
     m = g_list_append(m, act);
 
     act = purple_plugin_action_new("Setup E2EE (Account Password)...", action_bootstrap_crypto_cb);
+    act->context = context;
     m = g_list_append(m, act);
 
     act = purple_plugin_action_new("Setup E2EE (Security Key)...", action_restore_backup_cb);
+    act->context = context;
     m = g_list_append(m, act);
 
     act = purple_plugin_action_new("Re-sync All Room Keys...", action_resync_all_keys_cb);
+    act->context = context;
     m = g_list_append(m, act);
     
     act = purple_plugin_action_new("My Matrix Profile...", action_my_profile_cb);
+    act->context = context;
     m = g_list_append(m, act);
 
     act = purple_plugin_action_new("Enter Manual SSO Token...", action_sso_token_cb);
+    act->context = context;
+    m = g_list_append(m, act);
+
+    act = purple_plugin_action_new("Clear Session Cache...", action_clear_session_cache_cb);
+    act->context = context;
     m = g_list_append(m, act);
 
     return m;

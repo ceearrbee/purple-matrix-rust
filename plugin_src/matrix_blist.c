@@ -10,6 +10,7 @@
 #include <libpurple/debug.h>
 #include <libpurple/server.h>
 #include <libpurple/notify.h>
+#include <libpurple/conversation.h>
 #include <string.h>
 
 static PurpleRoomlist *active_roomlist = NULL;
@@ -385,6 +386,44 @@ static void menu_action_room_dashboard_buddy_cb(PurpleBlistNode *node, gpointer 
     open_room_dashboard(purple_buddy_get_account(buddy), purple_buddy_get_name(buddy));
 }
 
+static void menu_action_user_info_buddy_cb(PurpleBlistNode *node, gpointer data) {
+    PurpleBuddy *buddy = (PurpleBuddy *)node;
+    PurpleAccount *account = NULL;
+    const char *target = NULL;
+    if (!PURPLE_BLIST_NODE_IS_BUDDY(node)) return;
+    account = purple_buddy_get_account(buddy);
+    target = purple_buddy_get_name(buddy);
+    if (!account || !target || !*target) return;
+    purple_matrix_rust_get_user_info(purple_account_get_username(account), target);
+}
+
+static void menu_action_moderate_buddy_cb(PurpleBlistNode *node, gpointer data) {
+    PurpleBuddy *buddy = (PurpleBuddy *)node;
+    PurpleAccount *account = NULL;
+    const char *target = NULL;
+    const char *room_id = NULL;
+    if (!PURPLE_BLIST_NODE_IS_BUDDY(node)) return;
+    account = purple_buddy_get_account(buddy);
+    target = purple_buddy_get_name(buddy);
+    if (!account || !target || !*target) return;
+    for (GList *it = purple_get_conversations(); it; it = it->next) {
+        PurpleConversation *conv = (PurpleConversation *)it->data;
+        PurpleAccount *conv_account = purple_conversation_get_account(conv);
+        const char *conv_name = purple_conversation_get_name(conv);
+        if (!conv_account || !conv_name) continue;
+        if (conv_account == account && conv_name[0] == '!') {
+            room_id = conv_name;
+            break;
+        }
+    }
+    if (room_id) {
+        matrix_ui_action_moderate_user(room_id, target);
+    } else {
+        purple_notify_error(my_plugin, "Moderation", "No Matrix room context",
+            "Open a Matrix room conversation, then retry this moderation action.");
+    }
+}
+
 GList *blist_node_menu_cb(PurpleBlistNode *node) {
     GList *m = NULL;
     PurpleMenuAction *action;
@@ -405,6 +444,12 @@ GList *blist_node_menu_cb(PurpleBlistNode *node) {
         PurpleAccount *account = purple_buddy_get_account(buddy);
         if (account && strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
             action = purple_menu_action_new("Matrix Room Dashboard...", PURPLE_CALLBACK(menu_action_room_dashboard_buddy_cb), node, NULL);
+            m = g_list_append(m, action);
+
+            action = purple_menu_action_new("Get Matrix User Info", PURPLE_CALLBACK(menu_action_user_info_buddy_cb), node, NULL);
+            m = g_list_append(m, action);
+
+            action = purple_menu_action_new("Moderate In Room...", PURPLE_CALLBACK(menu_action_moderate_buddy_cb), node, NULL);
             m = g_list_append(m, action);
             
             action = purple_menu_action_new("My Matrix Profile...", PURPLE_CALLBACK(menu_action_my_profile_blist_cb), node, NULL);
