@@ -37,12 +37,16 @@ typedef struct {
 /* Forward Declarations */
 static void on_menu_dash(gpointer d);
 static void on_menu_reply(gpointer d);
+static void on_menu_start_thread(gpointer d);
 static void on_menu_threads(gpointer d);
 static void on_menu_sticker(gpointer d);
 static void on_menu_poll(gpointer d);
 static void on_menu_clear_session(gpointer d);
 static void on_menu_show_members(gpointer d);
 static void on_menu_moderate(gpointer d);
+static void on_menu_kick(gpointer d);
+static void on_menu_ban(gpointer d);
+static void on_menu_unban(gpointer d);
 static void on_menu_leave_room(gpointer d);
 static void on_menu_verify_self(gpointer d);
 static void on_menu_crypto_status(gpointer d);
@@ -51,13 +55,62 @@ static void on_menu_room_settings(gpointer d);
 static void on_menu_invite_user(gpointer d);
 static void on_menu_send_file(gpointer d);
 static void on_menu_mark_unread(gpointer d);
+static void on_menu_mark_read(gpointer d);
 static void on_menu_mute_room(gpointer d);
 static void on_menu_unmute_room(gpointer d);
 static void on_menu_search_room(gpointer d);
+static void on_menu_list_polls(gpointer d);
+static void on_menu_react(gpointer d);
+static void on_menu_send_location(gpointer d);
+static void on_menu_who_read(gpointer d);
+static void on_menu_report_event(gpointer d);
+static void on_menu_message_inspector(gpointer d);
+static void on_menu_reply_pick_event(gpointer d);
+static void on_menu_thread_pick_event(gpointer d);
+static void on_menu_react_pick_event(gpointer d);
+static void on_menu_edit_pick_event(gpointer d);
+static void on_menu_redact_pick_event(gpointer d);
+static void on_menu_report_pick_event(gpointer d);
+static void on_menu_redact_event(gpointer d);
+static void on_menu_edit_event(gpointer d);
+static void on_menu_react_latest(gpointer d);
+static void on_menu_edit_latest(gpointer d);
+static void on_menu_redact_latest(gpointer d);
+static void on_menu_report_latest(gpointer d);
+static void on_menu_versions(gpointer d);
+static void on_menu_enable_key_backup(gpointer d);
+static void on_menu_my_profile(gpointer d);
+static void on_menu_server_info(gpointer d);
+static void on_menu_resync_recent(gpointer d);
+static void on_menu_search_stickers(gpointer d);
+static void on_menu_recover_keys(gpointer d);
+static void on_menu_export_keys(gpointer d);
+static void on_menu_set_avatar(gpointer d);
+static void on_menu_room_tag(gpointer d);
+static void on_menu_upgrade_room(gpointer d);
+static void on_menu_alias_create(gpointer d);
+static void on_menu_alias_delete(gpointer d);
+static void on_menu_space_hierarchy(gpointer d);
+static void on_menu_user_info(gpointer d);
+static void on_menu_ignore_user(gpointer d);
+static void on_menu_unignore_user(gpointer d);
 static void on_action_login_password(PurplePluginAction *action);
 static void on_action_login_sso(PurplePluginAction *action);
 static void on_action_set_account_defaults(PurplePluginAction *action);
 static void on_action_clear_session(PurplePluginAction *action);
+static void on_action_discover_join(PurplePluginAction *action);
+static void on_action_discover_knock(PurplePluginAction *action);
+static void on_action_discover_search_users(PurplePluginAction *action);
+static void on_action_discover_search_public(PurplePluginAction *action);
+static void on_action_discover_search_members_global(PurplePluginAction *action);
+static void on_action_discover_search_room_global(PurplePluginAction *action);
+static void on_action_discover_browse_public_rooms(PurplePluginAction *action);
+static void on_action_discover_preview_room(PurplePluginAction *action);
+static void on_action_my_profile(PurplePluginAction *action);
+static void on_action_server_info(PurplePluginAction *action);
+static void on_action_recover_keys(PurplePluginAction *action);
+static void on_action_export_keys(PurplePluginAction *action);
+static void on_action_set_avatar(PurplePluginAction *action);
 static GList *ui_actions(PurplePlugin *plugin, gpointer context);
 static gboolean hook_chat_user_list_idle_cb(gpointer data);
 
@@ -146,16 +199,23 @@ find_matrix_account(void)
     return NULL;
 }
 
+static void on_matrix_moderation_actions_clicked(GtkWidget *b, PurpleConversation *c);
+static void on_matrix_admin_actions_clicked(GtkWidget *b, PurpleConversation *c);
+static void on_matrix_message_actions_clicked(GtkWidget *b, PurpleConversation *c);
 static void on_matrix_actions_clicked(GtkWidget *b, PurpleConversation *c);
 
 static void on_menu_dash(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-show-dashboard"); }
 static void on_menu_reply(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-reply"); }
+static void on_menu_start_thread(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-start-thread"); }
 static void on_menu_threads(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-list-threads"); }
 static void on_menu_sticker(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-sticker"); }
 static void on_menu_poll(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-poll"); }
 static void on_menu_clear_session(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-clear-session"); }
 static void on_menu_show_members(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-show-members"); }
 static void on_menu_moderate(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-moderate"); }
+static void on_menu_kick(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-kick"); }
+static void on_menu_ban(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-ban"); }
+static void on_menu_unban(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-unban"); }
 static void on_menu_leave_room(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-leave-room"); }
 static void on_menu_verify_self(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-verify-self"); }
 static void on_menu_crypto_status(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-crypto-status"); }
@@ -164,11 +224,46 @@ static void on_menu_room_settings(gpointer d) { emit_matrix_signal((PurpleConver
 static void on_menu_invite_user(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-invite-user"); }
 static void on_menu_send_file(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-send-file"); }
 static void on_menu_mark_unread(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-mark-unread"); }
+static void on_menu_mark_read(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-mark-read"); }
 static void on_menu_mute_room(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-mute-room"); }
 static void on_menu_unmute_room(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-unmute-room"); }
 static void on_menu_search_room(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-search-room"); }
+static void on_menu_list_polls(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-list-polls"); }
+static void on_menu_react(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-react"); }
+static void on_menu_send_location(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-send-location"); }
+static void on_menu_who_read(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-who-read"); }
+static void on_menu_report_event(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-report-event"); }
+static void on_menu_message_inspector(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-message-inspector"); }
+static void on_menu_reply_pick_event(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-reply-pick-event"); }
+static void on_menu_thread_pick_event(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-thread-pick-event"); }
+static void on_menu_react_pick_event(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-react-pick-event"); }
+static void on_menu_edit_pick_event(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-edit-pick-event"); }
+static void on_menu_redact_pick_event(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-redact-pick-event"); }
+static void on_menu_report_pick_event(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-report-pick-event"); }
+static void on_menu_redact_event(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-redact-event"); }
+static void on_menu_edit_event(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-edit-event"); }
+static void on_menu_react_latest(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-react-latest"); }
+static void on_menu_edit_latest(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-edit-latest"); }
+static void on_menu_redact_latest(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-redact-latest"); }
+static void on_menu_report_latest(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-report-latest"); }
+static void on_menu_versions(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-versions"); }
+static void on_menu_enable_key_backup(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-enable-key-backup"); }
+static void on_menu_my_profile(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-my-profile"); }
+static void on_menu_server_info(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-server-info"); }
+static void on_menu_resync_recent(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-resync-recent"); }
+static void on_menu_search_stickers(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-search-stickers"); }
+static void on_menu_recover_keys(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-recover-keys"); }
+static void on_menu_export_keys(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-export-keys"); }
+static void on_menu_set_avatar(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-set-avatar"); }
+static void on_menu_room_tag(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-room-tag"); }
+static void on_menu_upgrade_room(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-upgrade-room"); }
+static void on_menu_alias_create(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-alias-create"); }
+static void on_menu_alias_delete(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-alias-delete"); }
+static void on_menu_space_hierarchy(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-space-hierarchy"); }
 
 static void on_menu_user_info(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-user-info"); }
+static void on_menu_ignore_user(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-ignore-user"); }
+static void on_menu_unignore_user(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-unignore-user"); }
 
 static void room_user_action_data_free(RoomUserActionData *d) {
     if (!d) return;
@@ -241,6 +336,24 @@ chat_user_list_button_press_cb(GtkWidget *widget, GdkEventButton *event, gpointe
                           mod_data, (GClosureNotify)room_user_action_data_free, 0);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
 
+    item = gtk_menu_item_new_with_label("Ignore User");
+    RoomUserActionData *ignore_data = g_new0(RoomUserActionData, 1);
+    ignore_data->room_id = g_strdup(room_id);
+    ignore_data->user_id = g_strdup(user_id);
+    ignore_data->signal_name = g_strdup("matrix-ui-action-ignore-user");
+    g_signal_connect_data(item, "activate", G_CALLBACK(on_chat_user_action_activate),
+                          ignore_data, (GClosureNotify)room_user_action_data_free, 0);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Unignore User");
+    RoomUserActionData *unignore_data = g_new0(RoomUserActionData, 1);
+    unignore_data->room_id = g_strdup(room_id);
+    unignore_data->user_id = g_strdup(user_id);
+    unignore_data->signal_name = g_strdup("matrix-ui-action-unignore-user");
+    g_signal_connect_data(item, "activate", G_CALLBACK(on_chat_user_action_activate),
+                          unignore_data, (GClosureNotify)room_user_action_data_free, 0);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
     gtk_widget_show_all(menu);
     gtk_menu_popup(GTK_MENU(menu), NULL, NULL, NULL, NULL, event->button, event->time);
     g_free(user_id);
@@ -267,12 +380,290 @@ static void on_action_clear_session(PurplePluginAction *action) {
                               account ? purple_account_get_username(account) : "");
 }
 
+static void on_action_discover_join(PurplePluginAction *action) {
+    (void)action;
+    emit_matrix_global_signal("matrix-ui-action-join-room", "");
+}
+
+static void on_action_discover_knock(PurplePluginAction *action) {
+    (void)action;
+    emit_matrix_global_signal("matrix-ui-action-knock", "");
+}
+
+static void on_action_discover_search_users(PurplePluginAction *action) {
+    (void)action;
+    emit_matrix_global_signal("matrix-ui-action-search-users", "");
+}
+
+static void on_action_discover_search_public(PurplePluginAction *action) {
+    (void)action;
+    emit_matrix_global_signal("matrix-ui-action-search-public", "");
+}
+
+static void on_action_discover_search_members_global(PurplePluginAction *action) {
+    (void)action;
+    emit_matrix_global_signal("matrix-ui-action-search-members-global", "");
+}
+
+static void on_action_discover_search_room_global(PurplePluginAction *action) {
+    (void)action;
+    emit_matrix_global_signal("matrix-ui-action-search-room-global", "");
+}
+
+static void on_action_discover_browse_public_rooms(PurplePluginAction *action) {
+    (void)action;
+    emit_matrix_global_signal("matrix-ui-action-discover-public-rooms", "");
+}
+
+static void on_action_discover_preview_room(PurplePluginAction *action) {
+    (void)action;
+    emit_matrix_global_signal("matrix-ui-action-discover-room-preview", "");
+}
+
+static void on_action_my_profile(PurplePluginAction *action) {
+    PurpleAccount *account = find_matrix_account();
+    (void)action;
+    emit_matrix_global_signal("matrix-ui-action-my-profile",
+                              account ? purple_account_get_username(account) : "");
+}
+
+static void on_action_server_info(PurplePluginAction *action) {
+    PurpleAccount *account = find_matrix_account();
+    (void)action;
+    emit_matrix_global_signal("matrix-ui-action-server-info",
+                              account ? purple_account_get_username(account) : "");
+}
+
+static void on_action_recover_keys(PurplePluginAction *action) {
+    PurpleAccount *account = find_matrix_account();
+    (void)action;
+    emit_matrix_global_signal("matrix-ui-action-recover-keys",
+                              account ? purple_account_get_username(account) : "");
+}
+
+static void on_action_export_keys(PurplePluginAction *action) {
+    PurpleAccount *account = find_matrix_account();
+    (void)action;
+    emit_matrix_global_signal("matrix-ui-action-export-keys",
+                              account ? purple_account_get_username(account) : "");
+}
+
+static void on_action_set_avatar(PurplePluginAction *action) {
+    PurpleAccount *account = find_matrix_account();
+    (void)action;
+    emit_matrix_global_signal("matrix-ui-action-set-avatar",
+                              account ? purple_account_get_username(account) : "");
+}
+
+static void on_matrix_moderation_actions_clicked(GtkWidget *b, PurpleConversation *c) {
+    GtkWidget *menu = gtk_menu_new();
+    GtkWidget *item;
+
+    item = gtk_menu_item_new_with_label("Kick User...");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_kick), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Ban User...");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_ban), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Unban User...");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_unban), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Ignore User...");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_ignore_user), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Unignore User...");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_unignore_user), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_separator_menu_item_new();
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Advanced Moderation...");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_moderate), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    gtk_widget_show_all(menu);
+    gtk_menu_popup(GTK_MENU(menu), NULL, NULL, NULL, NULL, 0, gtk_get_current_event_time());
+}
+
+static void on_matrix_admin_actions_clicked(GtkWidget *b, PurpleConversation *c) {
+    GtkWidget *menu = gtk_menu_new();
+    GtkWidget *item;
+
+    item = gtk_menu_item_new_with_label("Server Versions");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_versions), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Server Info");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_server_info), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("My Profile");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_my_profile), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Set Avatar");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_set_avatar), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Enable Key Backup");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_enable_key_backup), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Recover Keys");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_recover_keys), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Export Keys");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_export_keys), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Recover Keys");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_recover_keys), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Export Keys");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_export_keys), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Set Avatar");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_set_avatar), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("My Profile");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_my_profile), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Server Info");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_server_info), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_separator_menu_item_new();
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Set Room Tag");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_room_tag), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Upgrade Room");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_upgrade_room), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Create Alias");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_alias_create), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Delete Alias");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_alias_delete), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_separator_menu_item_new();
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Space Hierarchy");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_space_hierarchy), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    gtk_widget_show_all(menu);
+    gtk_menu_popup(GTK_MENU(menu), NULL, NULL, NULL, NULL, 0, gtk_get_current_event_time());
+}
+
+static void on_matrix_message_actions_clicked(GtkWidget *b, PurpleConversation *c) {
+    GtkWidget *menu = gtk_menu_new();
+    GtkWidget *item;
+
+    item = gtk_menu_item_new_with_label("Message Inspector...");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_message_inspector), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_separator_menu_item_new();
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("React to Latest");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_react_latest), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Edit Latest");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_edit_latest), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Redact Latest");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_redact_latest), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Report Latest");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_report_latest), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_separator_menu_item_new();
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Add Reaction (Event ID)");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_react), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Reply (Pick Event)");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_reply_pick_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Thread (Pick Event)");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_thread_pick_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("React (Pick Event)");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_react_pick_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Edit (Pick Event)");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_edit_pick_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Redact (Pick Event)");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_redact_pick_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Report (Pick Event)");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_report_pick_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Edit Event");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_edit_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Redact Event");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_redact_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Report Event");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_report_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Re-sync Recent");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_resync_recent), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Search Stickers");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_search_stickers), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    gtk_widget_show_all(menu);
+    gtk_menu_popup(GTK_MENU(menu), NULL, NULL, NULL, NULL, 0, gtk_get_current_event_time());
+}
+
 static void on_matrix_actions_clicked(GtkWidget *b, PurpleConversation *c) {
     GtkWidget *menu = gtk_menu_new();
     GtkWidget *item;
 
     item = gtk_menu_item_new_with_label("Room Dashboard");
     g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_dash), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Start Thread");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_start_thread), c);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
 
     item = gtk_menu_item_new_with_label("Show Members");
@@ -283,8 +674,28 @@ static void on_matrix_actions_clicked(GtkWidget *b, PurpleConversation *c) {
     g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_user_info), c);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
 
+    item = gtk_menu_item_new_with_label("Ignore User...");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_ignore_user), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Unignore User...");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_unignore_user), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
     item = gtk_menu_item_new_with_label("Moderate Room");
     g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_moderate), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Kick User...");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_kick), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Ban User...");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_ban), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Unban User...");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_unban), c);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
 
     item = gtk_menu_item_new_with_label("Invite User");
@@ -297,6 +708,114 @@ static void on_matrix_actions_clicked(GtkWidget *b, PurpleConversation *c) {
 
     item = gtk_menu_item_new_with_label("Search in Room");
     g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_search_room), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Message Inspector...");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_message_inspector), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Re-sync Recent");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_resync_recent), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("List Polls");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_list_polls), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Add Reaction");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_react), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Reply (Pick Event)");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_reply_pick_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Thread (Pick Event)");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_thread_pick_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("React (Pick Event)");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_react_pick_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Search Stickers");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_search_stickers), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("React to Latest");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_react_latest), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Send Location");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_send_location), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Who Read");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_who_read), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Report Event");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_report_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Edit Event");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_edit_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Edit (Pick Event)");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_edit_pick_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Edit Latest");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_edit_latest), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Redact Event");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_redact_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Redact (Pick Event)");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_redact_pick_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Redact Latest");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_redact_latest), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Report Latest");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_report_latest), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Report (Pick Event)");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_report_pick_event), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Server Versions");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_versions), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Enable Key Backup");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_enable_key_backup), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Set Room Tag");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_room_tag), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Upgrade Room");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_upgrade_room), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Create Alias");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_alias_create), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Delete Alias");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_alias_delete), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Space Hierarchy");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_space_hierarchy), c);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
 
     item = gtk_menu_item_new_with_label("Room Settings");
@@ -317,6 +836,10 @@ static void on_matrix_actions_clicked(GtkWidget *b, PurpleConversation *c) {
 
     item = gtk_menu_item_new_with_label("Mark Unread");
     g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_mark_unread), c);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Mark Read");
+    g_signal_connect_swapped(item, "activate", G_CALLBACK(on_menu_mark_read), c);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
 
     item = gtk_menu_item_new_with_label("Mute Room");
@@ -346,6 +869,19 @@ ui_actions(PurplePlugin *plugin, gpointer context)
     m = g_list_append(m, purple_plugin_action_new("Login (Password)...", on_action_login_password));
     m = g_list_append(m, purple_plugin_action_new("Login (SSO)...", on_action_login_sso));
     m = g_list_append(m, purple_plugin_action_new("Set Homeserver / Username...", on_action_set_account_defaults));
+    m = g_list_append(m, purple_plugin_action_new("Discover: Join Room...", on_action_discover_join));
+    m = g_list_append(m, purple_plugin_action_new("Discover: Knock Room...", on_action_discover_knock));
+    m = g_list_append(m, purple_plugin_action_new("Discover: Browse Public Rooms...", on_action_discover_browse_public_rooms));
+    m = g_list_append(m, purple_plugin_action_new("Discover: Preview Room/Alias...", on_action_discover_preview_room));
+    m = g_list_append(m, purple_plugin_action_new("Discover: Search Users...", on_action_discover_search_users));
+    m = g_list_append(m, purple_plugin_action_new("Discover: Search Public Rooms...", on_action_discover_search_public));
+    m = g_list_append(m, purple_plugin_action_new("Discover: Search Members in Room...", on_action_discover_search_members_global));
+    m = g_list_append(m, purple_plugin_action_new("Discover: Search Messages in Room...", on_action_discover_search_room_global));
+    m = g_list_append(m, purple_plugin_action_new("Account: My Profile", on_action_my_profile));
+    m = g_list_append(m, purple_plugin_action_new("Account: Set Avatar...", on_action_set_avatar));
+    m = g_list_append(m, purple_plugin_action_new("Server: Info", on_action_server_info));
+    m = g_list_append(m, purple_plugin_action_new("Security: Recover Keys...", on_action_recover_keys));
+    m = g_list_append(m, purple_plugin_action_new("Security: Export Keys...", on_action_export_keys));
     m = g_list_append(m, purple_plugin_action_new("Clear Session Cache...", on_action_clear_session));
     return m;
 }
@@ -456,11 +992,15 @@ inject_action_bar_idle_cb(gpointer data)
     purple_conversation_set_data(conv, MATRIX_UI_ENCRYPTED_LABEL_KEY, enc_label);
     GtkTooltips *tooltips = gtk_tooltips_new();
     GtkWidget *reply_btn = gtk_button_new_with_label("Reply");
+    GtkWidget *thread_start_btn = gtk_button_new_with_label("Thread+");
     GtkWidget *threads_btn = gtk_button_new_with_label("Threads");
-    GtkWidget *poll_btn = gtk_button_new_with_label("Poll");
+    GtkWidget *poll_btn = gtk_button_new_with_label("Poll+");
+    GtkWidget *polls_btn = gtk_button_new_with_label("Polls");
+    GtkWidget *msg_btn = gtk_button_new_with_label("Msg");
+    GtkWidget *admin_btn = gtk_button_new_with_label("Admin");
     GtkWidget *moderate_btn = gtk_button_new_with_label("Moderate");
     GtkWidget *more_btn = gtk_button_new_with_label("More");
-    GtkWidget *btns[] = {reply_btn, threads_btn, poll_btn, moderate_btn, more_btn};
+    GtkWidget *btns[] = {reply_btn, thread_start_btn, threads_btn, poll_btn, polls_btn, msg_btn, admin_btn, moderate_btn, more_btn};
 
     for (guint i = 0; i < G_N_ELEMENTS(btns); i++) {
         GtkWidget *btn = btns[i];
@@ -475,15 +1015,23 @@ inject_action_bar_idle_cb(gpointer data)
     }
 
     gtk_tooltips_set_tip(tooltips, reply_btn, "Reply to latest event", NULL);
+    gtk_tooltips_set_tip(tooltips, thread_start_btn, "Start a new thread from latest event", NULL);
     gtk_tooltips_set_tip(tooltips, threads_btn, "Show room threads", NULL);
     gtk_tooltips_set_tip(tooltips, poll_btn, "Create a poll", NULL);
+    gtk_tooltips_set_tip(tooltips, polls_btn, "List polls and vote", NULL);
+    gtk_tooltips_set_tip(tooltips, msg_btn, "React/edit/redact/report actions", NULL);
+    gtk_tooltips_set_tip(tooltips, admin_btn, "Room admin and server actions", NULL);
     gtk_tooltips_set_tip(tooltips, moderate_btn, "Kick, ban, or unban users", NULL);
     gtk_tooltips_set_tip(tooltips, more_btn, "More Matrix actions", NULL);
 
     g_signal_connect_swapped(reply_btn, "clicked", G_CALLBACK(on_menu_reply), conv);
+    g_signal_connect_swapped(thread_start_btn, "clicked", G_CALLBACK(on_menu_start_thread), conv);
     g_signal_connect_swapped(threads_btn, "clicked", G_CALLBACK(on_menu_threads), conv);
     g_signal_connect_swapped(poll_btn, "clicked", G_CALLBACK(on_menu_poll), conv);
-    g_signal_connect_swapped(moderate_btn, "clicked", G_CALLBACK(on_menu_moderate), conv);
+    g_signal_connect_swapped(polls_btn, "clicked", G_CALLBACK(on_menu_list_polls), conv);
+    g_signal_connect(msg_btn, "clicked", G_CALLBACK(on_matrix_message_actions_clicked), conv);
+    g_signal_connect(admin_btn, "clicked", G_CALLBACK(on_matrix_admin_actions_clicked), conv);
+    g_signal_connect(moderate_btn, "clicked", G_CALLBACK(on_matrix_moderation_actions_clicked), conv);
     g_signal_connect(more_btn, "clicked", G_CALLBACK(on_matrix_actions_clicked), conv);
 
     /* Typing Indicator */
@@ -516,20 +1064,59 @@ conversation_extended_menu_cb(PurpleConversation *conv, GList **list)
         GList *sub_actions = NULL;
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("Room Dashboard", PURPLE_CALLBACK(on_menu_dash), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("Reply to Latest", PURPLE_CALLBACK(on_menu_reply), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Reply (Pick Event)", PURPLE_CALLBACK(on_menu_reply_pick_event), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Start Thread", PURPLE_CALLBACK(on_menu_start_thread), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Start Thread (Pick Event)", PURPLE_CALLBACK(on_menu_thread_pick_event), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("View Threads", PURPLE_CALLBACK(on_menu_threads), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("Send Sticker", PURPLE_CALLBACK(on_menu_sticker), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("Create Poll", PURPLE_CALLBACK(on_menu_poll), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("User Info", PURPLE_CALLBACK(on_menu_user_info), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Ignore User...", PURPLE_CALLBACK(on_menu_ignore_user), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Unignore User...", PURPLE_CALLBACK(on_menu_unignore_user), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("Moderate Room", PURPLE_CALLBACK(on_menu_moderate), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Kick User...", PURPLE_CALLBACK(on_menu_kick), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Ban User...", PURPLE_CALLBACK(on_menu_ban), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Unban User...", PURPLE_CALLBACK(on_menu_unban), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("Show Members", PURPLE_CALLBACK(on_menu_show_members), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("Invite User", PURPLE_CALLBACK(on_menu_invite_user), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("Send File", PURPLE_CALLBACK(on_menu_send_file), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("Search in Room", PURPLE_CALLBACK(on_menu_search_room), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Message Inspector...", PURPLE_CALLBACK(on_menu_message_inspector), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Re-sync Recent", PURPLE_CALLBACK(on_menu_resync_recent), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("List Polls", PURPLE_CALLBACK(on_menu_list_polls), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Add Reaction", PURPLE_CALLBACK(on_menu_react), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("React (Pick Event)", PURPLE_CALLBACK(on_menu_react_pick_event), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Search Stickers", PURPLE_CALLBACK(on_menu_search_stickers), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("React to Latest", PURPLE_CALLBACK(on_menu_react_latest), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Send Location", PURPLE_CALLBACK(on_menu_send_location), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Who Read", PURPLE_CALLBACK(on_menu_who_read), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Report Event", PURPLE_CALLBACK(on_menu_report_event), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Report (Pick Event)", PURPLE_CALLBACK(on_menu_report_pick_event), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Edit Event", PURPLE_CALLBACK(on_menu_edit_event), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Edit (Pick Event)", PURPLE_CALLBACK(on_menu_edit_pick_event), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Redact Event", PURPLE_CALLBACK(on_menu_redact_event), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Redact (Pick Event)", PURPLE_CALLBACK(on_menu_redact_pick_event), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Edit Latest", PURPLE_CALLBACK(on_menu_edit_latest), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Redact Latest", PURPLE_CALLBACK(on_menu_redact_latest), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Report Latest", PURPLE_CALLBACK(on_menu_report_latest), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Server Versions", PURPLE_CALLBACK(on_menu_versions), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Server Info", PURPLE_CALLBACK(on_menu_server_info), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("My Profile", PURPLE_CALLBACK(on_menu_my_profile), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Set Avatar", PURPLE_CALLBACK(on_menu_set_avatar), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Enable Key Backup", PURPLE_CALLBACK(on_menu_enable_key_backup), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Recover Keys", PURPLE_CALLBACK(on_menu_recover_keys), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Export Keys", PURPLE_CALLBACK(on_menu_export_keys), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Set Room Tag", PURPLE_CALLBACK(on_menu_room_tag), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Upgrade Room", PURPLE_CALLBACK(on_menu_upgrade_room), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Create Alias", PURPLE_CALLBACK(on_menu_alias_create), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Delete Alias", PURPLE_CALLBACK(on_menu_alias_delete), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Space Hierarchy", PURPLE_CALLBACK(on_menu_space_hierarchy), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("Room Settings", PURPLE_CALLBACK(on_menu_room_settings), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("Verify This Device", PURPLE_CALLBACK(on_menu_verify_self), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("Crypto Status", PURPLE_CALLBACK(on_menu_crypto_status), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("List My Devices", PURPLE_CALLBACK(on_menu_list_devices), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("Mark Unread", PURPLE_CALLBACK(on_menu_mark_unread), conv, NULL));
+        sub_actions = g_list_append(sub_actions, purple_menu_action_new("Mark Read", PURPLE_CALLBACK(on_menu_mark_read), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("Mute Room", PURPLE_CALLBACK(on_menu_mute_room), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("Unmute Room", PURPLE_CALLBACK(on_menu_unmute_room), conv, NULL));
         sub_actions = g_list_append(sub_actions, purple_menu_action_new("Leave Room", PURPLE_CALLBACK(on_menu_leave_room), conv, NULL));

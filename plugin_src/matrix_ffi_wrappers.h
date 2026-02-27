@@ -235,6 +235,8 @@ extern void purple_matrix_rust_fetch_history(const char *user_id,
                                              const char *room_id);
 extern void purple_matrix_rust_fetch_more_history(const char *user_id,
                                                   const char *room_id);
+extern void purple_matrix_rust_resync_recent_history(const char *user_id,
+                                                     const char *room_id);
 extern void purple_matrix_rust_send_read_receipt(const char *user_id,
                                                  const char *room_id,
                                                  const char *event_id);
@@ -265,6 +267,9 @@ extern void purple_matrix_rust_send_edit(const char *user_id,
                                          const char *room_id,
                                          const char *event_id,
                                          const char *text);
+extern void purple_matrix_rust_send_location(const char *user_id,
+                                             const char *room_id, double lat,
+                                             double lon);
 extern void purple_matrix_rust_send_sticker(const char *user_id,
                                             const char *room_id,
                                             const char *url);
@@ -279,6 +284,9 @@ extern void purple_matrix_rust_list_polls(const char *user_id,
 extern void purple_matrix_rust_search_room_messages(const char *user_id,
                                                     const char *room_id,
                                                     const char *term);
+extern void purple_matrix_rust_bulk_redact(const char *user_id,
+                                           const char *room_id, int count,
+                                           const char *target_user);
 extern void purple_matrix_rust_add_buddy(const char *user_id,
                                          const char *target_id);
 extern void purple_matrix_rust_remove_buddy(const char *user_id,
@@ -301,11 +309,14 @@ extern void purple_matrix_rust_unignore_user(const char *user_id,
                                              const char *who);
 extern void purple_matrix_rust_set_display_name(const char *user_id,
                                                 const char *name);
+extern void purple_matrix_rust_set_avatar(const char *user_id,
+                                          const char *path);
 extern void purple_matrix_rust_set_avatar_bytes(const char *user_id,
                                                 const unsigned char *data,
                                                 size_t size);
 extern void purple_matrix_rust_get_user_info(const char *user_id,
                                              const char *who);
+extern void purple_matrix_rust_get_my_profile(const char *user_id);
 extern void purple_matrix_rust_accept_sas(const char *user_id,
                                           const char *target_id,
                                           const char *flow_id);
@@ -324,6 +335,8 @@ extern void purple_matrix_rust_list_stickers_in_pack(
     void (*cb)(const char *user_id, const char *id, const char *name,
                const char *url, void *u_data),
     void (*done_cb)(void *u_data), void *user_data);
+extern void purple_matrix_rust_search_stickers(const char *user_id,
+                                               const char *term);
 extern void purple_matrix_rust_poll_create(const char *user_id,
                                            const char *room_id,
                                            const char *question,
@@ -337,6 +350,8 @@ extern void purple_matrix_rust_get_power_levels(const char *user_id,
 extern void purple_matrix_rust_set_room_name(const char *user_id,
                                              const char *room_id,
                                              const char *name);
+extern void purple_matrix_rust_who_read(const char *user_id,
+                                        const char *room_id);
 extern void purple_matrix_rust_kick_user(const char *user_id,
                                          const char *room_id,
                                          const char *target_user_id,
@@ -360,6 +375,37 @@ extern void purple_matrix_rust_set_room_history_visibility(
 extern void purple_matrix_rust_set_room_guest_access(const char *user_id,
                                                      const char *room_id,
                                                      bool allow);
+extern void purple_matrix_rust_upgrade_room(const char *user_id,
+                                            const char *room_id,
+                                            const char *new_version);
+extern void purple_matrix_rust_knock(const char *user_id,
+                                     const char *room_id_or_alias,
+                                     const char *reason);
+extern void purple_matrix_rust_set_room_tag(const char *user_id,
+                                            const char *room_id,
+                                            const char *tag);
+extern void purple_matrix_rust_report_content(const char *user_id,
+                                              const char *room_id,
+                                              const char *event_id,
+                                              const char *reason);
+extern void purple_matrix_rust_get_space_hierarchy(const char *user_id,
+                                                   const char *space_id);
+extern void purple_matrix_rust_search_room_members(const char *user_id,
+                                                   const char *room_id,
+                                                   const char *term);
+extern void purple_matrix_rust_get_supported_versions(const char *user_id);
+extern void purple_matrix_rust_get_server_info(const char *user_id);
+extern void purple_matrix_rust_search_public_rooms(const char *user_id,
+                                                   const char *search_term,
+                                                   const char *output_room_id);
+extern void purple_matrix_rust_search_users(const char *user_id,
+                                            const char *search_term,
+                                            const char *room_id);
+extern void purple_matrix_rust_create_alias(const char *user_id,
+                                            const char *room_id,
+                                            const char *alias_localpart);
+extern void purple_matrix_rust_delete_alias(const char *user_id,
+                                            const char *alias);
 
 // Crypto management
 extern void purple_matrix_rust_recover_keys(const char *user_id,
@@ -379,5 +425,7 @@ extern void purple_matrix_rust_verify_user(const char *user_id,
                                            const char *target_user_id);
 extern void purple_matrix_rust_list_own_devices(const char *user_id);
 extern void purple_matrix_rust_debug_crypto_status(const char *user_id);
+extern void purple_matrix_rust_enable_key_backup(const char *user_id);
+extern void purple_matrix_rust_ui_show_dashboard(const char *room_id);
 
 #endif // MATRIX_FFI_WRAPPERS_H

@@ -23,6 +23,9 @@ static void action_verify_device_cb(PurplePluginAction *action);
 static void action_bootstrap_crypto_cb(PurplePluginAction *action);
 static void action_restore_backup_cb(PurplePluginAction *action);
 static void action_resync_all_keys_cb(PurplePluginAction *action);
+static void action_recover_keys_cb(PurplePluginAction *action);
+static void action_export_keys_cb(PurplePluginAction *action);
+static void action_server_info_cb(PurplePluginAction *action);
 static void action_sso_token_cb(PurplePluginAction *action);
 static void action_clear_session_cache_cb(PurplePluginAction *action);
 static void action_login_password_cb(PurplePluginAction *action);
@@ -39,6 +42,34 @@ static PurpleCmdRet cmd_matrix_join(PurpleConversation *conv, const gchar *cmd, 
 static PurpleCmdRet cmd_matrix_leave(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
 static PurpleCmdRet cmd_matrix_create(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
 static PurpleCmdRet cmd_matrix_clear_session(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_react(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_polls(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_location(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_who_read(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_report(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_bulk_redact(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_knock(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_room_tag(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_upgrade_room(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_alias_create(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_alias_delete(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_search_users(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_search_public(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_search_members(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_versions(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_enable_key_backup(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_my_profile(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_server_info(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_resync_recent(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_sticker_search(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_recover_keys(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_export_keys(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_set_avatar(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_mark_read(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_power_levels(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_ignore_user(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_unignore_user(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_message_inspector(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
 static void action_my_profile_cb(PurplePluginAction *action);
 static void my_profile_avatar_cb(void *user_data, const char *filename);
 static void menu_action_reply_dialog_cb(void *user_data, const char *text);
@@ -48,6 +79,8 @@ static void join_room_dialog_cb(void *user_data, const char *room_id);
 static void invite_user_dialog_cb(void *user_data, const char *user_id);
 void room_settings_dialog_cb(void *user_data, PurpleRequestFields *fields);
 static PurpleCmdRet cmd_sticker_list(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static const char *matrix_last_event_for_room(PurpleAccount *account, const char *room_id);
+static void matrix_ui_open_thread_from_event(const char *room_id, const char *event_id);
 
 static PurpleAccount *matrix_action_account(PurplePluginAction *action) {
     if (action && action->context) {
@@ -81,6 +114,14 @@ static char *matrix_build_data_dir_for_user(const char *username) {
     }
     g_free(safe_user);
     return data_dir;
+}
+
+static PurpleCmdRet matrix_cmd_require_chat(PurpleConversation *conv, gchar **error) {
+    if (!conv || purple_conversation_get_type(conv) != PURPLE_CONV_TYPE_CHAT) {
+        if (error) *error = g_strdup("This command is available only in Matrix room chats.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    return PURPLE_CMD_RET_OK;
 }
 
 /* Sticker Selection Wizard */
@@ -230,6 +271,34 @@ static void open_user_mgmt_dialog(PurpleAccount *account, const char *room_id,
         fields, "_Execute", G_CALLBACK(user_mgmt_dialog_cb), "_Cancel", NULL, account, NULL, NULL, g_strdup(room_id));
 }
 
+typedef struct {
+    char *room_id;
+    int action; /* 0=kick, 1=ban, 2=unban */
+} MatrixQuickModCtx;
+
+static void matrix_quick_mod_target_cb(void *user_data, const char *target_user_id) {
+    MatrixQuickModCtx *ctx = (MatrixQuickModCtx *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && ctx && ctx->room_id && target_user_id && *target_user_id) {
+        const char *uid = purple_account_get_username(account);
+        switch (ctx->action) {
+            case 0:
+                purple_matrix_rust_kick_user(uid, ctx->room_id, target_user_id, NULL);
+                break;
+            case 1:
+                purple_matrix_rust_ban_user(uid, ctx->room_id, target_user_id, NULL);
+                break;
+            case 2:
+                purple_matrix_rust_unban_user(uid, ctx->room_id, target_user_id, NULL);
+                break;
+        }
+    }
+    if (ctx) {
+        g_free(ctx->room_id);
+        g_free(ctx);
+    }
+}
+
 static void dash_choice_cb(void *user_data, PurpleRequestFields *fields) {
   char *room_id = (char *)user_data;
   PurpleRequestField *f = purple_request_fields_get_field(fields, "action");
@@ -368,6 +437,21 @@ static void action_resync_all_keys_cb(PurplePluginAction *action) {
         purple_matrix_rust_resync_room_keys(purple_account_get_username(account), "");
         purple_notify_info(my_plugin, "Key Sync", "Global key sync started", "The plugin is requesting missing keys from your backup and other devices.");
     }
+}
+
+static void action_recover_keys_cb(PurplePluginAction *action) {
+    (void)action;
+    matrix_ui_action_recover_keys_prompt(NULL);
+}
+
+static void action_export_keys_cb(PurplePluginAction *action) {
+    (void)action;
+    matrix_ui_action_export_keys_prompt(NULL);
+}
+
+static void action_server_info_cb(PurplePluginAction *action) {
+    (void)action;
+    matrix_ui_action_server_info(NULL);
 }
 
 static void my_profile_dialog_cb(void *user_data, PurpleRequestFields *fields) {
@@ -611,10 +695,59 @@ void matrix_ui_action_show_members(const char *room_id) {
     purple_matrix_rust_fetch_room_members(purple_account_get_username(account), room_id);
 }
 
+void matrix_ui_action_join_room_prompt(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)room_id;
+    if (!account) return;
+    purple_request_input(my_plugin, "Join Room", "Enter ID or Alias",
+        "Example: #room:matrix.org or !roomid:matrix.org",
+        NULL, FALSE, FALSE, NULL, "_Join", G_CALLBACK(join_room_dialog_cb), "_Cancel", NULL,
+        account, NULL, NULL, NULL);
+}
+
 void matrix_ui_action_moderate(const char *room_id) {
     PurpleAccount *account = find_matrix_account();
     if (!account || !room_id || !*room_id) return;
     open_user_mgmt_dialog(account, room_id, NULL);
+}
+
+void matrix_ui_action_kick_prompt(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    MatrixQuickModCtx *ctx = NULL;
+    if (!account || !room_id || !*room_id) return;
+    ctx = g_new0(MatrixQuickModCtx, 1);
+    ctx->room_id = g_strdup(room_id);
+    ctx->action = 0;
+    purple_request_input(my_plugin, "Kick User", "Target User ID",
+        "Enter Matrix user ID to kick.", NULL, FALSE, FALSE, NULL,
+        "_Kick", G_CALLBACK(matrix_quick_mod_target_cb), "_Cancel", NULL,
+        account, NULL, NULL, ctx);
+}
+
+void matrix_ui_action_ban_prompt(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    MatrixQuickModCtx *ctx = NULL;
+    if (!account || !room_id || !*room_id) return;
+    ctx = g_new0(MatrixQuickModCtx, 1);
+    ctx->room_id = g_strdup(room_id);
+    ctx->action = 1;
+    purple_request_input(my_plugin, "Ban User", "Target User ID",
+        "Enter Matrix user ID to ban.", NULL, FALSE, FALSE, NULL,
+        "_Ban", G_CALLBACK(matrix_quick_mod_target_cb), "_Cancel", NULL,
+        account, NULL, NULL, ctx);
+}
+
+void matrix_ui_action_unban_prompt(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    MatrixQuickModCtx *ctx = NULL;
+    if (!account || !room_id || !*room_id) return;
+    ctx = g_new0(MatrixQuickModCtx, 1);
+    ctx->room_id = g_strdup(room_id);
+    ctx->action = 2;
+    purple_request_input(my_plugin, "Unban User", "Target User ID",
+        "Enter Matrix user ID to unban.", NULL, FALSE, FALSE, NULL,
+        "_Unban", G_CALLBACK(matrix_quick_mod_target_cb), "_Cancel", NULL,
+        account, NULL, NULL, ctx);
 }
 
 void matrix_ui_action_moderate_user(const char *room_id, const char *target_user_id) {
@@ -641,6 +774,48 @@ void matrix_ui_action_user_info(const char *room_id, const char *target_user_id)
     purple_request_input(my_plugin, "User Info", "Lookup Matrix User",
         "Enter Matrix user ID (example: @user:matrix.org)", NULL, FALSE, FALSE, NULL,
         "_Lookup", G_CALLBACK(matrix_ui_user_info_prompt_cb), "_Cancel", NULL,
+        account, NULL, NULL, NULL);
+}
+
+static void matrix_ui_ignore_user_prompt_cb(void *user_data, const char *target_user_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)user_data;
+    if (!account || !target_user_id || !*target_user_id) return;
+    purple_matrix_rust_ignore_user(purple_account_get_username(account), target_user_id);
+}
+
+void matrix_ui_action_ignore_user(const char *room_id, const char *target_user_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)room_id;
+    if (!account) return;
+    if (target_user_id && *target_user_id) {
+        purple_matrix_rust_ignore_user(purple_account_get_username(account), target_user_id);
+        return;
+    }
+    purple_request_input(my_plugin, "Ignore User", "Matrix User ID",
+        "Enter Matrix user ID to ignore.", NULL, FALSE, FALSE, NULL,
+        "_Ignore", G_CALLBACK(matrix_ui_ignore_user_prompt_cb), "_Cancel", NULL,
+        account, NULL, NULL, NULL);
+}
+
+static void matrix_ui_unignore_user_prompt_cb(void *user_data, const char *target_user_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !target_user_id || !*target_user_id) return;
+    (void)user_data;
+    purple_matrix_rust_unignore_user(purple_account_get_username(account), target_user_id);
+}
+
+void matrix_ui_action_unignore_user(const char *room_id, const char *target_user_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)room_id;
+    if (!account) return;
+    if (target_user_id && *target_user_id) {
+        purple_matrix_rust_unignore_user(purple_account_get_username(account), target_user_id);
+        return;
+    }
+    purple_request_input(my_plugin, "Unignore User", "Matrix User ID",
+        "Enter Matrix user ID to remove from ignore list.", NULL, FALSE, FALSE, NULL,
+        "_Unignore", G_CALLBACK(matrix_ui_unignore_user_prompt_cb), "_Cancel", NULL,
         account, NULL, NULL, NULL);
 }
 
@@ -723,6 +898,17 @@ void matrix_ui_action_mark_unread(const char *room_id) {
     purple_matrix_rust_mark_unread(purple_account_get_username(account), room_id, TRUE);
 }
 
+void matrix_ui_action_mark_read(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    const char *event_id = NULL;
+    if (!account || !room_id || !*room_id) return;
+    event_id = matrix_last_event_for_room(account, room_id);
+    if (event_id && *event_id) {
+        purple_matrix_rust_send_read_receipt(purple_account_get_username(account), room_id, event_id);
+    }
+    purple_matrix_rust_mark_unread(purple_account_get_username(account), room_id, FALSE);
+}
+
 void matrix_ui_action_set_room_mute(const char *room_id, bool muted) {
     PurpleAccount *account = find_matrix_account();
     if (!account || !room_id || !*room_id) return;
@@ -745,6 +931,1292 @@ void matrix_ui_action_search_room(const char *room_id) {
         "Enter text to search recent messages.", NULL, FALSE, FALSE, NULL,
         "_Search", G_CALLBACK(matrix_ui_search_room_cb), "_Cancel", NULL,
         account, NULL, NULL, g_strdup(room_id));
+}
+
+typedef struct {
+    char *room_id;
+    char *event_id;
+} MatrixUiReactCtx;
+
+static void matrix_ui_react_text_cb(void *user_data, const char *key) {
+    MatrixUiReactCtx *ctx = (MatrixUiReactCtx *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && ctx && ctx->room_id && ctx->event_id && key && *key) {
+        purple_matrix_rust_send_reaction(purple_account_get_username(account),
+                                         ctx->room_id, ctx->event_id, key);
+    }
+    if (ctx) {
+        g_free(ctx->room_id);
+        g_free(ctx->event_id);
+        g_free(ctx);
+    }
+}
+
+void matrix_ui_action_react(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = NULL;
+    const char *event_id = NULL;
+    MatrixUiReactCtx *ctx = NULL;
+    if (!account || !room_id || !*room_id) return;
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (!conv) return;
+    event_id = purple_conversation_get_data(conv, "last_event_id");
+    if (!event_id || !*event_id) {
+        purple_notify_error(my_plugin, "React", "No target message",
+            "No recent event ID is available in this conversation.");
+        return;
+    }
+    ctx = g_new0(MatrixUiReactCtx, 1);
+    ctx->room_id = g_strdup(room_id);
+    ctx->event_id = g_strdup(event_id);
+    purple_request_input(my_plugin, "Add Reaction", "Reaction Key",
+        "Enter emoji or reaction key (example: 👍).", NULL, FALSE, FALSE, NULL,
+        "_React", G_CALLBACK(matrix_ui_react_text_cb), "_Cancel", NULL,
+        account, NULL, conv, ctx);
+}
+
+static const char *matrix_last_event_for_room(PurpleAccount *account, const char *room_id) {
+    PurpleConversation *conv = NULL;
+    if (!account || !room_id || !*room_id) return NULL;
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (!conv) return NULL;
+    return purple_conversation_get_data(conv, "last_event_id");
+}
+
+typedef enum {
+    MATRIX_EVENT_PICK_REPLY = 1,
+    MATRIX_EVENT_PICK_THREAD,
+    MATRIX_EVENT_PICK_OPEN_THREAD,
+    MATRIX_EVENT_PICK_REACT,
+    MATRIX_EVENT_PICK_EDIT,
+    MATRIX_EVENT_PICK_REDACT,
+    MATRIX_EVENT_PICK_REPORT,
+    MATRIX_EVENT_PICK_USER_INFO,
+    MATRIX_EVENT_PICK_MODERATE_USER,
+    MATRIX_EVENT_PICK_IGNORE_USER,
+    MATRIX_EVENT_PICK_UNIGNORE_USER,
+    MATRIX_EVENT_PICK_OPEN_DM
+} MatrixEventPickAction;
+
+typedef struct {
+    char *room_id;
+    char *event_id;
+} MatrixUiReplyCtx;
+
+typedef struct {
+    char *room_id;
+    char *event_id;
+} MatrixUiPickTargetCtx;
+
+typedef struct {
+    char *room_id;
+    MatrixEventPickAction action;
+} MatrixUiEventPickCtx;
+
+static void matrix_ui_reply_text_cb(void *user_data, const char *text) {
+    MatrixUiReplyCtx *ctx = (MatrixUiReplyCtx *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && ctx && ctx->room_id && ctx->event_id && text && *text) {
+        purple_matrix_rust_send_reply(purple_account_get_username(account),
+                                      ctx->room_id, ctx->event_id, text);
+    }
+    if (ctx) {
+        g_free(ctx->room_id);
+        g_free(ctx->event_id);
+        g_free(ctx);
+    }
+}
+
+static void matrix_ui_thread_text_cb(void *user_data, const char *text) {
+    MatrixUiReplyCtx *ctx = (MatrixUiReplyCtx *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && ctx && ctx->room_id && ctx->event_id && text && *text) {
+        char *vid = g_strdup_printf("%s|%s", ctx->room_id, ctx->event_id);
+        ensure_thread_in_blist(account, vid, "Thread", ctx->room_id);
+        purple_matrix_rust_send_message(purple_account_get_username(account), vid, text);
+        g_free(vid);
+    }
+    if (ctx) {
+        g_free(ctx->room_id);
+        g_free(ctx->event_id);
+        g_free(ctx);
+    }
+}
+
+static void matrix_ui_pick_edit_text_cb(void *user_data, const char *text) {
+    MatrixUiPickTargetCtx *ctx = (MatrixUiPickTargetCtx *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && ctx && ctx->room_id && ctx->event_id && text && *text) {
+        purple_matrix_rust_send_edit(purple_account_get_username(account),
+                                     ctx->room_id, ctx->event_id, text);
+    }
+    if (ctx) {
+        g_free(ctx->room_id);
+        g_free(ctx->event_id);
+        g_free(ctx);
+    }
+}
+
+static void matrix_ui_pick_redact_reason_cb(void *user_data, const char *reason) {
+    MatrixUiPickTargetCtx *ctx = (MatrixUiPickTargetCtx *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && ctx && ctx->room_id && ctx->event_id) {
+        purple_matrix_rust_redact_event(purple_account_get_username(account),
+                                        ctx->room_id, ctx->event_id, reason);
+    }
+    if (ctx) {
+        g_free(ctx->room_id);
+        g_free(ctx->event_id);
+        g_free(ctx);
+    }
+}
+
+static void matrix_ui_pick_report_reason_cb(void *user_data, const char *reason) {
+    MatrixUiPickTargetCtx *ctx = (MatrixUiPickTargetCtx *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && ctx && ctx->room_id && ctx->event_id) {
+        purple_matrix_rust_report_content(purple_account_get_username(account),
+                                          ctx->room_id, ctx->event_id, reason);
+    }
+    if (ctx) {
+        g_free(ctx->room_id);
+        g_free(ctx->event_id);
+        g_free(ctx);
+    }
+}
+
+static void matrix_ui_open_event_action_dialog(const char *room_id, const char *event_id,
+                                               MatrixEventPickAction action) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id || !event_id || !*event_id) return;
+
+    if (action == MATRIX_EVENT_PICK_REACT) {
+        MatrixUiReactCtx *ctx = g_new0(MatrixUiReactCtx, 1);
+        ctx->room_id = g_strdup(room_id);
+        ctx->event_id = g_strdup(event_id);
+        purple_request_input(my_plugin, "Add Reaction", "Reaction Key",
+            "Enter emoji or reaction key (example: 👍).", NULL, FALSE, FALSE, NULL,
+            "_React", G_CALLBACK(matrix_ui_react_text_cb), "_Cancel", NULL,
+            account, NULL, NULL, ctx);
+        return;
+    }
+
+    if (action == MATRIX_EVENT_PICK_EDIT) {
+        MatrixUiPickTargetCtx *ctx = g_new0(MatrixUiPickTargetCtx, 1);
+        ctx->room_id = g_strdup(room_id);
+        ctx->event_id = g_strdup(event_id);
+        purple_request_input(my_plugin, "Edit Event", "New Message Text",
+            "Enter replacement text.", NULL, TRUE, FALSE, NULL,
+            "_Send Edit", G_CALLBACK(matrix_ui_pick_edit_text_cb), "_Cancel", NULL,
+            account, NULL, NULL, ctx);
+        return;
+    }
+
+    if (action == MATRIX_EVENT_PICK_REDACT) {
+        MatrixUiPickTargetCtx *ctx = g_new0(MatrixUiPickTargetCtx, 1);
+        ctx->room_id = g_strdup(room_id);
+        ctx->event_id = g_strdup(event_id);
+        purple_request_input(my_plugin, "Redact Event", "Reason",
+            "Optional reason for redaction.", NULL, FALSE, FALSE, NULL,
+            "_Redact", G_CALLBACK(matrix_ui_pick_redact_reason_cb), "_Cancel", NULL,
+            account, NULL, NULL, ctx);
+        return;
+    }
+
+    if (action == MATRIX_EVENT_PICK_REPORT) {
+        MatrixUiPickTargetCtx *ctx = g_new0(MatrixUiPickTargetCtx, 1);
+        ctx->room_id = g_strdup(room_id);
+        ctx->event_id = g_strdup(event_id);
+        purple_request_input(my_plugin, "Report Content", "Reason",
+            "Optional reason for reporting.", NULL, FALSE, FALSE, NULL,
+            "_Report", G_CALLBACK(matrix_ui_pick_report_reason_cb), "_Cancel", NULL,
+            account, NULL, NULL, ctx);
+        return;
+    }
+
+    if (action == MATRIX_EVENT_PICK_OPEN_THREAD) {
+        matrix_ui_open_thread_from_event(room_id, event_id);
+        return;
+    }
+
+    if (action == MATRIX_EVENT_PICK_REPLY) {
+        MatrixUiReplyCtx *ctx = g_new0(MatrixUiReplyCtx, 1);
+        ctx->room_id = g_strdup(room_id);
+        ctx->event_id = g_strdup(event_id);
+        purple_request_input(my_plugin, "Reply to Event", "Message Text",
+            "Enter reply text.", NULL, TRUE, FALSE, NULL,
+            "_Reply", G_CALLBACK(matrix_ui_reply_text_cb), "_Cancel", NULL,
+            account, NULL, NULL, ctx);
+        return;
+    }
+
+    if (action == MATRIX_EVENT_PICK_THREAD) {
+        MatrixUiReplyCtx *ctx = g_new0(MatrixUiReplyCtx, 1);
+        ctx->room_id = g_strdup(room_id);
+        ctx->event_id = g_strdup(event_id);
+        purple_request_input(my_plugin, "Start Thread", "Thread Message",
+            "Send first message in new thread rooted at selected event.",
+            NULL, TRUE, FALSE, NULL,
+            "_Start", G_CALLBACK(matrix_ui_thread_text_cb), "_Cancel", NULL,
+            account, NULL, NULL, ctx);
+        return;
+    }
+}
+
+static char *matrix_ui_event_sender_for_room_event(const char *room_id, const char *event_id) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = NULL;
+    int i;
+    if (!account || !room_id || !*room_id || !event_id || !*event_id) return NULL;
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (!conv) return NULL;
+    for (i = 0; i < 10; ++i) {
+        char key_id[64];
+        char key_sender[64];
+        const char *id = NULL;
+        const char *sender = NULL;
+        g_snprintf(key_id, sizeof(key_id), "matrix_recent_event_id_%d", i);
+        g_snprintf(key_sender, sizeof(key_sender), "matrix_recent_event_sender_%d", i);
+        id = purple_conversation_get_data(conv, key_id);
+        if (!id || strcmp(id, event_id) != 0) continue;
+        sender = purple_conversation_get_data(conv, key_sender);
+        if (sender && *sender) return g_strdup(sender);
+    }
+    return NULL;
+}
+
+static void matrix_ui_open_dm_for_user(const char *user_id) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = NULL;
+    if (!account || !user_id || !*user_id) return;
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_IM, user_id, account);
+    if (!conv) {
+        conv = purple_conversation_new(PURPLE_CONV_TYPE_IM, account, user_id);
+    }
+    if (conv) purple_conversation_present(conv);
+}
+
+static char *matrix_ui_event_thread_root_for_room_event(const char *room_id,
+                                                         const char *event_id) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = NULL;
+    int i;
+    if (!account || !room_id || !*room_id || !event_id || !*event_id) return NULL;
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (!conv) return NULL;
+    for (i = 0; i < 10; ++i) {
+        char key_id[64];
+        char key_thread[64];
+        const char *id = NULL;
+        const char *thread = NULL;
+        g_snprintf(key_id, sizeof(key_id), "matrix_recent_event_id_%d", i);
+        g_snprintf(key_thread, sizeof(key_thread), "matrix_recent_event_thread_%d", i);
+        id = purple_conversation_get_data(conv, key_id);
+        if (!id || strcmp(id, event_id) != 0) continue;
+        thread = purple_conversation_get_data(conv, key_thread);
+        if (thread && *thread) return g_strdup(thread);
+        return g_strdup(event_id);
+    }
+    return g_strdup(event_id);
+}
+
+static void matrix_ui_open_thread_from_event(const char *room_id, const char *event_id) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConnection *gc = NULL;
+    PurpleConversation *conv = NULL;
+    char *root_id = NULL;
+    char *virtual_id = NULL;
+    if (!account || !room_id || !*room_id || !event_id || !*event_id) return;
+
+    root_id = matrix_ui_event_thread_root_for_room_event(room_id, event_id);
+    if (!root_id || !*root_id) {
+        if (root_id) g_free(root_id);
+        return;
+    }
+    virtual_id = g_strdup_printf("%s|%s", room_id, root_id);
+    ensure_thread_in_blist(account, virtual_id, "Thread", room_id);
+
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_CHAT, virtual_id, account);
+    if (!conv) {
+        gc = purple_account_get_connection(account);
+        if (gc) {
+            serv_got_joined_chat(gc, get_chat_id(virtual_id), virtual_id);
+            conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_CHAT, virtual_id, account);
+        }
+    }
+    if (conv) purple_conversation_present(conv);
+
+    g_free(virtual_id);
+    g_free(root_id);
+}
+
+static void matrix_ui_event_pick_selected_cb(void *user_data, PurpleRequestFields *fields) {
+    MatrixUiEventPickCtx *ctx = (MatrixUiEventPickCtx *)user_data;
+    PurpleRequestField *field = NULL;
+    GList *selected = NULL;
+    const char *event_id = NULL;
+    if (!ctx) return;
+    field = purple_request_fields_get_field(fields, "event");
+    if (!field) goto out;
+    selected = purple_request_field_list_get_selected(field);
+    if (!selected) goto out;
+    event_id = (const char *)purple_request_field_list_get_data(field, (const char *)selected->data);
+    if (event_id && *event_id) {
+        matrix_ui_open_event_action_dialog(ctx->room_id, event_id, ctx->action);
+    }
+out:
+    g_free(ctx->room_id);
+    g_free(ctx);
+}
+
+static void matrix_ui_event_pick_show(const char *room_id, MatrixEventPickAction action,
+                                      const char *title, const char *heading) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = NULL;
+    PurpleRequestFields *fields = NULL;
+    PurpleRequestFieldGroup *group = NULL;
+    PurpleRequestField *list = NULL;
+    MatrixUiEventPickCtx *ctx = NULL;
+    int added = 0;
+    int i = 0;
+
+    if (!account || !room_id || !*room_id) return;
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (!conv) return;
+
+    fields = purple_request_fields_new();
+    group = purple_request_field_group_new("Recent Events");
+    purple_request_fields_add_group(fields, group);
+    list = purple_request_field_list_new("event", "Choose Target Event");
+    purple_request_field_group_add_field(group, list);
+
+    for (i = 0; i < 10; ++i) {
+        char key_id[64], key_sender[64], key_msg[64], key_ts[64], key_enc[64],
+            key_thread[64];
+        const char *event_id = NULL;
+        const char *sender = NULL;
+        const char *msg = NULL;
+        const char *ts = NULL;
+        const char *enc = NULL;
+        const char *thread = NULL;
+        char tbuf[32];
+        char *label = NULL;
+        g_snprintf(key_id, sizeof(key_id), "matrix_recent_event_id_%d", i);
+        g_snprintf(key_sender, sizeof(key_sender), "matrix_recent_event_sender_%d", i);
+        g_snprintf(key_msg, sizeof(key_msg), "matrix_recent_event_msg_%d", i);
+        g_snprintf(key_ts, sizeof(key_ts), "matrix_recent_event_ts_%d", i);
+        g_snprintf(key_enc, sizeof(key_enc), "matrix_recent_event_enc_%d", i);
+        g_snprintf(key_thread, sizeof(key_thread), "matrix_recent_event_thread_%d", i);
+        event_id = purple_conversation_get_data(conv, key_id);
+        if (!event_id || !*event_id) continue;
+        sender = purple_conversation_get_data(conv, key_sender);
+        msg = purple_conversation_get_data(conv, key_msg);
+        ts = purple_conversation_get_data(conv, key_ts);
+        enc = purple_conversation_get_data(conv, key_enc);
+        thread = purple_conversation_get_data(conv, key_thread);
+        if (ts && *ts) {
+            guint64 ms = g_ascii_strtoull(ts, NULL, 10);
+            time_t secs = (time_t)(ms / 1000);
+            struct tm *tm_info = localtime(&secs);
+            if (tm_info) {
+                strftime(tbuf, sizeof(tbuf), "%H:%M:%S", tm_info);
+            } else {
+                g_strlcpy(tbuf, "unknown", sizeof(tbuf));
+            }
+        } else {
+            g_strlcpy(tbuf, "unknown", sizeof(tbuf));
+        }
+        label = g_strdup_printf("%d. %s: %s [%s] %s%s @%s", i + 1,
+            (sender && *sender) ? sender : "user",
+            (msg && *msg) ? msg : "(no text)",
+            event_id,
+            (enc && strcmp(enc, "1") == 0) ? "[E2EE] " : "",
+            (thread && *thread) ? "[thread] " : "",
+            tbuf);
+        purple_request_field_list_add(list, label, g_strdup(event_id));
+        g_free(label);
+        added++;
+    }
+
+    if (added == 0) {
+        const char *last_id = purple_conversation_get_data(conv, "last_event_id");
+        if (last_id && *last_id) {
+            purple_request_field_list_add(list, last_id, g_strdup(last_id));
+            added = 1;
+        }
+    }
+
+    if (added == 0) {
+        purple_notify_error(my_plugin, "Event Target", "No event history available",
+            "No recent events are cached for this room yet.");
+        return;
+    }
+
+    ctx = g_new0(MatrixUiEventPickCtx, 1);
+    ctx->room_id = g_strdup(room_id);
+    ctx->action = action;
+    purple_request_fields(my_plugin, title, heading, NULL, fields,
+        "_Select", G_CALLBACK(matrix_ui_event_pick_selected_cb), "_Cancel", NULL,
+        account, NULL, conv, ctx);
+}
+
+typedef struct {
+    char *room_id;
+} MatrixUiInspectorCtx;
+
+static void matrix_ui_message_inspector_exec_cb(void *user_data, PurpleRequestFields *fields) {
+    MatrixUiInspectorCtx *ctx = (MatrixUiInspectorCtx *)user_data;
+    PurpleRequestField *event_field = NULL;
+    PurpleRequestField *action_field = NULL;
+    GList *selected = NULL;
+    const char *event_id = NULL;
+    int action_choice = 0;
+    MatrixEventPickAction action = MATRIX_EVENT_PICK_REPLY;
+    char *sender_user_id = NULL;
+
+    if (!ctx || !ctx->room_id) goto out;
+    event_field = purple_request_fields_get_field(fields, "event");
+    action_field = purple_request_fields_get_field(fields, "action");
+    if (!event_field || !action_field) goto out;
+    selected = purple_request_field_list_get_selected(event_field);
+    if (!selected) goto out;
+    event_id = (const char *)purple_request_field_list_get_data(
+        event_field, (const char *)selected->data);
+    if (!event_id || !*event_id) goto out;
+
+    action_choice = purple_request_field_choice_get_value(action_field);
+    switch (action_choice) {
+        case 0: action = MATRIX_EVENT_PICK_REPLY; break;
+        case 1: action = MATRIX_EVENT_PICK_THREAD; break;
+        case 2: action = MATRIX_EVENT_PICK_OPEN_THREAD; break;
+        case 3: action = MATRIX_EVENT_PICK_REACT; break;
+        case 4: action = MATRIX_EVENT_PICK_EDIT; break;
+        case 5: action = MATRIX_EVENT_PICK_REDACT; break;
+        case 6: action = MATRIX_EVENT_PICK_REPORT; break;
+        case 7: action = MATRIX_EVENT_PICK_USER_INFO; break;
+        case 8: action = MATRIX_EVENT_PICK_MODERATE_USER; break;
+        case 9: action = MATRIX_EVENT_PICK_IGNORE_USER; break;
+        case 10: action = MATRIX_EVENT_PICK_UNIGNORE_USER; break;
+        case 11: action = MATRIX_EVENT_PICK_OPEN_DM; break;
+        default: action = MATRIX_EVENT_PICK_REPLY; break;
+    }
+
+    if (action == MATRIX_EVENT_PICK_USER_INFO ||
+        action == MATRIX_EVENT_PICK_MODERATE_USER ||
+        action == MATRIX_EVENT_PICK_IGNORE_USER ||
+        action == MATRIX_EVENT_PICK_UNIGNORE_USER ||
+        action == MATRIX_EVENT_PICK_OPEN_DM) {
+        sender_user_id = matrix_ui_event_sender_for_room_event(ctx->room_id, event_id);
+        if (!sender_user_id || !*sender_user_id) goto out;
+        if (action == MATRIX_EVENT_PICK_USER_INFO) {
+            matrix_ui_action_user_info(ctx->room_id, sender_user_id);
+        } else if (action == MATRIX_EVENT_PICK_MODERATE_USER) {
+            matrix_ui_action_moderate_user(ctx->room_id, sender_user_id);
+        } else if (action == MATRIX_EVENT_PICK_IGNORE_USER) {
+            matrix_ui_action_ignore_user(ctx->room_id, sender_user_id);
+        } else if (action == MATRIX_EVENT_PICK_UNIGNORE_USER) {
+            matrix_ui_action_unignore_user(ctx->room_id, sender_user_id);
+        } else if (action == MATRIX_EVENT_PICK_OPEN_DM) {
+            if (sender_user_id[0] == '@') {
+                matrix_ui_open_dm_for_user(sender_user_id);
+            } else {
+                purple_notify_error(my_plugin, "Open DM", "Invalid Matrix user ID",
+                    "Selected event sender is not a valid Matrix user ID.");
+            }
+        }
+        goto out;
+    }
+
+    matrix_ui_open_event_action_dialog(ctx->room_id, event_id, action);
+out:
+    if (sender_user_id) g_free(sender_user_id);
+    if (ctx) {
+        g_free(ctx->room_id);
+        g_free(ctx);
+    }
+}
+
+void matrix_ui_action_message_inspector(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = NULL;
+    PurpleRequestFields *fields = NULL;
+    PurpleRequestFieldGroup *group = NULL;
+    PurpleRequestField *event_list = NULL;
+    PurpleRequestField *action_choice = NULL;
+    MatrixUiInspectorCtx *ctx = NULL;
+    int i;
+    int added = 0;
+
+    if (!account || !room_id || !*room_id) return;
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (!conv) return;
+
+    fields = purple_request_fields_new();
+    group = purple_request_field_group_new("Target");
+    purple_request_fields_add_group(fields, group);
+    event_list = purple_request_field_list_new("event", "Recent Event");
+    purple_request_field_group_add_field(group, event_list);
+
+    for (i = 0; i < 10; ++i) {
+        char key_id[64], key_sender[64], key_msg[64], key_ts[64], key_enc[64],
+            key_thread[64];
+        const char *event_id = NULL;
+        const char *sender = NULL;
+        const char *msg = NULL;
+        const char *ts = NULL;
+        const char *enc = NULL;
+        const char *thread = NULL;
+        char tbuf[32];
+        char *label = NULL;
+        g_snprintf(key_id, sizeof(key_id), "matrix_recent_event_id_%d", i);
+        g_snprintf(key_sender, sizeof(key_sender), "matrix_recent_event_sender_%d", i);
+        g_snprintf(key_msg, sizeof(key_msg), "matrix_recent_event_msg_%d", i);
+        g_snprintf(key_ts, sizeof(key_ts), "matrix_recent_event_ts_%d", i);
+        g_snprintf(key_enc, sizeof(key_enc), "matrix_recent_event_enc_%d", i);
+        g_snprintf(key_thread, sizeof(key_thread), "matrix_recent_event_thread_%d", i);
+        event_id = purple_conversation_get_data(conv, key_id);
+        if (!event_id || !*event_id) continue;
+        sender = purple_conversation_get_data(conv, key_sender);
+        msg = purple_conversation_get_data(conv, key_msg);
+        ts = purple_conversation_get_data(conv, key_ts);
+        enc = purple_conversation_get_data(conv, key_enc);
+        thread = purple_conversation_get_data(conv, key_thread);
+        if (ts && *ts) {
+            guint64 ms = g_ascii_strtoull(ts, NULL, 10);
+            time_t secs = (time_t)(ms / 1000);
+            struct tm *tm_info = localtime(&secs);
+            if (tm_info) {
+                strftime(tbuf, sizeof(tbuf), "%H:%M:%S", tm_info);
+            } else {
+                g_strlcpy(tbuf, "unknown", sizeof(tbuf));
+            }
+        } else {
+            g_strlcpy(tbuf, "unknown", sizeof(tbuf));
+        }
+        label = g_strdup_printf("%d. %s: %s [%s] %s%s @%s", i + 1,
+            (sender && *sender) ? sender : "user",
+            (msg && *msg) ? msg : "(no text)",
+            event_id,
+            (enc && strcmp(enc, "1") == 0) ? "[E2EE] " : "",
+            (thread && *thread) ? "[thread] " : "",
+            tbuf);
+        purple_request_field_list_add(event_list, label, g_strdup(event_id));
+        g_free(label);
+        added++;
+    }
+
+    if (added == 0) {
+        const char *last_id = purple_conversation_get_data(conv, "last_event_id");
+        if (last_id && *last_id) {
+            purple_request_field_list_add(event_list, last_id, g_strdup(last_id));
+            added = 1;
+        }
+    }
+
+    if (added == 0) {
+        purple_notify_error(my_plugin, "Message Inspector", "No event history available",
+            "No recent events are cached for this room yet.");
+        return;
+    }
+
+    action_choice = purple_request_field_choice_new("action", "Action", 0);
+    purple_request_field_choice_add(action_choice, "Reply");
+    purple_request_field_choice_add(action_choice, "Start Thread");
+    purple_request_field_choice_add(action_choice, "Open Thread");
+    purple_request_field_choice_add(action_choice, "React");
+    purple_request_field_choice_add(action_choice, "Edit");
+    purple_request_field_choice_add(action_choice, "Redact");
+    purple_request_field_choice_add(action_choice, "Report");
+    purple_request_field_choice_add(action_choice, "Sender Info");
+    purple_request_field_choice_add(action_choice, "Moderate Sender");
+    purple_request_field_choice_add(action_choice, "Ignore Sender");
+    purple_request_field_choice_add(action_choice, "Unignore Sender");
+    purple_request_field_choice_add(action_choice, "Open DM with Sender");
+    purple_request_field_group_add_field(group, action_choice);
+
+    ctx = g_new0(MatrixUiInspectorCtx, 1);
+    ctx->room_id = g_strdup(room_id);
+    purple_request_fields(my_plugin, "Message Inspector", "Choose Event and Action", NULL,
+        fields, "_Run", G_CALLBACK(matrix_ui_message_inspector_exec_cb), "_Cancel", NULL,
+        account, NULL, conv, ctx);
+}
+
+void matrix_ui_action_react_latest(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    const char *event_id = NULL;
+    MatrixUiReactCtx *ctx = NULL;
+    if (!account || !room_id || !*room_id) return;
+    event_id = matrix_last_event_for_room(account, room_id);
+    if (!event_id || !*event_id) {
+        purple_notify_error(my_plugin, "React", "No recent event",
+            "No recent event ID is available in this room.");
+        return;
+    }
+    ctx = g_new0(MatrixUiReactCtx, 1);
+    ctx->room_id = g_strdup(room_id);
+    ctx->event_id = g_strdup(event_id);
+    purple_request_input(my_plugin, "Add Reaction", "Reaction Key",
+        "Enter emoji or reaction key (example: 👍).", NULL, FALSE, FALSE, NULL,
+        "_React", G_CALLBACK(matrix_ui_react_text_cb), "_Cancel", NULL,
+        account, NULL, NULL, ctx);
+}
+
+void matrix_ui_action_list_polls(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    purple_matrix_rust_list_polls(purple_account_get_username(account), room_id);
+}
+
+typedef struct {
+    char *room_id;
+    double lat;
+} MatrixUiLocationCtx;
+
+static void matrix_ui_location_lon_cb(void *user_data, const char *lon_str) {
+    MatrixUiLocationCtx *ctx = (MatrixUiLocationCtx *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    char *end = NULL;
+    double lon = 0.0;
+    if (ctx && lon_str && *lon_str) {
+        lon = g_ascii_strtod(lon_str, &end);
+        if (account && end && *end == '\0' && ctx->room_id && *ctx->room_id) {
+            purple_matrix_rust_send_location(purple_account_get_username(account),
+                                             ctx->room_id, ctx->lat, lon);
+        }
+    }
+    if (ctx) {
+        g_free(ctx->room_id);
+        g_free(ctx);
+    }
+}
+
+static void matrix_ui_location_lat_cb(void *user_data, const char *lat_str) {
+    char *room_id = (char *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    char *end = NULL;
+    double lat = 0.0;
+    MatrixUiLocationCtx *ctx = NULL;
+    if (!account || !room_id || !lat_str || !*lat_str) {
+        g_free(room_id);
+        return;
+    }
+    lat = g_ascii_strtod(lat_str, &end);
+    if (!end || *end != '\0') {
+        purple_notify_error(my_plugin, "Location", "Invalid latitude",
+            "Latitude must be a decimal number.");
+        g_free(room_id);
+        return;
+    }
+    ctx = g_new0(MatrixUiLocationCtx, 1);
+    ctx->room_id = room_id;
+    ctx->lat = lat;
+    purple_request_input(my_plugin, "Send Location", "Longitude",
+        "Enter longitude value.", NULL, FALSE, FALSE, NULL,
+        "_Send", G_CALLBACK(matrix_ui_location_lon_cb), "_Cancel", NULL,
+        account, NULL, NULL, ctx);
+}
+
+void matrix_ui_action_send_location(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    purple_request_input(my_plugin, "Send Location", "Latitude",
+        "Enter latitude value.", NULL, FALSE, FALSE, NULL,
+        "_Next", G_CALLBACK(matrix_ui_location_lat_cb), "_Cancel", NULL,
+        account, NULL, NULL, g_strdup(room_id));
+}
+
+void matrix_ui_action_who_read(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    purple_matrix_rust_who_read(purple_account_get_username(account), room_id);
+}
+
+typedef struct {
+    char *room_id;
+    char *event_id;
+} MatrixUiReportCtx;
+
+static void matrix_ui_report_reason_cb(void *user_data, const char *reason) {
+    MatrixUiReportCtx *ctx = (MatrixUiReportCtx *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && ctx && ctx->room_id && ctx->event_id) {
+        purple_matrix_rust_report_content(purple_account_get_username(account),
+                                          ctx->room_id, ctx->event_id, reason);
+    }
+    if (ctx) {
+        g_free(ctx->room_id);
+        g_free(ctx->event_id);
+        g_free(ctx);
+    }
+}
+
+static void matrix_ui_report_event_cb(void *user_data, const char *event_id) {
+    char *room_id = (char *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    MatrixUiReportCtx *ctx = NULL;
+    if (!account || !room_id || !event_id || !*event_id) {
+        g_free(room_id);
+        return;
+    }
+    ctx = g_new0(MatrixUiReportCtx, 1);
+    ctx->room_id = room_id;
+    ctx->event_id = g_strdup(event_id);
+    purple_request_input(my_plugin, "Report Content", "Reason",
+        "Optional reason for reporting.", NULL, FALSE, FALSE, NULL,
+        "_Report", G_CALLBACK(matrix_ui_report_reason_cb), "_Cancel", NULL,
+        account, NULL, NULL, ctx);
+}
+
+void matrix_ui_action_report_event(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    purple_request_input(my_plugin, "Report Content", "Event ID",
+        "Enter event_id to report.", NULL, FALSE, FALSE, NULL,
+        "_Next", G_CALLBACK(matrix_ui_report_event_cb), "_Cancel", NULL,
+        account, NULL, NULL, g_strdup(room_id));
+}
+
+void matrix_ui_action_reply_pick_event(const char *room_id) {
+    matrix_ui_event_pick_show(room_id, MATRIX_EVENT_PICK_REPLY,
+        "Reply to Event", "Select Event to Reply To");
+}
+
+void matrix_ui_action_thread_pick_event(const char *room_id) {
+    matrix_ui_event_pick_show(room_id, MATRIX_EVENT_PICK_THREAD,
+        "Start Thread", "Select Root Event");
+}
+
+void matrix_ui_action_react_pick_event(const char *room_id) {
+    matrix_ui_event_pick_show(room_id, MATRIX_EVENT_PICK_REACT,
+        "React to Event", "Select Target Event");
+}
+
+void matrix_ui_action_edit_pick_event(const char *room_id) {
+    matrix_ui_event_pick_show(room_id, MATRIX_EVENT_PICK_EDIT,
+        "Edit Event", "Select Target Event");
+}
+
+void matrix_ui_action_redact_pick_event(const char *room_id) {
+    matrix_ui_event_pick_show(room_id, MATRIX_EVENT_PICK_REDACT,
+        "Redact Event", "Select Target Event");
+}
+
+void matrix_ui_action_report_pick_event(const char *room_id) {
+    matrix_ui_event_pick_show(room_id, MATRIX_EVENT_PICK_REPORT,
+        "Report Event", "Select Target Event");
+}
+
+static void matrix_ui_search_users_cb(void *user_data, const char *term) {
+    char *room_id = (char *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && term && *term) {
+        purple_matrix_rust_search_users(purple_account_get_username(account),
+                                        term, room_id ? room_id : "");
+    }
+    g_free(room_id);
+}
+
+void matrix_ui_action_search_users(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account) return;
+    purple_request_input(my_plugin, "Search Users", "Matrix User Search",
+        "Search by user ID or display name.", NULL, FALSE, FALSE, NULL,
+        "_Search", G_CALLBACK(matrix_ui_search_users_cb), "_Cancel", NULL,
+        account, NULL, NULL, g_strdup(room_id ? room_id : ""));
+}
+
+static void matrix_ui_search_public_cb(void *user_data, const char *term) {
+    char *room_id = (char *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && term && *term) {
+        purple_matrix_rust_search_public_rooms(purple_account_get_username(account),
+                                               term, room_id ? room_id : "");
+    }
+    g_free(room_id);
+}
+
+void matrix_ui_action_search_public(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account) return;
+    purple_request_input(my_plugin, "Search Public Rooms", "Public Room Search",
+        "Search public Matrix rooms.", NULL, FALSE, FALSE, NULL,
+        "_Search", G_CALLBACK(matrix_ui_search_public_cb), "_Cancel", NULL,
+        account, NULL, NULL, g_strdup(room_id ? room_id : ""));
+}
+
+typedef struct {
+    char *room_id;
+    bool search_members;
+} MatrixUiGlobalRoomSearchCtx;
+
+static void matrix_ui_global_room_search_term_cb(void *user_data, const char *term) {
+    MatrixUiGlobalRoomSearchCtx *ctx = (MatrixUiGlobalRoomSearchCtx *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && ctx && ctx->room_id && term && *term) {
+        if (ctx->search_members) {
+            purple_matrix_rust_search_room_members(purple_account_get_username(account),
+                                                   ctx->room_id, term);
+        } else {
+            purple_matrix_rust_search_room_messages(purple_account_get_username(account),
+                                                    ctx->room_id, term);
+        }
+    }
+    if (ctx) {
+        g_free(ctx->room_id);
+        g_free(ctx);
+    }
+}
+
+static void matrix_ui_global_room_search_room_cb(void *user_data, const char *room_id) {
+    MatrixUiGlobalRoomSearchCtx *ctx = (MatrixUiGlobalRoomSearchCtx *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    const char *title = NULL;
+    const char *heading = NULL;
+    const char *desc = NULL;
+    if (!account || !ctx || !room_id || !*room_id) {
+        if (ctx) g_free(ctx);
+        return;
+    }
+    ctx->room_id = g_strdup(room_id);
+    title = ctx->search_members ? "Search Members" : "Search Messages";
+    heading = ctx->search_members ? "Member Search Term" : "Message Search Term";
+    desc = ctx->search_members ? "Search users in the specified room."
+                               : "Search recent messages in the specified room.";
+    purple_request_input(my_plugin, title, heading, desc,
+        NULL, FALSE, FALSE, NULL, "_Search",
+        G_CALLBACK(matrix_ui_global_room_search_term_cb), "_Cancel", NULL,
+        account, NULL, NULL, ctx);
+}
+
+void matrix_ui_action_search_members_global(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    MatrixUiGlobalRoomSearchCtx *ctx = NULL;
+    (void)room_id;
+    if (!account) return;
+    ctx = g_new0(MatrixUiGlobalRoomSearchCtx, 1);
+    ctx->search_members = true;
+    purple_request_input(my_plugin, "Search Members", "Room ID",
+        "Enter Matrix room ID (example: !room:server.tld).",
+        NULL, FALSE, FALSE, NULL, "_Next",
+        G_CALLBACK(matrix_ui_global_room_search_room_cb), "_Cancel", NULL,
+        account, NULL, NULL, ctx);
+}
+
+void matrix_ui_action_search_room_global(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    MatrixUiGlobalRoomSearchCtx *ctx = NULL;
+    (void)room_id;
+    if (!account) return;
+    ctx = g_new0(MatrixUiGlobalRoomSearchCtx, 1);
+    ctx->search_members = false;
+    purple_request_input(my_plugin, "Search Messages", "Room ID",
+        "Enter Matrix room ID (example: !room:server.tld).",
+        NULL, FALSE, FALSE, NULL, "_Next",
+        G_CALLBACK(matrix_ui_global_room_search_room_cb), "_Cancel", NULL,
+        account, NULL, NULL, ctx);
+}
+
+void matrix_ui_action_discover_public_rooms(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)room_id;
+    if (!account) return;
+    purple_matrix_rust_fetch_public_rooms_for_list(purple_account_get_username(account));
+}
+
+static void matrix_ui_room_preview_target_cb(void *user_data, const char *room_or_alias) {
+    PurpleAccount *account = find_matrix_account();
+    (void)user_data;
+    if (account && room_or_alias && *room_or_alias) {
+        purple_matrix_rust_fetch_room_preview(purple_account_get_username(account),
+                                              room_or_alias);
+    }
+}
+
+void matrix_ui_action_discover_room_preview(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)room_id;
+    if (!account) return;
+    purple_request_input(my_plugin, "Room Preview", "Room ID or Alias",
+        "Example: #room:server.tld or !room:server.tld",
+        NULL, FALSE, FALSE, NULL, "_Preview",
+        G_CALLBACK(matrix_ui_room_preview_target_cb), "_Cancel", NULL,
+        account, NULL, NULL, NULL);
+}
+
+typedef struct {
+    char *room_id;
+    char *event_id;
+} MatrixUiEventTargetCtx;
+
+static void matrix_ui_redact_reason_cb(void *user_data, const char *reason) {
+    MatrixUiEventTargetCtx *ctx = (MatrixUiEventTargetCtx *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && ctx && ctx->room_id && ctx->event_id) {
+        purple_matrix_rust_redact_event(purple_account_get_username(account),
+                                        ctx->room_id, ctx->event_id, reason);
+    }
+    if (ctx) {
+        g_free(ctx->room_id);
+        g_free(ctx->event_id);
+        g_free(ctx);
+    }
+}
+
+static void matrix_ui_redact_event_id_cb(void *user_data, const char *event_id) {
+    char *room_id = (char *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    MatrixUiEventTargetCtx *ctx = NULL;
+    if (!account || !room_id || !event_id || !*event_id) {
+        g_free(room_id);
+        return;
+    }
+    ctx = g_new0(MatrixUiEventTargetCtx, 1);
+    ctx->room_id = room_id;
+    ctx->event_id = g_strdup(event_id);
+    purple_request_input(my_plugin, "Redact Event", "Reason",
+        "Optional reason for redaction.", NULL, FALSE, FALSE, NULL,
+        "_Redact", G_CALLBACK(matrix_ui_redact_reason_cb), "_Cancel", NULL,
+        account, NULL, NULL, ctx);
+}
+
+void matrix_ui_action_redact_event_prompt(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    purple_request_input(my_plugin, "Redact Event", "Event ID",
+        "Enter event_id to redact.", NULL, FALSE, FALSE, NULL,
+        "_Next", G_CALLBACK(matrix_ui_redact_event_id_cb), "_Cancel", NULL,
+        account, NULL, NULL, g_strdup(room_id));
+}
+
+void matrix_ui_action_redact_latest(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    const char *event_id = NULL;
+    MatrixUiEventTargetCtx *ctx = NULL;
+    if (!account || !room_id || !*room_id) return;
+    event_id = matrix_last_event_for_room(account, room_id);
+    if (!event_id || !*event_id) {
+        purple_notify_error(my_plugin, "Redact", "No recent event",
+            "No recent event ID is available in this room.");
+        return;
+    }
+    ctx = g_new0(MatrixUiEventTargetCtx, 1);
+    ctx->room_id = g_strdup(room_id);
+    ctx->event_id = g_strdup(event_id);
+    purple_request_input(my_plugin, "Redact Latest Event", "Reason",
+        "Optional reason for redaction.", NULL, FALSE, FALSE, NULL,
+        "_Redact", G_CALLBACK(matrix_ui_redact_reason_cb), "_Cancel", NULL,
+        account, NULL, NULL, ctx);
+}
+
+static void matrix_ui_edit_text_cb(void *user_data, const char *text) {
+    MatrixUiEventTargetCtx *ctx = (MatrixUiEventTargetCtx *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && ctx && ctx->room_id && ctx->event_id && text && *text) {
+        purple_matrix_rust_send_edit(purple_account_get_username(account),
+                                     ctx->room_id, ctx->event_id, text);
+    }
+    if (ctx) {
+        g_free(ctx->room_id);
+        g_free(ctx->event_id);
+        g_free(ctx);
+    }
+}
+
+static void matrix_ui_edit_event_id_cb(void *user_data, const char *event_id) {
+    char *room_id = (char *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    MatrixUiEventTargetCtx *ctx = NULL;
+    if (!account || !room_id || !event_id || !*event_id) {
+        g_free(room_id);
+        return;
+    }
+    ctx = g_new0(MatrixUiEventTargetCtx, 1);
+    ctx->room_id = room_id;
+    ctx->event_id = g_strdup(event_id);
+    purple_request_input(my_plugin, "Edit Event", "New Message Text",
+        "Enter replacement text.", NULL, TRUE, FALSE, NULL,
+        "_Send Edit", G_CALLBACK(matrix_ui_edit_text_cb), "_Cancel", NULL,
+        account, NULL, NULL, ctx);
+}
+
+void matrix_ui_action_edit_event_prompt(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    purple_request_input(my_plugin, "Edit Event", "Event ID",
+        "Enter event_id to edit.", NULL, FALSE, FALSE, NULL,
+        "_Next", G_CALLBACK(matrix_ui_edit_event_id_cb), "_Cancel", NULL,
+        account, NULL, NULL, g_strdup(room_id));
+}
+
+void matrix_ui_action_edit_latest(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    const char *event_id = NULL;
+    MatrixUiEventTargetCtx *ctx = NULL;
+    if (!account || !room_id || !*room_id) return;
+    event_id = matrix_last_event_for_room(account, room_id);
+    if (!event_id || !*event_id) {
+        purple_notify_error(my_plugin, "Edit", "No recent event",
+            "No recent event ID is available in this room.");
+        return;
+    }
+    ctx = g_new0(MatrixUiEventTargetCtx, 1);
+    ctx->room_id = g_strdup(room_id);
+    ctx->event_id = g_strdup(event_id);
+    purple_request_input(my_plugin, "Edit Latest Event", "New Message Text",
+        "Enter replacement text.", NULL, TRUE, FALSE, NULL,
+        "_Send Edit", G_CALLBACK(matrix_ui_edit_text_cb), "_Cancel", NULL,
+        account, NULL, NULL, ctx);
+}
+
+void matrix_ui_action_report_latest(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    const char *event_id = NULL;
+    MatrixUiReportCtx *ctx = NULL;
+    if (!account || !room_id || !*room_id) return;
+    event_id = matrix_last_event_for_room(account, room_id);
+    if (!event_id || !*event_id) {
+        purple_notify_error(my_plugin, "Report", "No recent event",
+            "No recent event ID is available in this room.");
+        return;
+    }
+    ctx = g_new0(MatrixUiReportCtx, 1);
+    ctx->room_id = g_strdup(room_id);
+    ctx->event_id = g_strdup(event_id);
+    purple_request_input(my_plugin, "Report Latest Event", "Reason",
+        "Optional reason for report.", NULL, FALSE, FALSE, NULL,
+        "_Report", G_CALLBACK(matrix_ui_report_reason_cb), "_Cancel", NULL,
+        account, NULL, NULL, ctx);
+}
+
+void matrix_ui_action_versions(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)room_id;
+    if (!account) return;
+    purple_matrix_rust_get_supported_versions(purple_account_get_username(account));
+}
+
+void matrix_ui_action_enable_key_backup(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)room_id;
+    if (!account) return;
+    purple_matrix_rust_enable_key_backup(purple_account_get_username(account));
+}
+
+void matrix_ui_action_my_profile(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)room_id;
+    if (!account) return;
+    purple_matrix_rust_get_my_profile(purple_account_get_username(account));
+}
+
+void matrix_ui_action_server_info(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)room_id;
+    if (!account) return;
+    purple_matrix_rust_get_server_info(purple_account_get_username(account));
+}
+
+void matrix_ui_action_resync_recent_history(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    purple_matrix_rust_resync_recent_history(purple_account_get_username(account), room_id);
+}
+
+static void matrix_ui_search_stickers_cb(void *user_data, const char *term) {
+    PurpleAccount *account = find_matrix_account();
+    (void)user_data;
+    if (!account || !term || !*term) return;
+    purple_matrix_rust_search_stickers(purple_account_get_username(account), term);
+}
+
+void matrix_ui_action_search_stickers(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)room_id;
+    if (!account) return;
+    purple_request_input(my_plugin, "Sticker Search", "Find Stickers",
+        "Search across available sticker packs.", NULL, FALSE, FALSE, NULL,
+        "_Search", G_CALLBACK(matrix_ui_search_stickers_cb), "_Cancel", NULL,
+        account, NULL, NULL, NULL);
+}
+
+static void matrix_ui_recover_keys_cb(void *user_data, const char *passphrase) {
+    PurpleAccount *account = find_matrix_account();
+    (void)user_data;
+    if (!account || !passphrase || !*passphrase) return;
+    purple_matrix_rust_recover_keys(purple_account_get_username(account), passphrase);
+}
+
+void matrix_ui_action_recover_keys_prompt(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)room_id;
+    if (!account) return;
+    purple_request_input(my_plugin, "Recover Room Keys", "Recovery Passphrase",
+        "Enter passphrase used for encrypted key backup recovery.",
+        NULL, FALSE, TRUE, NULL, "_Recover",
+        G_CALLBACK(matrix_ui_recover_keys_cb), "_Cancel", NULL,
+        account, NULL, NULL, NULL);
+}
+
+typedef struct {
+    char *path;
+} MatrixUiExportKeysCtx;
+
+static void matrix_ui_export_keys_passphrase_cb(void *user_data, const char *passphrase) {
+    MatrixUiExportKeysCtx *ctx = (MatrixUiExportKeysCtx *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && ctx && ctx->path && passphrase && *passphrase) {
+        purple_matrix_rust_export_keys(purple_account_get_username(account), ctx->path, passphrase);
+    }
+    if (ctx) {
+        g_free(ctx->path);
+        g_free(ctx);
+    }
+}
+
+static void matrix_ui_export_keys_path_cb(void *user_data, const char *path) {
+    PurpleAccount *account = find_matrix_account();
+    MatrixUiExportKeysCtx *ctx = NULL;
+    (void)user_data;
+    if (!account || !path || !*path) return;
+    ctx = g_new0(MatrixUiExportKeysCtx, 1);
+    ctx->path = g_strdup(path);
+    purple_request_input(my_plugin, "Export Room Keys", "Passphrase",
+        "Choose a passphrase used to encrypt the export file.",
+        NULL, FALSE, TRUE, NULL, "_Export",
+        G_CALLBACK(matrix_ui_export_keys_passphrase_cb), "_Cancel", NULL,
+        account, NULL, NULL, ctx);
+}
+
+void matrix_ui_action_export_keys_prompt(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)room_id;
+    if (!account) return;
+    purple_request_file(my_plugin, "Export Keys File Path", NULL, TRUE,
+        G_CALLBACK(matrix_ui_export_keys_path_cb), NULL,
+        account, NULL, NULL, NULL);
+}
+
+static void matrix_ui_set_avatar_file_cb(void *user_data, const char *filename) {
+    PurpleAccount *account = find_matrix_account();
+    (void)user_data;
+    if (!account || !filename || !*filename) return;
+    purple_matrix_rust_set_avatar(purple_account_get_username(account), filename);
+}
+
+void matrix_ui_action_set_avatar_prompt(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)room_id;
+    if (!account) return;
+    purple_request_file(my_plugin, "Select Avatar Image", NULL, FALSE,
+        G_CALLBACK(matrix_ui_set_avatar_file_cb), NULL,
+        account, NULL, NULL, NULL);
+}
+
+static void matrix_ui_room_tag_cb(void *user_data, const char *tag) {
+    char *room_id = (char *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && room_id && tag && *tag) {
+        purple_matrix_rust_set_room_tag(purple_account_get_username(account), room_id, tag);
+    }
+    g_free(room_id);
+}
+
+void matrix_ui_action_room_tag_prompt(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    purple_request_input(my_plugin, "Room Tag", "Set Room Tag",
+        "Examples: m.favourite, m.lowpriority", NULL, FALSE, FALSE, NULL,
+        "_Set", G_CALLBACK(matrix_ui_room_tag_cb), "_Cancel", NULL,
+        account, NULL, NULL, g_strdup(room_id));
+}
+
+static void matrix_ui_upgrade_room_cb(void *user_data, const char *version) {
+    char *room_id = (char *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && room_id && version && *version) {
+        purple_matrix_rust_upgrade_room(purple_account_get_username(account), room_id, version);
+    }
+    g_free(room_id);
+}
+
+void matrix_ui_action_upgrade_room_prompt(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    purple_request_input(my_plugin, "Upgrade Room", "Target Room Version",
+        "Example: 10", NULL, FALSE, FALSE, NULL,
+        "_Upgrade", G_CALLBACK(matrix_ui_upgrade_room_cb), "_Cancel", NULL,
+        account, NULL, NULL, g_strdup(room_id));
+}
+
+static void matrix_ui_alias_create_cb(void *user_data, const char *localpart) {
+    char *room_id = (char *)user_data;
+    PurpleAccount *account = find_matrix_account();
+    if (account && room_id && localpart && *localpart) {
+        purple_matrix_rust_create_alias(purple_account_get_username(account), room_id, localpart);
+    }
+    g_free(room_id);
+}
+
+void matrix_ui_action_alias_create_prompt(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account || !room_id || !*room_id) return;
+    purple_request_input(my_plugin, "Create Alias", "Alias Localpart",
+        "Enter only the localpart (without # and server).", NULL, FALSE, FALSE, NULL,
+        "_Create", G_CALLBACK(matrix_ui_alias_create_cb), "_Cancel", NULL,
+        account, NULL, NULL, g_strdup(room_id));
+}
+
+static void matrix_ui_alias_delete_cb(void *user_data, const char *alias) {
+    PurpleAccount *account = find_matrix_account();
+    (void)user_data;
+    if (account && alias && *alias) {
+        purple_matrix_rust_delete_alias(purple_account_get_username(account), alias);
+    }
+}
+
+void matrix_ui_action_alias_delete_prompt(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)room_id;
+    if (!account) return;
+    purple_request_input(my_plugin, "Delete Alias", "Matrix Room Alias",
+        "Example: #room:server.tld", NULL, FALSE, FALSE, NULL,
+        "_Delete", G_CALLBACK(matrix_ui_alias_delete_cb), "_Cancel", NULL,
+        account, NULL, NULL, NULL);
+}
+
+static void matrix_ui_space_hierarchy_cb(void *user_data, const char *space_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)user_data;
+    if (account && space_id && *space_id) {
+        purple_matrix_rust_get_space_hierarchy(purple_account_get_username(account), space_id);
+    }
+}
+
+void matrix_ui_action_space_hierarchy_prompt(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    if (!account) return;
+    purple_request_input(my_plugin, "Space Hierarchy", "Space ID",
+        "Example: !space:server.tld", room_id, FALSE, FALSE, NULL,
+        "_Fetch", G_CALLBACK(matrix_ui_space_hierarchy_cb), "_Cancel", NULL,
+        account, NULL, NULL, NULL);
+}
+
+static void matrix_ui_knock_target_cb(void *user_data, const char *target) {
+    PurpleAccount *account = find_matrix_account();
+    (void)user_data;
+    if (account && target && *target) {
+        purple_matrix_rust_knock(purple_account_get_username(account), target, NULL);
+    }
+}
+
+void matrix_ui_action_knock_prompt(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    (void)room_id;
+    if (!account) return;
+    purple_request_input(my_plugin, "Knock Room", "Room ID or Alias",
+        "Example: !room:server or #alias:server", NULL, FALSE, FALSE, NULL,
+        "_Knock", G_CALLBACK(matrix_ui_knock_target_cb), "_Cancel", NULL,
+        account, NULL, NULL, NULL);
 }
 
 void room_settings_dialog_cb(void *user_data, PurpleRequestFields *fields) { 
@@ -844,11 +2316,32 @@ static PurpleCmdRet cmd_help(PurpleConversation *conv, const gchar *cmd, gchar *
     "  /me &lt;action&gt; - Send an emote<br/>"
     "  /sticker - Browse and send Matrix stickers<br/>"
     "  /poll - Create a new poll in this room<br/>"
+    "  /polls - List polls and vote by index<br/>"
+    "  /react &lt;key&gt; [event_id] - React to a message (defaults to latest)<br/>"
+    "  /location &lt;lat&gt; &lt;lon&gt; - Send location coordinates<br/>"
+    "  /message_inspector - Pick recent event and run reply/thread/react/edit/redact/report<br/>"
+    "  /mark_read - Mark current room read and send read receipt<br/>"
+    "  /power_levels - Show power levels for current room<br/>"
     "<b>Security:</b><br/>"
     "  /matrix_verify [device_id_or_user_id] - Start interactive device verification<br/>"
     "  /matrix_devices - List your device IDs for verification targeting<br/>"
     "  /matrix_restore_backup &lt;key&gt; - Restore E2EE keys using your Security Key<br/>"
-    "  /matrix_debug_crypto - Show detailed encryption status for this session";
+    "  /matrix_recover_keys &lt;passphrase&gt; - Recover keys from secret storage passphrase<br/>"
+    "  /matrix_export_keys &lt;path&gt; &lt;passphrase&gt; - Export encrypted key file<br/>"
+    "  /matrix_debug_crypto - Show detailed encryption status for this session<br/>"
+    "  /matrix_server_info - Show homeserver capabilities and versions<br/>"
+    "  /matrix_profile - Refresh and display your profile info<br/>"
+    "<b>Moderation/Admin:</b><br/>"
+    "  /report &lt;event_id&gt; [reason] - Report abusive content<br/>"
+    "  /bulk_redact &lt;count&gt; [user] - Redact recent events<br/>"
+    "  /who_read - List read-receipt users for room<br/>"
+    "  /knock &lt;room_or_alias&gt; [reason] - Request access to room<br/>"
+    "  /room_tag &lt;tag&gt; - Set room tag<br/>"
+    "  /upgrade_room &lt;version&gt; - Upgrade room version<br/>"
+    "  /alias_create &lt;localpart&gt;, /alias_delete &lt;alias&gt;<br/>"
+    "  /search_users &lt;term&gt;, /search_public &lt;term&gt;, /search_members &lt;term&gt;<br/>"
+    "  /ignore_user &lt;id&gt;, /unignore_user &lt;id&gt;<br/>"
+    "  /resync_recent [room_id], /sticker_search &lt;term&gt;, /matrix_set_avatar &lt;path&gt;";
   
   purple_conversation_write(conv, "System", msg, PURPLE_MESSAGE_SYSTEM, time(NULL)); 
   return PURPLE_CMD_RET_OK;
@@ -1000,6 +2493,410 @@ static PurpleCmdRet cmd_edit_last(PurpleConversation *conv, const gchar *cmd, gc
         *error = g_strdup("Usage: /edit <new text>");
     }
     return PURPLE_CMD_RET_FAILED;
+}
+
+static PurpleCmdRet cmd_react(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    const char *event_id = NULL;
+    const char *key = NULL;
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (matrix_cmd_require_chat(conv, error) != PURPLE_CMD_RET_OK) return PURPLE_CMD_RET_FAILED;
+    if (!args || !args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /react <emoji_or_key> [event_id]");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    key = args[0];
+    if (args[1] && *args[1]) {
+        event_id = args[1];
+    } else {
+        event_id = purple_conversation_get_data(conv, "last_event_id");
+    }
+    if (!event_id || !*event_id) {
+        *error = g_strdup("No target event found. Pass an explicit event_id.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_send_reaction(purple_account_get_username(account),
+                                     purple_conversation_get_name(conv),
+                                     event_id, key);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_polls(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (matrix_cmd_require_chat(conv, error) != PURPLE_CMD_RET_OK) return PURPLE_CMD_RET_FAILED;
+    purple_matrix_rust_list_polls(purple_account_get_username(account),
+                                  purple_conversation_get_name(conv));
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_location(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    char *end1 = NULL;
+    char *end2 = NULL;
+    double lat = 0.0;
+    double lon = 0.0;
+    if (matrix_cmd_require_chat(conv, error) != PURPLE_CMD_RET_OK) return PURPLE_CMD_RET_FAILED;
+    if (!args || !args[0] || !*args[0] || !args[1] || !*args[1]) {
+        *error = g_strdup("Usage: /location <latitude> <longitude>");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    lat = g_ascii_strtod(args[0], &end1);
+    lon = g_ascii_strtod(args[1], &end2);
+    if (!end1 || *end1 != '\0' || !end2 || *end2 != '\0') {
+        *error = g_strdup("Invalid coordinates. Example: /location 37.7749 -122.4194");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_send_location(purple_account_get_username(account),
+                                     purple_conversation_get_name(conv),
+                                     lat, lon);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_who_read(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (matrix_cmd_require_chat(conv, error) != PURPLE_CMD_RET_OK) return PURPLE_CMD_RET_FAILED;
+    purple_matrix_rust_who_read(purple_account_get_username(account),
+                                purple_conversation_get_name(conv));
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_report(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (matrix_cmd_require_chat(conv, error) != PURPLE_CMD_RET_OK) return PURPLE_CMD_RET_FAILED;
+    if (!args || !args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /report <event_id> [reason]");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_report_content(purple_account_get_username(account),
+                                      purple_conversation_get_name(conv),
+                                      args[0], args[1]);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_bulk_redact(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    char *end = NULL;
+    long count = 0;
+    if (matrix_cmd_require_chat(conv, error) != PURPLE_CMD_RET_OK) return PURPLE_CMD_RET_FAILED;
+    if (!args || !args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /bulk_redact <count> [target_user_id]");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    count = strtol(args[0], &end, 10);
+    if (!end || *end != '\0' || count <= 0 || count > 1000) {
+        *error = g_strdup("Count must be an integer between 1 and 1000.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_bulk_redact(purple_account_get_username(account),
+                                   purple_conversation_get_name(conv),
+                                   (int)count, args[1]);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_knock(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    if (!args || !args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /knock <room_id_or_alias> [reason]");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_knock(purple_account_get_username(account), args[0], args[1]);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_room_tag(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (matrix_cmd_require_chat(conv, error) != PURPLE_CMD_RET_OK) return PURPLE_CMD_RET_FAILED;
+    if (!args || !args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /room_tag <tag>");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_set_room_tag(purple_account_get_username(account),
+                                    purple_conversation_get_name(conv),
+                                    args[0]);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_upgrade_room(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (matrix_cmd_require_chat(conv, error) != PURPLE_CMD_RET_OK) return PURPLE_CMD_RET_FAILED;
+    if (!args || !args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /upgrade_room <new_version>");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_upgrade_room(purple_account_get_username(account),
+                                    purple_conversation_get_name(conv), args[0]);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_alias_create(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (matrix_cmd_require_chat(conv, error) != PURPLE_CMD_RET_OK) return PURPLE_CMD_RET_FAILED;
+    if (!args || !args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /alias_create <localpart>");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_create_alias(purple_account_get_username(account),
+                                    purple_conversation_get_name(conv),
+                                    args[0]);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_alias_delete(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    if (!args || !args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /alias_delete <#alias:server>");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_delete_alias(purple_account_get_username(account), args[0]);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_search_users(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    const char *room_id = NULL;
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    if (!args || !args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /search_users <term>");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    room_id = (conv && purple_conversation_get_type(conv) == PURPLE_CONV_TYPE_CHAT)
+                  ? purple_conversation_get_name(conv)
+                  : "";
+    purple_matrix_rust_search_users(purple_account_get_username(account),
+                                    args[0], room_id);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_search_public(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    const char *output_room_id = "";
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    if (!args || !args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /search_public <term>");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    if (conv && purple_conversation_get_type(conv) == PURPLE_CONV_TYPE_CHAT) {
+        output_room_id = purple_conversation_get_name(conv);
+    }
+    purple_matrix_rust_search_public_rooms(purple_account_get_username(account),
+                                           args[0], output_room_id);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_search_members(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (matrix_cmd_require_chat(conv, error) != PURPLE_CMD_RET_OK) return PURPLE_CMD_RET_FAILED;
+    if (!args || !args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /search_members <term>");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_search_room_members(purple_account_get_username(account),
+                                           purple_conversation_get_name(conv),
+                                           args[0]);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_versions(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_get_supported_versions(purple_account_get_username(account));
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_enable_key_backup(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_enable_key_backup(purple_account_get_username(account));
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_my_profile(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_get_my_profile(purple_account_get_username(account));
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_server_info(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_get_server_info(purple_account_get_username(account));
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_resync_recent(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    const char *room_id = NULL;
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    if (conv && purple_conversation_get_type(conv) == PURPLE_CONV_TYPE_CHAT) {
+        room_id = purple_conversation_get_name(conv);
+    } else if (args && args[0] && *args[0]) {
+        room_id = args[0];
+    }
+    if (!room_id || !*room_id) {
+        *error = g_strdup("Usage: /resync_recent [room_id] (room_id required outside chat rooms)");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_resync_recent_history(purple_account_get_username(account), room_id);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_sticker_search(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    if (!args || !args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /sticker_search <term>");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_search_stickers(purple_account_get_username(account), args[0]);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_recover_keys(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    if (!args || !args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /matrix_recover_keys <passphrase>");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_recover_keys(purple_account_get_username(account), args[0]);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_export_keys(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    if (!args || !args[0] || !*args[0] || !args[1] || !*args[1]) {
+        *error = g_strdup("Usage: /matrix_export_keys <path> <passphrase>");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_export_keys(purple_account_get_username(account), args[0], args[1]);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_set_avatar(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    if (!args || !args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /matrix_set_avatar <path_to_image>");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_set_avatar(purple_account_get_username(account), args[0]);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_mark_read(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (matrix_cmd_require_chat(conv, error) != PURPLE_CMD_RET_OK) return PURPLE_CMD_RET_FAILED;
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    matrix_ui_action_mark_read(purple_conversation_get_name(conv));
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_power_levels(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (matrix_cmd_require_chat(conv, error) != PURPLE_CMD_RET_OK) return PURPLE_CMD_RET_FAILED;
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_get_power_levels(purple_account_get_username(account),
+                                        purple_conversation_get_name(conv));
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_ignore_user(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    if (!args || !args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /ignore_user <@user:server>");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_ignore_user(purple_account_get_username(account), args[0]);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_unignore_user(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    PurpleAccount *account = purple_conversation_get_account(conv);
+    if (!account) account = find_matrix_account();
+    if (!account) {
+        *error = g_strdup("No Matrix account found.");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    if (!args || !args[0] || !*args[0]) {
+        *error = g_strdup("Usage: /unignore_user <@user:server>");
+        return PURPLE_CMD_RET_FAILED;
+    }
+    purple_matrix_rust_unignore_user(purple_account_get_username(account), args[0]);
+    return PURPLE_CMD_RET_OK;
+}
+
+static PurpleCmdRet cmd_message_inspector(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    if (matrix_cmd_require_chat(conv, error) != PURPLE_CMD_RET_OK) return PURPLE_CMD_RET_FAILED;
+    matrix_ui_action_message_inspector(purple_conversation_get_name(conv));
+    return PURPLE_CMD_RET_OK;
 }
 
 static PurpleCmdRet cmd_kick(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
@@ -1163,15 +3060,48 @@ void register_matrix_commands(PurplePlugin *plugin) {
   purple_cmd_register("matrix_sso", "w", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_matrix_sso, "matrix_sso [homeserver] [user]: Start SSO login", NULL);
   purple_cmd_register("matrix_sso", "ww", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_matrix_sso, "matrix_sso [homeserver] [user]: Start SSO login", NULL);
   purple_cmd_register("matrix_devices", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_matrix_devices, "matrix_devices: List your Matrix devices", NULL);
+  purple_cmd_register("matrix_profile", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_my_profile, "matrix_profile: Refresh and show your Matrix profile", NULL);
+  purple_cmd_register("matrix_server_info", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_server_info, "matrix_server_info: Query server capabilities", NULL);
   purple_cmd_register("matrix_login", "www", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_matrix_login, "matrix_login <homeserver> <user> <pass>: Login explicitly", NULL);
   purple_cmd_register("matrix_join", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_matrix_join, "matrix_join <room_id_or_alias>: Join a room", NULL);
   purple_cmd_register("matrix_leave", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_matrix_leave, "matrix_leave: Leave current room", NULL);
   purple_cmd_register("matrix_create", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_matrix_create, "matrix_create <name>: Create a room", NULL);
   purple_cmd_register("matrix_clear_session", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_matrix_clear_session, "matrix_clear_session: Clear local session cache", NULL);
   purple_cmd_register("matrix_debug_crypto", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_crypto_status, "matrix_debug_crypto: Show detailed E2EE status", NULL);
+  purple_cmd_register("matrix_recover_keys", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_recover_keys, "matrix_recover_keys <passphrase>: Recover keys from secret storage", NULL);
+  purple_cmd_register("matrix_export_keys", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_export_keys, "matrix_export_keys <path> <passphrase>: Export encrypted key backup", NULL);
+  purple_cmd_register("matrix_set_avatar", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_set_avatar, "matrix_set_avatar <path>: Set account avatar from image file", NULL);
   purple_cmd_register("me", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_me, "me <action>: Send an emote", NULL);
   purple_cmd_register("redact_last", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_redact_last, "redact_last: Delete your most recent message", NULL);
   purple_cmd_register("edit", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_edit_last, "edit <text>: Edit your most recent message", NULL);
+  purple_cmd_register("react", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_react, "react <emoji_or_key> [event_id]: React to a message", NULL);
+  purple_cmd_register("react", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_react, "react <emoji_or_key> [event_id]: React to a message", NULL);
+  purple_cmd_register("polls", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_polls, "polls: List active polls and vote", NULL);
+  purple_cmd_register("location", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_location, "location <lat> <lon>: Send a location", NULL);
+  purple_cmd_register("message_inspector", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_message_inspector, "message_inspector: Pick recent event and action", NULL);
+  purple_cmd_register("mark_read", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_mark_read, "mark_read: Mark room read and send read receipt", NULL);
+  purple_cmd_register("power_levels", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_power_levels, "power_levels: Show room power levels", NULL);
+  purple_cmd_register("who_read", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_who_read, "who_read: Show readers for this room", NULL);
+  purple_cmd_register("report", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_report, "report <event_id> [reason]: Report content", NULL);
+  purple_cmd_register("report", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_report, "report <event_id> [reason]: Report content", NULL);
+  purple_cmd_register("bulk_redact", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_bulk_redact, "bulk_redact <count> [target_user]: Redact recent events", NULL);
+  purple_cmd_register("bulk_redact", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_bulk_redact, "bulk_redact <count> [target_user]: Redact recent events", NULL);
+  purple_cmd_register("knock", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_knock, "knock <room_or_alias> [reason]: Request to join room", NULL);
+  purple_cmd_register("knock", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_knock, "knock <room_or_alias> [reason]: Request to join room", NULL);
+  purple_cmd_register("room_tag", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_room_tag, "room_tag <tag>: Apply room tag", NULL);
+  purple_cmd_register("upgrade_room", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_upgrade_room, "upgrade_room <version>: Upgrade room version", NULL);
+  purple_cmd_register("alias_create", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_alias_create, "alias_create <localpart>: Create canonical room alias", NULL);
+  purple_cmd_register("alias_delete", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_alias_delete, "alias_delete <#alias:server>: Delete room alias", NULL);
+  purple_cmd_register("search_users", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_search_users, "search_users <term>: Search Matrix users", NULL);
+  purple_cmd_register("search_public", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_search_public, "search_public <term>: Search public rooms", NULL);
+  purple_cmd_register("search_members", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_search_members, "search_members <term>: Search users in current room", NULL);
+  purple_cmd_register("ignore_user", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_ignore_user, "ignore_user <@user:server>: Ignore a user", NULL);
+  purple_cmd_register("unignore_user", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_unignore_user, "unignore_user <@user:server>: Unignore a user", NULL);
+  purple_cmd_register("resync_recent", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_resync_recent, "resync_recent: Refresh latest timeline in this room", NULL);
+  purple_cmd_register("resync_recent", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_resync_recent, "resync_recent [room_id]: Refresh latest timeline", NULL);
+  purple_cmd_register("sticker_search", "s", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_sticker_search, "sticker_search <term>: Search sticker catalog", NULL);
+  purple_cmd_register("versions", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_versions, "versions: Query supported Matrix server versions", NULL);
+  purple_cmd_register("enable_key_backup", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_IM | PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_enable_key_backup, "enable_key_backup: Enable secure key backup", NULL);
   
   purple_cmd_register("kick", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_kick, "kick <user_id> [reason]: Remove a user from the room", NULL);
   purple_cmd_register("ban", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_ban, "ban <user_id> [reason]: Ban a user from the room", NULL);
@@ -1218,6 +3148,18 @@ GList *matrix_actions(PurplePlugin *plugin, gpointer context) {
     m = g_list_append(m, act);
 
     act = purple_plugin_action_new("Re-sync All Room Keys...", action_resync_all_keys_cb);
+    act->context = context;
+    m = g_list_append(m, act);
+
+    act = purple_plugin_action_new("Recover Keys (Passphrase)...", action_recover_keys_cb);
+    act->context = context;
+    m = g_list_append(m, act);
+
+    act = purple_plugin_action_new("Export Keys...", action_export_keys_cb);
+    act->context = context;
+    m = g_list_append(m, act);
+
+    act = purple_plugin_action_new("Server Info", action_server_info_cb);
     act->context = context;
     m = g_list_append(m, act);
     

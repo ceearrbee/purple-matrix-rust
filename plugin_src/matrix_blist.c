@@ -11,9 +11,26 @@
 #include <libpurple/server.h>
 #include <libpurple/notify.h>
 #include <libpurple/conversation.h>
+#include <libpurple/request.h>
 #include <string.h>
 
 static PurpleRoomlist *active_roomlist = NULL;
+
+typedef struct {
+    PurpleAccount *account;
+    char *target_user_id;
+} ModerateBuddyCtx;
+
+static void moderate_buddy_room_cb(void *user_data, const char *room_id) {
+  ModerateBuddyCtx *ctx = (ModerateBuddyCtx *)user_data;
+  if (ctx && room_id && *room_id && ctx->target_user_id && *ctx->target_user_id) {
+    matrix_ui_action_moderate_user(room_id, ctx->target_user_id);
+  }
+  if (ctx) {
+    g_free(ctx->target_user_id);
+    g_free(ctx);
+  }
+}
 
 void cleanup_stale_thread_labels(PurpleAccount *account) {
   if (!account) return;
@@ -399,29 +416,21 @@ static void menu_action_user_info_buddy_cb(PurpleBlistNode *node, gpointer data)
 
 static void menu_action_moderate_buddy_cb(PurpleBlistNode *node, gpointer data) {
     PurpleBuddy *buddy = (PurpleBuddy *)node;
-    PurpleAccount *account = NULL;
     const char *target = NULL;
-    const char *room_id = NULL;
+    PurpleAccount *account = NULL;
     if (!PURPLE_BLIST_NODE_IS_BUDDY(node)) return;
     account = purple_buddy_get_account(buddy);
     target = purple_buddy_get_name(buddy);
     if (!account || !target || !*target) return;
-    for (GList *it = purple_get_conversations(); it; it = it->next) {
-        PurpleConversation *conv = (PurpleConversation *)it->data;
-        PurpleAccount *conv_account = purple_conversation_get_account(conv);
-        const char *conv_name = purple_conversation_get_name(conv);
-        if (!conv_account || !conv_name) continue;
-        if (conv_account == account && conv_name[0] == '!') {
-            room_id = conv_name;
-            break;
-        }
-    }
-    if (room_id) {
-        matrix_ui_action_moderate_user(room_id, target);
-    } else {
-        purple_notify_error(my_plugin, "Moderation", "No Matrix room context",
-            "Open a Matrix room conversation, then retry this moderation action.");
-    }
+
+    ModerateBuddyCtx *ctx = g_new0(ModerateBuddyCtx, 1);
+    ctx->account = account;
+    ctx->target_user_id = g_strdup(target);
+    purple_request_input(my_plugin, "Moderate User", "Room ID",
+        "Enter Matrix room ID to moderate this user (example: !room:server).",
+        NULL, FALSE, FALSE, NULL, "_Open Moderation",
+        G_CALLBACK(moderate_buddy_room_cb), "_Cancel", NULL,
+        account, NULL, NULL, ctx);
 }
 
 GList *blist_node_menu_cb(PurpleBlistNode *node) {

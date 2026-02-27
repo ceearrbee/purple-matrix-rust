@@ -15,6 +15,95 @@
 #include <unistd.h>
 
 #define MATRIX_PASTED_PREFIX "matrix_pasted_"
+#define MATRIX_RECENT_EVENT_SLOTS 10
+
+static void matrix_conv_data_replace(PurpleConversation *conv, const char *key,
+                                     const char *value) {
+  if (!conv || !key)
+    return;
+  g_free(purple_conversation_get_data(conv, key));
+  purple_conversation_set_data(conv, key, value ? g_strdup(value) : NULL);
+}
+
+static void matrix_record_recent_event(PurpleConversation *conv,
+                                       const char *event_id,
+                                       const char *sender,
+                                       const char *message,
+                                       const char *thread_root_id,
+                                       gboolean encrypted,
+                                       guint64 timestamp) {
+  int i;
+  char key_id[64], key_sender[64], key_msg[64], key_ts[64], key_enc[64],
+      key_thread[64];
+  char *plain = NULL;
+  char *snippet = NULL;
+  char tsbuf[32];
+  char encbuf[8];
+
+  if (!conv || !event_id || !*event_id)
+    return;
+
+  for (i = MATRIX_RECENT_EVENT_SLOTS - 1; i > 0; --i) {
+    char prev_id[64], prev_sender[64], prev_msg[64], prev_ts[64], prev_enc[64],
+        prev_thread[64];
+    const char *v = NULL;
+
+    g_snprintf(prev_id, sizeof(prev_id), "matrix_recent_event_id_%d", i - 1);
+    g_snprintf(prev_sender, sizeof(prev_sender), "matrix_recent_event_sender_%d",
+               i - 1);
+    g_snprintf(prev_msg, sizeof(prev_msg), "matrix_recent_event_msg_%d", i - 1);
+    g_snprintf(prev_ts, sizeof(prev_ts), "matrix_recent_event_ts_%d", i - 1);
+    g_snprintf(prev_enc, sizeof(prev_enc), "matrix_recent_event_enc_%d", i - 1);
+    g_snprintf(prev_thread, sizeof(prev_thread), "matrix_recent_event_thread_%d",
+               i - 1);
+
+    g_snprintf(key_id, sizeof(key_id), "matrix_recent_event_id_%d", i);
+    g_snprintf(key_sender, sizeof(key_sender), "matrix_recent_event_sender_%d",
+               i);
+    g_snprintf(key_msg, sizeof(key_msg), "matrix_recent_event_msg_%d", i);
+    g_snprintf(key_ts, sizeof(key_ts), "matrix_recent_event_ts_%d", i);
+    g_snprintf(key_enc, sizeof(key_enc), "matrix_recent_event_enc_%d", i);
+    g_snprintf(key_thread, sizeof(key_thread), "matrix_recent_event_thread_%d",
+               i);
+
+    v = purple_conversation_get_data(conv, prev_id);
+    matrix_conv_data_replace(conv, key_id, v);
+    v = purple_conversation_get_data(conv, prev_sender);
+    matrix_conv_data_replace(conv, key_sender, v);
+    v = purple_conversation_get_data(conv, prev_msg);
+    matrix_conv_data_replace(conv, key_msg, v);
+    v = purple_conversation_get_data(conv, prev_ts);
+    matrix_conv_data_replace(conv, key_ts, v);
+    v = purple_conversation_get_data(conv, prev_enc);
+    matrix_conv_data_replace(conv, key_enc, v);
+    v = purple_conversation_get_data(conv, prev_thread);
+    matrix_conv_data_replace(conv, key_thread, v);
+  }
+
+  plain = purple_markup_strip_html(message ? message : "");
+  if (!plain)
+    plain = g_strdup("");
+  if ((int)strlen(plain) > 120) {
+    plain[120] = '\0';
+  }
+  snippet = sanitize_markup_text(plain);
+  g_free(plain);
+
+  g_snprintf(tsbuf, sizeof(tsbuf), "%" G_GUINT64_FORMAT, timestamp);
+  g_snprintf(encbuf, sizeof(encbuf), "%d", encrypted ? 1 : 0);
+  matrix_conv_data_replace(conv, "matrix_recent_event_id_0", event_id);
+  matrix_conv_data_replace(conv, "matrix_recent_event_sender_0",
+                           sender ? sender : "");
+  matrix_conv_data_replace(conv, "matrix_recent_event_msg_0",
+                           snippet ? snippet : "");
+  matrix_conv_data_replace(conv, "matrix_recent_event_ts_0", tsbuf);
+  matrix_conv_data_replace(conv, "matrix_recent_event_enc_0", encbuf);
+  matrix_conv_data_replace(conv, "matrix_recent_event_thread_0",
+                           thread_root_id ? thread_root_id : "");
+
+  if (snippet)
+    g_free(snippet);
+}
 
 static void check_and_send_pasted_images(PurpleConnection *gc, const char *who,
                                          const char *message) {
@@ -134,6 +223,8 @@ static gboolean process_msg_cb(gpointer data) {
       g_free(purple_conversation_get_data(main_conv, "last_event_id"));
       purple_conversation_set_data(main_conv, "last_event_id",
                                    g_strdup(d->event_id));
+      matrix_record_recent_event(main_conv, d->event_id, d->sender, d->message,
+                                 d->thread_root_id, d->encrypted, d->timestamp);
       g_free(purple_conversation_get_data(main_conv, "last_thread_root_id"));
       if (d->thread_root_id)
         purple_conversation_set_data(main_conv, "last_thread_root_id",

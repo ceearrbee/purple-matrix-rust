@@ -137,8 +137,10 @@ static void handle_show_dashboard_signal(const char *room_id,
   if (!room_id)
     return;
   PurpleAccount *account = find_matrix_account();
-  if (account)
+  if (account) {
     open_room_dashboard(account, room_id);
+    purple_matrix_rust_ui_show_dashboard(room_id);
+  }
 }
 
 static void handle_reply_signal(const char *room_id, gpointer user_data) {
@@ -147,6 +149,14 @@ static void handle_reply_signal(const char *room_id, gpointer user_data) {
       PURPLE_CONV_TYPE_ANY, room_id, account);
   if (conv)
     menu_action_reply_conv_cb(conv, NULL);
+}
+
+static void handle_start_thread_signal(const char *room_id, gpointer user_data) {
+  PurpleAccount *account = find_matrix_account();
+  PurpleConversation *conv = purple_find_conversation_with_account(
+      PURPLE_CONV_TYPE_ANY, room_id, account);
+  if (conv)
+    menu_action_thread_start_cb(conv, NULL);
 }
 
 static void handle_sticker_signal(const char *room_id, gpointer user_data) {
@@ -185,6 +195,10 @@ static void handle_show_members_signal(const char *room_id, gpointer user_data) 
   matrix_ui_action_show_members(room_id);
 }
 
+static void handle_join_room_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_join_room_prompt(room_id);
+}
+
 static gboolean split_room_and_user(const char *payload, char **room_id,
                                     char **user_id) {
   const char *sep = NULL;
@@ -209,6 +223,18 @@ static void handle_moderate_signal(const char *room_id, gpointer user_data) {
   matrix_ui_action_moderate(room_id);
 }
 
+static void handle_kick_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_kick_prompt(room_id);
+}
+
+static void handle_ban_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_ban_prompt(room_id);
+}
+
+static void handle_unban_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_unban_prompt(room_id);
+}
+
 static void handle_moderate_user_signal(const char *payload, gpointer user_data) {
   char *room_id = NULL;
   char *user_id = NULL;
@@ -229,6 +255,30 @@ static void handle_user_info_signal(const char *payload, gpointer user_data) {
     return;
   }
   matrix_ui_action_user_info(payload, NULL);
+}
+
+static void handle_ignore_user_signal(const char *payload, gpointer user_data) {
+  char *room_id = NULL;
+  char *user_id = NULL;
+  if (split_room_and_user(payload, &room_id, &user_id)) {
+    matrix_ui_action_ignore_user(room_id, user_id);
+    g_free(room_id);
+    g_free(user_id);
+    return;
+  }
+  matrix_ui_action_ignore_user(payload, NULL);
+}
+
+static void handle_unignore_user_signal(const char *payload, gpointer user_data) {
+  char *room_id = NULL;
+  char *user_id = NULL;
+  if (split_room_and_user(payload, &room_id, &user_id)) {
+    matrix_ui_action_unignore_user(room_id, user_id);
+    g_free(room_id);
+    g_free(user_id);
+    return;
+  }
+  matrix_ui_action_unignore_user(payload, NULL);
 }
 
 static void handle_leave_room_signal(const char *room_id, gpointer user_data) {
@@ -263,6 +313,10 @@ static void handle_mark_unread_signal(const char *room_id, gpointer user_data) {
   matrix_ui_action_mark_unread(room_id);
 }
 
+static void handle_mark_read_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_mark_read(room_id);
+}
+
 static void handle_mute_room_signal(const char *room_id, gpointer user_data) {
   matrix_ui_action_set_room_mute(room_id, true);
 }
@@ -273,6 +327,166 @@ static void handle_unmute_room_signal(const char *room_id, gpointer user_data) {
 
 static void handle_search_room_signal(const char *room_id, gpointer user_data) {
   matrix_ui_action_search_room(room_id);
+}
+
+static void handle_list_polls_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_list_polls(room_id);
+}
+
+static void handle_react_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_react(room_id);
+}
+
+static void handle_send_location_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_send_location(room_id);
+}
+
+static void handle_who_read_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_who_read(room_id);
+}
+
+static void handle_report_event_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_report_event(room_id);
+}
+
+static void handle_message_inspector_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_message_inspector(room_id);
+}
+
+static void handle_reply_pick_event_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_reply_pick_event(room_id);
+}
+
+static void handle_thread_pick_event_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_thread_pick_event(room_id);
+}
+
+static void handle_react_pick_event_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_react_pick_event(room_id);
+}
+
+static void handle_edit_pick_event_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_edit_pick_event(room_id);
+}
+
+static void handle_redact_pick_event_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_redact_pick_event(room_id);
+}
+
+static void handle_report_pick_event_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_report_pick_event(room_id);
+}
+
+static void handle_search_users_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_search_users(room_id);
+}
+
+static void handle_search_public_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_search_public(room_id);
+}
+
+static void handle_search_members_global_signal(const char *room_id,
+                                                gpointer user_data) {
+  matrix_ui_action_search_members_global(room_id);
+}
+
+static void handle_search_room_global_signal(const char *room_id,
+                                             gpointer user_data) {
+  matrix_ui_action_search_room_global(room_id);
+}
+
+static void handle_discover_public_rooms_signal(const char *room_id,
+                                                gpointer user_data) {
+  matrix_ui_action_discover_public_rooms(room_id);
+}
+
+static void handle_discover_room_preview_signal(const char *room_id,
+                                                gpointer user_data) {
+  matrix_ui_action_discover_room_preview(room_id);
+}
+
+static void handle_redact_event_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_redact_event_prompt(room_id);
+}
+
+static void handle_edit_event_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_edit_event_prompt(room_id);
+}
+
+static void handle_react_latest_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_react_latest(room_id);
+}
+
+static void handle_edit_latest_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_edit_latest(room_id);
+}
+
+static void handle_redact_latest_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_redact_latest(room_id);
+}
+
+static void handle_report_latest_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_report_latest(room_id);
+}
+
+static void handle_versions_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_versions(room_id);
+}
+
+static void handle_enable_key_backup_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_enable_key_backup(room_id);
+}
+
+static void handle_my_profile_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_my_profile(room_id);
+}
+
+static void handle_server_info_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_server_info(room_id);
+}
+
+static void handle_resync_recent_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_resync_recent_history(room_id);
+}
+
+static void handle_search_stickers_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_search_stickers(room_id);
+}
+
+static void handle_recover_keys_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_recover_keys_prompt(room_id);
+}
+
+static void handle_export_keys_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_export_keys_prompt(room_id);
+}
+
+static void handle_set_avatar_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_set_avatar_prompt(room_id);
+}
+
+static void handle_room_tag_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_room_tag_prompt(room_id);
+}
+
+static void handle_upgrade_room_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_upgrade_room_prompt(room_id);
+}
+
+static void handle_alias_create_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_alias_create_prompt(room_id);
+}
+
+static void handle_alias_delete_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_alias_delete_prompt(room_id);
+}
+
+static void handle_space_hierarchy_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_space_hierarchy_prompt(room_id);
+}
+
+static void handle_knock_signal(const char *room_id, gpointer user_data) {
+  matrix_ui_action_knock_prompt(room_id);
 }
 
 static void handle_list_threads_signal(const char *room_id,
@@ -505,6 +719,9 @@ static gboolean plugin_load(PurplePlugin *plugin) {
   purple_signal_register(plugin, "matrix-ui-action-reply",
                          handle_ui_action_marshal, NULL, 1,
                          purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-start-thread",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
   purple_signal_register(plugin, "matrix-ui-action-list-threads",
                          handle_ui_action_marshal, NULL, 1,
                          purple_value_new(PURPLE_TYPE_STRING));
@@ -529,13 +746,31 @@ static gboolean plugin_load(PurplePlugin *plugin) {
   purple_signal_register(plugin, "matrix-ui-action-show-members",
                          handle_ui_action_marshal, NULL, 1,
                          purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-join-room",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
   purple_signal_register(plugin, "matrix-ui-action-moderate",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-kick",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-ban",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-unban",
                          handle_ui_action_marshal, NULL, 1,
                          purple_value_new(PURPLE_TYPE_STRING));
   purple_signal_register(plugin, "matrix-ui-action-moderate-user",
                          handle_ui_action_marshal, NULL, 1,
                          purple_value_new(PURPLE_TYPE_STRING));
   purple_signal_register(plugin, "matrix-ui-action-user-info",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-ignore-user",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-unignore-user",
                          handle_ui_action_marshal, NULL, 1,
                          purple_value_new(PURPLE_TYPE_STRING));
   purple_signal_register(plugin, "matrix-ui-action-leave-room",
@@ -562,6 +797,9 @@ static gboolean plugin_load(PurplePlugin *plugin) {
   purple_signal_register(plugin, "matrix-ui-action-mark-unread",
                          handle_ui_action_marshal, NULL, 1,
                          purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-mark-read",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
   purple_signal_register(plugin, "matrix-ui-action-mute-room",
                          handle_ui_action_marshal, NULL, 1,
                          purple_value_new(PURPLE_TYPE_STRING));
@@ -569,6 +807,123 @@ static gboolean plugin_load(PurplePlugin *plugin) {
                          handle_ui_action_marshal, NULL, 1,
                          purple_value_new(PURPLE_TYPE_STRING));
   purple_signal_register(plugin, "matrix-ui-action-search-room",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-list-polls",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-react",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-send-location",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-who-read",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-report-event",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-message-inspector",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-reply-pick-event",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-thread-pick-event",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-react-pick-event",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-edit-pick-event",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-redact-pick-event",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-report-pick-event",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-search-users",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-search-public",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-search-members-global",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-search-room-global",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-discover-public-rooms",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-discover-room-preview",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-redact-event",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-edit-event",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-react-latest",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-edit-latest",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-redact-latest",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-report-latest",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-versions",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-enable-key-backup",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-my-profile",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-server-info",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-resync-recent",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-search-stickers",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-recover-keys",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-export-keys",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-set-avatar",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-room-tag",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-upgrade-room",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-alias-create",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-alias-delete",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-space-hierarchy",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-knock",
                          handle_ui_action_marshal, NULL, 1,
                          purple_value_new(PURPLE_TYPE_STRING));
 
@@ -587,6 +942,8 @@ static gboolean plugin_load(PurplePlugin *plugin) {
                         PURPLE_CALLBACK(handle_show_dashboard_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-reply", plugin,
                         PURPLE_CALLBACK(handle_reply_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-start-thread", plugin,
+                        PURPLE_CALLBACK(handle_start_thread_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-list-threads", plugin,
                         PURPLE_CALLBACK(handle_list_threads_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-sticker", plugin,
@@ -603,12 +960,24 @@ static gboolean plugin_load(PurplePlugin *plugin) {
                         PURPLE_CALLBACK(handle_set_account_defaults_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-show-members", plugin,
                         PURPLE_CALLBACK(handle_show_members_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-join-room", plugin,
+                        PURPLE_CALLBACK(handle_join_room_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-moderate", plugin,
                         PURPLE_CALLBACK(handle_moderate_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-kick", plugin,
+                        PURPLE_CALLBACK(handle_kick_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-ban", plugin,
+                        PURPLE_CALLBACK(handle_ban_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-unban", plugin,
+                        PURPLE_CALLBACK(handle_unban_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-moderate-user", plugin,
                         PURPLE_CALLBACK(handle_moderate_user_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-user-info", plugin,
                         PURPLE_CALLBACK(handle_user_info_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-ignore-user", plugin,
+                        PURPLE_CALLBACK(handle_ignore_user_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-unignore-user", plugin,
+                        PURPLE_CALLBACK(handle_unignore_user_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-leave-room", plugin,
                         PURPLE_CALLBACK(handle_leave_room_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-verify-self", plugin,
@@ -625,12 +994,92 @@ static gboolean plugin_load(PurplePlugin *plugin) {
                         PURPLE_CALLBACK(handle_send_file_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-mark-unread", plugin,
                         PURPLE_CALLBACK(handle_mark_unread_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-mark-read", plugin,
+                        PURPLE_CALLBACK(handle_mark_read_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-mute-room", plugin,
                         PURPLE_CALLBACK(handle_mute_room_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-unmute-room", plugin,
                         PURPLE_CALLBACK(handle_unmute_room_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-search-room", plugin,
                         PURPLE_CALLBACK(handle_search_room_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-list-polls", plugin,
+                        PURPLE_CALLBACK(handle_list_polls_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-react", plugin,
+                        PURPLE_CALLBACK(handle_react_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-send-location", plugin,
+                        PURPLE_CALLBACK(handle_send_location_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-who-read", plugin,
+                        PURPLE_CALLBACK(handle_who_read_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-report-event", plugin,
+                        PURPLE_CALLBACK(handle_report_event_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-message-inspector", plugin,
+                        PURPLE_CALLBACK(handle_message_inspector_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-reply-pick-event", plugin,
+                        PURPLE_CALLBACK(handle_reply_pick_event_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-thread-pick-event", plugin,
+                        PURPLE_CALLBACK(handle_thread_pick_event_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-react-pick-event", plugin,
+                        PURPLE_CALLBACK(handle_react_pick_event_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-edit-pick-event", plugin,
+                        PURPLE_CALLBACK(handle_edit_pick_event_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-redact-pick-event", plugin,
+                        PURPLE_CALLBACK(handle_redact_pick_event_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-report-pick-event", plugin,
+                        PURPLE_CALLBACK(handle_report_pick_event_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-search-users", plugin,
+                        PURPLE_CALLBACK(handle_search_users_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-search-public", plugin,
+                        PURPLE_CALLBACK(handle_search_public_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-search-members-global", plugin,
+                        PURPLE_CALLBACK(handle_search_members_global_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-search-room-global", plugin,
+                        PURPLE_CALLBACK(handle_search_room_global_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-discover-public-rooms", plugin,
+                        PURPLE_CALLBACK(handle_discover_public_rooms_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-discover-room-preview", plugin,
+                        PURPLE_CALLBACK(handle_discover_room_preview_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-redact-event", plugin,
+                        PURPLE_CALLBACK(handle_redact_event_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-edit-event", plugin,
+                        PURPLE_CALLBACK(handle_edit_event_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-react-latest", plugin,
+                        PURPLE_CALLBACK(handle_react_latest_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-edit-latest", plugin,
+                        PURPLE_CALLBACK(handle_edit_latest_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-redact-latest", plugin,
+                        PURPLE_CALLBACK(handle_redact_latest_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-report-latest", plugin,
+                        PURPLE_CALLBACK(handle_report_latest_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-versions", plugin,
+                        PURPLE_CALLBACK(handle_versions_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-enable-key-backup", plugin,
+                        PURPLE_CALLBACK(handle_enable_key_backup_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-my-profile", plugin,
+                        PURPLE_CALLBACK(handle_my_profile_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-server-info", plugin,
+                        PURPLE_CALLBACK(handle_server_info_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-resync-recent", plugin,
+                        PURPLE_CALLBACK(handle_resync_recent_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-search-stickers", plugin,
+                        PURPLE_CALLBACK(handle_search_stickers_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-recover-keys", plugin,
+                        PURPLE_CALLBACK(handle_recover_keys_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-export-keys", plugin,
+                        PURPLE_CALLBACK(handle_export_keys_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-set-avatar", plugin,
+                        PURPLE_CALLBACK(handle_set_avatar_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-room-tag", plugin,
+                        PURPLE_CALLBACK(handle_room_tag_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-upgrade-room", plugin,
+                        PURPLE_CALLBACK(handle_upgrade_room_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-alias-create", plugin,
+                        PURPLE_CALLBACK(handle_alias_create_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-alias-delete", plugin,
+                        PURPLE_CALLBACK(handle_alias_delete_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-space-hierarchy", plugin,
+                        PURPLE_CALLBACK(handle_space_hierarchy_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-knock", plugin,
+                        PURPLE_CALLBACK(handle_knock_signal), NULL);
 
   if (purple_get_core() != NULL && purple_conversations_get_handle() != NULL)
     connect_signals();
