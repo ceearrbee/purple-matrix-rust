@@ -81,6 +81,8 @@ void room_settings_dialog_cb(void *user_data, PurpleRequestFields *fields);
 static PurpleCmdRet cmd_sticker_list(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
 static const char *matrix_last_event_for_room(PurpleAccount *account, const char *room_id);
 static void matrix_ui_open_thread_from_event(const char *room_id, const char *event_id);
+static void matrix_ui_set_picker_last_event_id(const char *room_id, const char *event_id);
+static const char *matrix_ui_get_picker_last_event_id(const char *room_id);
 
 static PurpleAccount *matrix_action_account(PurplePluginAction *action) {
     if (action && action->context) {
@@ -998,7 +1000,9 @@ typedef enum {
     MATRIX_EVENT_PICK_OPEN_DM,
     MATRIX_EVENT_PICK_COPY_EVENT_ID,
     MATRIX_EVENT_PICK_COPY_SENDER_ID,
-    MATRIX_EVENT_PICK_COPY_ROOM_ID
+    MATRIX_EVENT_PICK_COPY_ROOM_ID,
+    MATRIX_EVENT_PICK_SHOW_EVENT_DETAILS,
+    MATRIX_EVENT_PICK_COPY_THREAD_ROOT_ID
 } MatrixEventPickAction;
 
 typedef struct {
@@ -1088,6 +1092,96 @@ static void matrix_ui_pick_report_reason_cb(void *user_data, const char *reason)
     }
 }
 
+static void matrix_ui_show_event_details(const char *room_id, const char *event_id) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = NULL;
+    int i;
+    if (!account || !room_id || !*room_id || !event_id || !*event_id) return;
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (!conv) return;
+
+    for (i = 0; i < 10; ++i) {
+        char key_id[64], key_sender[64], key_msg[64], key_ts[64], key_enc[64], key_thread[64];
+        const char *id = NULL;
+        const char *sender = NULL;
+        const char *msg = NULL;
+        const char *ts = NULL;
+        const char *enc = NULL;
+        const char *thread = NULL;
+        char tbuf[64];
+        char *details = NULL;
+        guint64 ms = 0;
+        time_t secs = 0;
+        struct tm *tm_info = NULL;
+
+        g_snprintf(key_id, sizeof(key_id), "matrix_recent_event_id_%d", i);
+        g_snprintf(key_sender, sizeof(key_sender), "matrix_recent_event_sender_%d", i);
+        g_snprintf(key_msg, sizeof(key_msg), "matrix_recent_event_msg_%d", i);
+        g_snprintf(key_ts, sizeof(key_ts), "matrix_recent_event_ts_%d", i);
+        g_snprintf(key_enc, sizeof(key_enc), "matrix_recent_event_enc_%d", i);
+        g_snprintf(key_thread, sizeof(key_thread), "matrix_recent_event_thread_%d", i);
+
+        id = purple_conversation_get_data(conv, key_id);
+        if (!id || strcmp(id, event_id) != 0) continue;
+
+        sender = purple_conversation_get_data(conv, key_sender);
+        msg = purple_conversation_get_data(conv, key_msg);
+        ts = purple_conversation_get_data(conv, key_ts);
+        enc = purple_conversation_get_data(conv, key_enc);
+        thread = purple_conversation_get_data(conv, key_thread);
+
+        if (ts && *ts) {
+            ms = g_ascii_strtoull(ts, NULL, 10);
+            secs = (time_t)(ms / 1000);
+            tm_info = localtime(&secs);
+            if (tm_info) strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", tm_info);
+            else g_strlcpy(tbuf, "unknown", sizeof(tbuf));
+        } else {
+            g_strlcpy(tbuf, "unknown", sizeof(tbuf));
+        }
+
+        details = g_strdup_printf(
+            "Event ID: %s\nRoom ID: %s\nSender: %s\nThread Root: %s\nEncrypted: %s\nTimestamp: %s\nSnippet: %s",
+            event_id,
+            room_id,
+            (sender && *sender) ? sender : "(unknown)",
+            (thread && *thread) ? thread : "(none)",
+            (enc && strcmp(enc, "1") == 0) ? "yes" : "no",
+            tbuf,
+            (msg && *msg) ? msg : "(none)");
+        purple_notify_info(my_plugin, "Event Details", "Selected Matrix Event", details);
+        g_free(details);
+        return;
+    }
+
+    purple_notify_info(my_plugin, "Event Details", "Selected Matrix Event",
+                       "Event not found in recent cache. Try after new timeline events arrive.");
+}
+
+static char *matrix_ui_event_thread_root_exact_for_room_event(const char *room_id,
+                                                               const char *event_id) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = NULL;
+    int i;
+    if (!account || !room_id || !*room_id || !event_id || !*event_id) return NULL;
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (!conv) return NULL;
+    for (i = 0; i < 10; ++i) {
+        char key_id[64];
+        char key_thread[64];
+        const char *id = NULL;
+        const char *thread = NULL;
+        g_snprintf(key_id, sizeof(key_id), "matrix_recent_event_id_%d", i);
+        g_snprintf(key_thread, sizeof(key_thread), "matrix_recent_event_thread_%d", i);
+        id = purple_conversation_get_data(conv, key_id);
+        if (!id || strcmp(id, event_id) != 0) continue;
+        thread = purple_conversation_get_data(conv, key_thread);
+        if (thread && *thread) return g_strdup(thread);
+        return NULL;
+    }
+    return NULL;
+}
+
 static void matrix_ui_open_event_action_dialog(const char *room_id, const char *event_id,
                                                MatrixEventPickAction action) {
     PurpleAccount *account = find_matrix_account();
@@ -1149,6 +1243,23 @@ static void matrix_ui_open_event_action_dialog(const char *room_id, const char *
 
     if (action == MATRIX_EVENT_PICK_COPY_ROOM_ID) {
         purple_notify_info(my_plugin, "Room ID", "Current Room ID", room_id);
+        return;
+    }
+
+    if (action == MATRIX_EVENT_PICK_SHOW_EVENT_DETAILS) {
+        matrix_ui_show_event_details(room_id, event_id);
+        return;
+    }
+
+    if (action == MATRIX_EVENT_PICK_COPY_THREAD_ROOT_ID) {
+        char *thread_root = matrix_ui_event_thread_root_exact_for_room_event(room_id, event_id);
+        if (thread_root && *thread_root) {
+            purple_notify_info(my_plugin, "Thread Root ID", "Selected Event Thread Root", thread_root);
+        } else {
+            purple_notify_info(my_plugin, "Thread Root ID", "Selected Event Thread Root",
+                               "Selected event is not in a thread (no explicit thread root).");
+        }
+        if (thread_root) g_free(thread_root);
         return;
     }
 
@@ -1275,6 +1386,7 @@ static void matrix_ui_event_pick_selected_cb(void *user_data, PurpleRequestField
     if (!selected) goto out;
     event_id = (const char *)purple_request_field_list_get_data(field, (const char *)selected->data);
     if (event_id && *event_id) {
+        matrix_ui_set_picker_last_event_id(ctx->room_id, event_id);
         matrix_ui_open_event_action_dialog(ctx->room_id, event_id, ctx->action);
     }
 out:
@@ -1290,12 +1402,15 @@ static void matrix_ui_event_pick_show(const char *room_id, MatrixEventPickAction
     PurpleRequestFieldGroup *group = NULL;
     PurpleRequestField *list = NULL;
     MatrixUiEventPickCtx *ctx = NULL;
+    const char *last_event_id = NULL;
+    char *selected_label = NULL;
     int added = 0;
     int i = 0;
 
     if (!account || !room_id || !*room_id) return;
     conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
     if (!conv) return;
+    last_event_id = matrix_ui_get_picker_last_event_id(room_id);
 
     fields = purple_request_fields_new();
     group = purple_request_field_group_new("Recent Events");
@@ -1347,6 +1462,10 @@ static void matrix_ui_event_pick_show(const char *room_id, MatrixEventPickAction
             (thread && *thread) ? "[thread] " : "",
             tbuf);
         purple_request_field_list_add(list, label, g_strdup(event_id));
+        if (!selected_label && last_event_id && *last_event_id &&
+            strcmp(last_event_id, event_id) == 0) {
+            selected_label = g_strdup(label);
+        }
         g_free(label);
         added++;
     }
@@ -1360,9 +1479,14 @@ static void matrix_ui_event_pick_show(const char *room_id, MatrixEventPickAction
     }
 
     if (added == 0) {
+        if (selected_label) g_free(selected_label);
         purple_notify_error(my_plugin, "Event Target", "No event history available",
             "No recent events are cached for this room yet.");
         return;
+    }
+    if (selected_label) {
+        purple_request_field_list_add_selected(list, selected_label);
+        g_free(selected_label);
     }
 
     ctx = g_new0(MatrixUiEventPickCtx, 1);
@@ -1376,6 +1500,74 @@ static void matrix_ui_event_pick_show(const char *room_id, MatrixEventPickAction
 typedef struct {
     char *room_id;
 } MatrixUiInspectorCtx;
+
+static void matrix_ui_set_inspector_last_action(const char *room_id, int action_choice) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = NULL;
+    char buf[16];
+    if (!account || !room_id || !*room_id) return;
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (!conv) return;
+    g_snprintf(buf, sizeof(buf), "%d", action_choice);
+    g_free(purple_conversation_get_data(conv, "matrix_inspector_last_action"));
+    purple_conversation_set_data(conv, "matrix_inspector_last_action", g_strdup(buf));
+}
+
+static void matrix_ui_set_inspector_last_event_id(const char *room_id, const char *event_id) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = NULL;
+    if (!account || !room_id || !*room_id) return;
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (!conv) return;
+    g_free(purple_conversation_get_data(conv, "matrix_inspector_last_event_id"));
+    purple_conversation_set_data(conv, "matrix_inspector_last_event_id",
+                                 event_id ? g_strdup(event_id) : NULL);
+}
+
+static void matrix_ui_set_picker_last_event_id(const char *room_id, const char *event_id) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = NULL;
+    if (!account || !room_id || !*room_id) return;
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (!conv) return;
+    g_free(purple_conversation_get_data(conv, "matrix_picker_last_event_id"));
+    purple_conversation_set_data(conv, "matrix_picker_last_event_id",
+                                 event_id ? g_strdup(event_id) : NULL);
+}
+
+static const char *matrix_ui_get_picker_last_event_id(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = NULL;
+    if (!account || !room_id || !*room_id) return NULL;
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (!conv) return NULL;
+    return purple_conversation_get_data(conv, "matrix_picker_last_event_id");
+}
+
+static const char *matrix_ui_get_inspector_last_event_id(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = NULL;
+    if (!account || !room_id || !*room_id) return NULL;
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (!conv) return NULL;
+    return purple_conversation_get_data(conv, "matrix_inspector_last_event_id");
+}
+
+static int matrix_ui_get_inspector_last_action(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = NULL;
+    const char *v = NULL;
+    char *end = NULL;
+    long parsed = 0;
+    if (!account || !room_id || !*room_id) return 0;
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (!conv) return 0;
+    v = purple_conversation_get_data(conv, "matrix_inspector_last_action");
+    if (!v || !*v) return 0;
+    parsed = strtol(v, &end, 10);
+    if (!end || *end != '\0' || parsed < 0 || parsed > 16) return 0;
+    return (int)parsed;
+}
 
 static void matrix_ui_message_inspector_exec_cb(void *user_data, PurpleRequestFields *fields) {
     MatrixUiInspectorCtx *ctx = (MatrixUiInspectorCtx *)user_data;
@@ -1398,6 +1590,8 @@ static void matrix_ui_message_inspector_exec_cb(void *user_data, PurpleRequestFi
     if (!event_id || !*event_id) goto out;
 
     action_choice = purple_request_field_choice_get_value(action_field);
+    matrix_ui_set_inspector_last_action(ctx->room_id, action_choice);
+    matrix_ui_set_inspector_last_event_id(ctx->room_id, event_id);
     switch (action_choice) {
         case 0: action = MATRIX_EVENT_PICK_REPLY; break;
         case 1: action = MATRIX_EVENT_PICK_THREAD; break;
@@ -1414,6 +1608,8 @@ static void matrix_ui_message_inspector_exec_cb(void *user_data, PurpleRequestFi
         case 12: action = MATRIX_EVENT_PICK_COPY_EVENT_ID; break;
         case 13: action = MATRIX_EVENT_PICK_COPY_SENDER_ID; break;
         case 14: action = MATRIX_EVENT_PICK_COPY_ROOM_ID; break;
+        case 15: action = MATRIX_EVENT_PICK_SHOW_EVENT_DETAILS; break;
+        case 16: action = MATRIX_EVENT_PICK_COPY_THREAD_ROOT_ID; break;
         default: action = MATRIX_EVENT_PICK_REPLY; break;
     }
 
@@ -1463,12 +1659,15 @@ void matrix_ui_action_message_inspector(const char *room_id) {
     PurpleRequestField *event_list = NULL;
     PurpleRequestField *action_choice = NULL;
     MatrixUiInspectorCtx *ctx = NULL;
+    const char *last_event_id = NULL;
+    char *selected_label = NULL;
     int i;
     int added = 0;
 
     if (!account || !room_id || !*room_id) return;
     conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
     if (!conv) return;
+    last_event_id = matrix_ui_get_inspector_last_event_id(room_id);
 
     fields = purple_request_fields_new();
     group = purple_request_field_group_new("Target");
@@ -1520,6 +1719,10 @@ void matrix_ui_action_message_inspector(const char *room_id) {
             (thread && *thread) ? "[thread] " : "",
             tbuf);
         purple_request_field_list_add(event_list, label, g_strdup(event_id));
+        if (!selected_label && last_event_id && *last_event_id &&
+            strcmp(last_event_id, event_id) == 0) {
+            selected_label = g_strdup(label);
+        }
         g_free(label);
         added++;
     }
@@ -1537,8 +1740,13 @@ void matrix_ui_action_message_inspector(const char *room_id) {
             "No recent events are cached for this room yet.");
         return;
     }
+    if (selected_label) {
+        purple_request_field_list_add_selected(event_list, selected_label);
+        g_free(selected_label);
+    }
 
-    action_choice = purple_request_field_choice_new("action", "Action", 0);
+    action_choice = purple_request_field_choice_new("action", "Action",
+        matrix_ui_get_inspector_last_action(room_id));
     purple_request_field_choice_add(action_choice, "Reply");
     purple_request_field_choice_add(action_choice, "Start Thread");
     purple_request_field_choice_add(action_choice, "Open Thread");
@@ -1554,6 +1762,8 @@ void matrix_ui_action_message_inspector(const char *room_id) {
     purple_request_field_choice_add(action_choice, "Copy/Show Event ID");
     purple_request_field_choice_add(action_choice, "Copy/Show Sender ID");
     purple_request_field_choice_add(action_choice, "Copy/Show Room ID");
+    purple_request_field_choice_add(action_choice, "Show Event Details");
+    purple_request_field_choice_add(action_choice, "Copy/Show Thread Root ID");
     purple_request_field_group_add_field(group, action_choice);
 
     ctx = g_new0(MatrixUiInspectorCtx, 1);
