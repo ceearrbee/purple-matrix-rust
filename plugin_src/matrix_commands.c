@@ -996,7 +996,9 @@ typedef enum {
     MATRIX_EVENT_PICK_IGNORE_USER,
     MATRIX_EVENT_PICK_UNIGNORE_USER,
     MATRIX_EVENT_PICK_OPEN_DM,
-    MATRIX_EVENT_PICK_COPY_EVENT_ID
+    MATRIX_EVENT_PICK_COPY_EVENT_ID,
+    MATRIX_EVENT_PICK_COPY_SENDER_ID,
+    MATRIX_EVENT_PICK_COPY_ROOM_ID
 } MatrixEventPickAction;
 
 typedef struct {
@@ -1142,6 +1144,11 @@ static void matrix_ui_open_event_action_dialog(const char *room_id, const char *
 
     if (action == MATRIX_EVENT_PICK_COPY_EVENT_ID) {
         purple_notify_info(my_plugin, "Event ID", "Selected Event ID", event_id);
+        return;
+    }
+
+    if (action == MATRIX_EVENT_PICK_COPY_ROOM_ID) {
+        purple_notify_info(my_plugin, "Room ID", "Current Room ID", room_id);
         return;
     }
 
@@ -1405,6 +1412,8 @@ static void matrix_ui_message_inspector_exec_cb(void *user_data, PurpleRequestFi
         case 10: action = MATRIX_EVENT_PICK_UNIGNORE_USER; break;
         case 11: action = MATRIX_EVENT_PICK_OPEN_DM; break;
         case 12: action = MATRIX_EVENT_PICK_COPY_EVENT_ID; break;
+        case 13: action = MATRIX_EVENT_PICK_COPY_SENDER_ID; break;
+        case 14: action = MATRIX_EVENT_PICK_COPY_ROOM_ID; break;
         default: action = MATRIX_EVENT_PICK_REPLY; break;
     }
 
@@ -1412,6 +1421,7 @@ static void matrix_ui_message_inspector_exec_cb(void *user_data, PurpleRequestFi
         action == MATRIX_EVENT_PICK_MODERATE_USER ||
         action == MATRIX_EVENT_PICK_IGNORE_USER ||
         action == MATRIX_EVENT_PICK_UNIGNORE_USER ||
+        action == MATRIX_EVENT_PICK_COPY_SENDER_ID ||
         action == MATRIX_EVENT_PICK_OPEN_DM) {
         sender_user_id = matrix_ui_event_sender_for_room_event(ctx->room_id, event_id);
         if (!sender_user_id || !*sender_user_id) goto out;
@@ -1430,6 +1440,8 @@ static void matrix_ui_message_inspector_exec_cb(void *user_data, PurpleRequestFi
                 purple_notify_error(my_plugin, "Open DM", "Invalid Matrix user ID",
                     "Selected event sender is not a valid Matrix user ID.");
             }
+        } else if (action == MATRIX_EVENT_PICK_COPY_SENDER_ID) {
+            purple_notify_info(my_plugin, "Sender ID", "Selected Event Sender", sender_user_id);
         }
         goto out;
     }
@@ -1540,6 +1552,8 @@ void matrix_ui_action_message_inspector(const char *room_id) {
     purple_request_field_choice_add(action_choice, "Unignore Sender");
     purple_request_field_choice_add(action_choice, "Open DM with Sender");
     purple_request_field_choice_add(action_choice, "Copy/Show Event ID");
+    purple_request_field_choice_add(action_choice, "Copy/Show Sender ID");
+    purple_request_field_choice_add(action_choice, "Copy/Show Room ID");
     purple_request_field_group_add_field(group, action_choice);
 
     ctx = g_new0(MatrixUiInspectorCtx, 1);
