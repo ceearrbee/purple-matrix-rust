@@ -42,6 +42,7 @@ void matrix_ui_action_send_location(const char *room_id);
 void matrix_ui_action_who_read(const char *room_id);
 void matrix_ui_action_report_event(const char *room_id);
 void matrix_ui_action_message_inspector(const char *room_id);
+void matrix_ui_action_show_last_event_details(const char *room_id);
 void matrix_ui_action_reply_pick_event(const char *room_id);
 void matrix_ui_action_thread_pick_event(const char *room_id);
 void matrix_ui_action_react_pick_event(const char *room_id);

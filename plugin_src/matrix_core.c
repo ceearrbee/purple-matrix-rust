@@ -353,6 +353,11 @@ static void handle_message_inspector_signal(const char *room_id, gpointer user_d
   matrix_ui_action_message_inspector(room_id);
 }
 
+static void handle_show_last_event_details_signal(const char *room_id,
+                                                  gpointer user_data) {
+  matrix_ui_action_show_last_event_details(room_id);
+}
+
 static void handle_reply_pick_event_signal(const char *room_id, gpointer user_data) {
   matrix_ui_action_reply_pick_event(room_id);
 }
@@ -525,6 +530,25 @@ static void handle_room_encrypted_marshal(PurpleCallback cb, va_list args,
   const char *arg1 = va_arg(args, const char *);
   gboolean arg2 = va_arg(args, gboolean);
   callback(arg1, arg2, data);
+}
+
+static void handle_room_muted_marshal(PurpleCallback cb, va_list args,
+                                      void *data, void **return_val) {
+  void (*callback)(const char *, gboolean, void *) =
+      (void (*)(const char *, gboolean, void *))cb;
+  const char *arg1 = va_arg(args, const char *);
+  gboolean arg2 = va_arg(args, gboolean);
+  callback(arg1, arg2, data);
+}
+
+static void handle_room_activity_marshal(PurpleCallback cb, va_list args,
+                                         void *data, void **return_val) {
+  void (*callback)(const char *, const char *, const char *, void *) =
+      (void (*)(const char *, const char *, const char *, void *))cb;
+  const char *arg1 = va_arg(args, const char *);
+  const char *arg2 = va_arg(args, const char *);
+  const char *arg3 = va_arg(args, const char *);
+  callback(arg1, arg2, arg3, data);
 }
 
 static gboolean poll_rust_channel_cb(gpointer user_data) {
@@ -827,6 +851,9 @@ static gboolean plugin_load(PurplePlugin *plugin) {
   purple_signal_register(plugin, "matrix-ui-action-message-inspector",
                          handle_ui_action_marshal, NULL, 1,
                          purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-show-last-event-details",
+                         handle_ui_action_marshal, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
   purple_signal_register(plugin, "matrix-ui-action-reply-pick-event",
                          handle_ui_action_marshal, NULL, 1,
                          purple_value_new(PURPLE_TYPE_STRING));
@@ -937,6 +964,15 @@ static gboolean plugin_load(PurplePlugin *plugin) {
                          handle_room_encrypted_marshal, NULL, 2,
                          purple_value_new(PURPLE_TYPE_STRING),
                          purple_value_new(PURPLE_TYPE_BOOLEAN));
+  purple_signal_register(plugin, "matrix-ui-room-muted",
+                         handle_room_muted_marshal, NULL, 2,
+                         purple_value_new(PURPLE_TYPE_STRING),
+                         purple_value_new(PURPLE_TYPE_BOOLEAN));
+  purple_signal_register(plugin, "matrix-ui-room-activity",
+                         handle_room_activity_marshal, NULL, 3,
+                         purple_value_new(PURPLE_TYPE_STRING),
+                         purple_value_new(PURPLE_TYPE_STRING),
+                         purple_value_new(PURPLE_TYPE_STRING));
 
   purple_signal_connect(plugin, "matrix-ui-action-show-dashboard", plugin,
                         PURPLE_CALLBACK(handle_show_dashboard_signal), NULL);
@@ -1014,6 +1050,10 @@ static gboolean plugin_load(PurplePlugin *plugin) {
                         PURPLE_CALLBACK(handle_report_event_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-message-inspector", plugin,
                         PURPLE_CALLBACK(handle_message_inspector_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-show-last-event-details",
+                        plugin,
+                        PURPLE_CALLBACK(handle_show_last_event_details_signal),
+                        NULL);
   purple_signal_connect(plugin, "matrix-ui-action-reply-pick-event", plugin,
                         PURPLE_CALLBACK(handle_reply_pick_event_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-thread-pick-event", plugin,

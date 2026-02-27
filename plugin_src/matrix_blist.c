@@ -201,6 +201,27 @@ void room_left_callback(const char *user_id, const char *room_id) {
 }
 
 void room_mute_callback(const char *user_id, const char *room_id, bool muted) {
+  PurpleAccount *account = find_matrix_account_by_id(user_id);
+  GList *convs = NULL;
+  char state[2];
+  if (!account || !room_id || !*room_id) return;
+  g_snprintf(state, sizeof(state), "%d", muted ? 1 : 0);
+
+  convs = purple_get_conversations();
+  for (GList *it = convs; it; it = it->next) {
+    PurpleConversation *conv = (PurpleConversation *)it->data;
+    const char *cid = NULL;
+    if (!conv) continue;
+    if (purple_conversation_get_account(conv) != account) continue;
+    cid = purple_conversation_get_name(conv);
+    if (!cid || !*cid) continue;
+    if (strcmp(cid, room_id) == 0 ||
+        (g_str_has_prefix(cid, room_id) && cid[strlen(room_id)] == '|')) {
+      g_free(purple_conversation_get_data(conv, "matrix_room_muted"));
+      purple_conversation_set_data(conv, "matrix_room_muted", g_strdup(state));
+    }
+  }
+  purple_signal_emit(my_plugin, "matrix-ui-room-muted", room_id, muted);
 }
 
 void room_tag_callback(const char *user_id, const char *room_id, const char *tag) {

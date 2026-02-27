@@ -70,6 +70,7 @@ static PurpleCmdRet cmd_power_levels(PurpleConversation *conv, const gchar *cmd,
 static PurpleCmdRet cmd_ignore_user(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
 static PurpleCmdRet cmd_unignore_user(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
 static PurpleCmdRet cmd_message_inspector(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
+static PurpleCmdRet cmd_last_event_details(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data);
 static void action_my_profile_cb(PurplePluginAction *action);
 static void my_profile_avatar_cb(void *user_data, const char *filename);
 static void menu_action_reply_dialog_cb(void *user_data, const char *text);
@@ -913,8 +914,16 @@ void matrix_ui_action_mark_read(const char *room_id) {
 
 void matrix_ui_action_set_room_mute(const char *room_id, bool muted) {
     PurpleAccount *account = find_matrix_account();
+    PurpleConversation *conv = NULL;
+    char state[2];
     if (!account || !room_id || !*room_id) return;
     purple_matrix_rust_set_room_mute_state(purple_account_get_username(account), room_id, muted);
+    conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+    if (conv) {
+        g_snprintf(state, sizeof(state), "%d", muted ? 1 : 0);
+        g_free(purple_conversation_get_data(conv, "matrix_room_muted"));
+        purple_conversation_set_data(conv, "matrix_room_muted", g_strdup(state));
+    }
 }
 
 static void matrix_ui_search_room_cb(void *user_data, const char *term) {
@@ -1773,6 +1782,19 @@ void matrix_ui_action_message_inspector(const char *room_id) {
         account, NULL, conv, ctx);
 }
 
+void matrix_ui_action_show_last_event_details(const char *room_id) {
+    PurpleAccount *account = find_matrix_account();
+    const char *event_id = NULL;
+    if (!account || !room_id || !*room_id) return;
+    event_id = matrix_last_event_for_room(account, room_id);
+    if (!event_id || !*event_id) {
+        purple_notify_error(my_plugin, "Last Event Details", "No recent event",
+            "No recent event ID is available in this room.");
+        return;
+    }
+    matrix_ui_show_event_details(room_id, event_id);
+}
+
 void matrix_ui_action_react_latest(const char *room_id) {
     PurpleAccount *account = find_matrix_account();
     const char *event_id = NULL;
@@ -2552,6 +2574,7 @@ static PurpleCmdRet cmd_help(PurpleConversation *conv, const gchar *cmd, gchar *
     "  /react &lt;key&gt; [event_id] - React to a message (defaults to latest)<br/>"
     "  /location &lt;lat&gt; &lt;lon&gt; - Send location coordinates<br/>"
     "  /message_inspector - Pick recent event and run reply/thread/react/edit/redact/report<br/>"
+    "  /last_event_details - Show details for most recent event in room<br/>"
     "  /mark_read - Mark current room read and send read receipt<br/>"
     "  /power_levels - Show power levels for current room<br/>"
     "<b>Security:</b><br/>"
@@ -3131,6 +3154,12 @@ static PurpleCmdRet cmd_message_inspector(PurpleConversation *conv, const gchar 
     return PURPLE_CMD_RET_OK;
 }
 
+static PurpleCmdRet cmd_last_event_details(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
+    if (matrix_cmd_require_chat(conv, error) != PURPLE_CMD_RET_OK) return PURPLE_CMD_RET_FAILED;
+    matrix_ui_action_show_last_event_details(purple_conversation_get_name(conv));
+    return PURPLE_CMD_RET_OK;
+}
+
 static PurpleCmdRet cmd_kick(PurpleConversation *conv, const gchar *cmd, gchar **args, gchar **error, void *data) {
     if (!args[0] || !*args[0]) { *error = g_strdup("Usage: /kick <user_id> [reason]"); return PURPLE_CMD_RET_FAILED; }
     PurpleAccount *account = purple_conversation_get_account(conv);
@@ -3311,6 +3340,7 @@ void register_matrix_commands(PurplePlugin *plugin) {
   purple_cmd_register("polls", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_polls, "polls: List active polls and vote", NULL);
   purple_cmd_register("location", "ss", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_location, "location <lat> <lon>: Send a location", NULL);
   purple_cmd_register("message_inspector", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_message_inspector, "message_inspector: Pick recent event and action", NULL);
+  purple_cmd_register("last_event_details", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_last_event_details, "last_event_details: Show details for latest event", NULL);
   purple_cmd_register("mark_read", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_mark_read, "mark_read: Mark room read and send read receipt", NULL);
   purple_cmd_register("power_levels", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_power_levels, "power_levels: Show room power levels", NULL);
   purple_cmd_register("who_read", "", PURPLE_CMD_P_PLUGIN, PURPLE_CMD_FLAG_CHAT, "prpl-matrix-rust", cmd_who_read, "who_read: Show readers for this room", NULL);

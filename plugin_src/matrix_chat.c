@@ -225,6 +225,20 @@ static gboolean process_msg_cb(gpointer data) {
                                    g_strdup(d->event_id));
       matrix_record_recent_event(main_conv, d->event_id, d->sender, d->message,
                                  d->thread_root_id, d->encrypted, d->timestamp);
+      if (d->message && *d->message) {
+        char *plain = purple_markup_strip_html(d->message);
+        char *snippet = NULL;
+        if (!plain)
+          plain = g_strdup("");
+        if ((int)strlen(plain) > 120)
+          plain[120] = '\0';
+        snippet = sanitize_markup_text(plain);
+        purple_signal_emit(my_plugin, "matrix-ui-room-activity", d->room_id,
+                           d->sender ? d->sender : "user",
+                           snippet ? snippet : "");
+        g_free(snippet);
+        g_free(plain);
+      }
       g_free(purple_conversation_get_data(main_conv, "last_thread_root_id"));
       if (d->thread_root_id)
         purple_conversation_set_data(main_conv, "last_thread_root_id",
