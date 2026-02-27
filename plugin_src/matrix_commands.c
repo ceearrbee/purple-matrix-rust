@@ -995,7 +995,8 @@ typedef enum {
     MATRIX_EVENT_PICK_MODERATE_USER,
     MATRIX_EVENT_PICK_IGNORE_USER,
     MATRIX_EVENT_PICK_UNIGNORE_USER,
-    MATRIX_EVENT_PICK_OPEN_DM
+    MATRIX_EVENT_PICK_OPEN_DM,
+    MATRIX_EVENT_PICK_COPY_EVENT_ID
 } MatrixEventPickAction;
 
 typedef struct {
@@ -1136,6 +1137,11 @@ static void matrix_ui_open_event_action_dialog(const char *room_id, const char *
 
     if (action == MATRIX_EVENT_PICK_OPEN_THREAD) {
         matrix_ui_open_thread_from_event(room_id, event_id);
+        return;
+    }
+
+    if (action == MATRIX_EVENT_PICK_COPY_EVENT_ID) {
+        purple_notify_info(my_plugin, "Event ID", "Selected Event ID", event_id);
         return;
     }
 
@@ -1398,6 +1404,7 @@ static void matrix_ui_message_inspector_exec_cb(void *user_data, PurpleRequestFi
         case 9: action = MATRIX_EVENT_PICK_IGNORE_USER; break;
         case 10: action = MATRIX_EVENT_PICK_UNIGNORE_USER; break;
         case 11: action = MATRIX_EVENT_PICK_OPEN_DM; break;
+        case 12: action = MATRIX_EVENT_PICK_COPY_EVENT_ID; break;
         default: action = MATRIX_EVENT_PICK_REPLY; break;
     }
 
@@ -1532,6 +1539,7 @@ void matrix_ui_action_message_inspector(const char *room_id) {
     purple_request_field_choice_add(action_choice, "Ignore Sender");
     purple_request_field_choice_add(action_choice, "Unignore Sender");
     purple_request_field_choice_add(action_choice, "Open DM with Sender");
+    purple_request_field_choice_add(action_choice, "Copy/Show Event ID");
     purple_request_field_group_add_field(group, action_choice);
 
     ctx = g_new0(MatrixUiInspectorCtx, 1);
