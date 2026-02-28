@@ -652,7 +652,7 @@ static gboolean poll_rust_channel_cb(gpointer user_data) {
     case FFI_EVENT_ROOM_LIST_ADD: {
       CRoomListAdd *s = (CRoomListAdd *)data;
       roomlist_add_cb(s->user_id, s->name, s->room_id, s->topic,
-                      s->member_count);
+                      s->member_count, s->is_space);
       break;
     }
     case FFI_EVENT_ROOM_PREVIEW: {
@@ -1239,6 +1239,7 @@ static PurplePluginProtocolInfo prpl_info = {
     .send_file = matrix_send_file,
     .roomlist_get_list = matrix_roomlist_get_list,
     .roomlist_cancel = matrix_roomlist_cancel,
+    .roomlist_expand_category = matrix_roomlist_expand_category,
     .unregister_user = matrix_unregister_user,
     .set_public_alias = (void *)matrix_set_public_alias,
     .set_buddy_icon = matrix_set_buddy_icon,

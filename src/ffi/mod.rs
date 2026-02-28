@@ -40,7 +40,7 @@ pub type PresenceCallback = extern "C" fn(user_id: *const c_char, target_user_id
 pub type ChatTopicCallback = extern "C" fn(user_id: *const c_char, room_id: *const c_char, topic: *const c_char, sender: *const c_char);
 pub type ChatUserCallback = extern "C" fn(user_id: *const c_char, room_id: *const c_char, member_id: *const c_char, add: bool, alias: *const c_char, avatar_path: *const c_char);
 pub type InviteCallback = extern "C" fn(user_id: *const c_char, room_id: *const c_char, inviter: *const c_char);
-pub type RoomListAddCallback = extern "C" fn(user_id: *const c_char, name: *const c_char, id: *const c_char, topic: *const c_char, count: u64);
+pub type RoomListAddCallback = extern "C" fn(user_id: *const c_char, name: *const c_char, id: *const c_char, topic: *const c_char, count: u64, is_space: bool);
 pub type RoomPreviewCallback = extern "C" fn(user_id: *const c_char, room_id_or_alias: *const c_char, html_body: *const c_char);
 pub type LoginFailedCallback = extern "C" fn(error_msg: *const c_char);
 pub type ShowUserInfoCallback = extern "C" fn(user_id: *const c_char, display_name: *const c_char, avatar_url: *const c_char, target_user_id: *const c_char, is_online: bool);
@@ -211,7 +211,7 @@ pub extern "C" fn purple_matrix_rust_poll_event(
                     options_str: to_c_char_opt(&options_str),
                 })) as *mut c_void
             ),
-            FfiEvent::RoomListAdd { user_id, room_id, name, topic, member_count } => (
+            FfiEvent::RoomListAdd { user_id, room_id, name, topic, member_count, is_space } => (
                 10,
                 Box::into_raw(Box::new(CRoomListAdd {
                     user_id: to_c_char(&user_id),
@@ -219,6 +219,7 @@ pub extern "C" fn purple_matrix_rust_poll_event(
                     name: to_c_char(&name),
                     topic: to_c_char(&topic),
                     member_count,
+                    is_space,
                 })) as *mut c_void
             ),
             FfiEvent::RoomPreview { user_id, room_id_or_alias, html_body } => (

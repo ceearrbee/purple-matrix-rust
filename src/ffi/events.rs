@@ -165,6 +165,7 @@ pub struct CRoomListAdd {
     pub name: *mut c_char,
     pub topic: *mut c_char,
     pub member_count: usize,
+    pub is_space: bool,
 }
 
 #[repr(C)]
@@ -329,6 +330,7 @@ pub enum FfiEvent {
         name: String,
         topic: String,
         member_count: usize,
+        is_space: bool,
     },
     RoomPreview {
         user_id: String,

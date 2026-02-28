@@ -49,11 +49,24 @@ void purple_debug_warning(const char *cat, const char *format, ...) {}
 PurpleConversation *purple_find_chat(const PurpleConnection *gc, int id) {
   return NULL;
 }
+PurpleConversation *mock_conv_instance = NULL;
+PurpleConversation *
+purple_find_conversation_with_account_mock(PurpleConversationType type,
+                                           const char *name,
+                                           const PurpleAccount *account) {
+  if (g_strcmp0(name, "test_room_123") == 0) {
+    if (!mock_conv_instance)
+      mock_conv_instance = (PurpleConversation *)g_new0(char, 128);
+    return mock_conv_instance;
+  }
+  return NULL;
+}
+
 PurpleConversation *
 purple_find_conversation_with_account(PurpleConversationType type,
                                       const char *name,
                                       const PurpleAccount *account) {
-  return NULL;
+  return purple_find_conversation_with_account_mock(type, name, account);
 }
 void purple_conversation_set_title(PurpleConversation *conv,
                                    const char *title) {}
@@ -72,11 +85,18 @@ void purple_conv_chat_write(PurpleConvChat *chat, const char *who,
 void purple_conversation_write(PurpleConversation *conv, const char *who,
                                const char *message, PurpleMessageFlags flags,
                                time_t mtime) {}
+extern void mock_purple_conversation_set_data(PurpleConversation *conv,
+                                              const char *key, gpointer data);
+extern gpointer mock_purple_conversation_get_data(PurpleConversation *conv,
+                                                  const char *key);
+
 void purple_conversation_set_data(PurpleConversation *conv, const char *key,
-                                  gpointer data) {}
+                                  gpointer data) {
+  mock_purple_conversation_set_data(conv, key, data);
+}
 gpointer purple_conversation_get_data(PurpleConversation *conv,
                                       const char *key) {
-  return NULL;
+  return mock_purple_conversation_get_data(conv, key);
 }
 const char *purple_conversation_get_name(const PurpleConversation *conv) {
   return "test_room";
@@ -187,7 +207,13 @@ void purple_connection_set_state(PurpleConnection *gc,
 void purple_connection_error_reason(PurpleConnection *gc,
                                     PurpleConnectionError reason,
                                     const char *description) {}
-GList *purple_accounts_get_all() { return NULL; }
+PurpleAccount *mock_test_account = NULL;
+GList *purple_accounts_get_all() {
+  if (!mock_test_account) {
+    mock_test_account = (PurpleAccount *)g_new0(char, 128);
+  }
+  return g_list_append(NULL, mock_test_account);
+}
 GList *purple_connections_get_all() { return NULL; }
 PurpleConnectionState purple_connection_get_state(const PurpleConnection *gc) {
   return PURPLE_CONNECTED;
@@ -394,9 +420,8 @@ GHashTable *room_id_map = NULL;
 #include "../plugin_src/matrix_account.c"
 #include "../plugin_src/matrix_blist.c"
 #include "../plugin_src/matrix_chat.c"
+#include "../plugin_src/matrix_commands.c"
 #include "../plugin_src/matrix_utils.c"
-// #include "../plugin_src/matrix_commands.c" // Optional: if we want to test
-// command registration logic
 
 // --- Mocks for Rust FFI (using types from plugin_src) ---
 // ... (Mocks continue below) ...
@@ -429,7 +454,7 @@ void purple_matrix_rust_recover_keys(const char *user_id,
                                      const char *passphrase) {}
 void purple_matrix_rust_logout(const char *user_id) {}
 void purple_matrix_rust_send_location(const char *user_id, const char *room_id,
-                                      const char *body, const char *geo_uri) {}
+                                      double lat, double lon) {}
 void purple_matrix_rust_poll_create(const char *user_id, const char *room_id,
                                     const char *question, const char *options) {
 }
@@ -437,7 +462,7 @@ void purple_matrix_rust_poll_vote(const char *user_id, const char *room_id,
                                   const char *poll_event_id,
                                   guint64 option_index) {}
 void purple_matrix_rust_poll_end(const char *user_id, const char *room_id,
-                                 const char *poll_event_id) {}
+                                 const char *poll_event_id, const char *text) {}
 void purple_matrix_rust_change_password(const char *user_id, const char *old_pw,
                                         const char *new_pw) {}
 void purple_matrix_rust_add_buddy(const char *user_id,
@@ -613,6 +638,132 @@ void test_matrix_status_text_null_handling() {
   g_free(buddy);
 }
 
+// Activity Line Signal Tracking
+char *last_emitted_signal = NULL;
+char *last_emitted_room_id = NULL;
+char *last_emitted_sender = NULL;
+char *last_emitted_snippet = NULL;
+
+void purple_signal_emit(void *instance, const char *signal, ...) {
+  if (g_strcmp0(signal, "matrix-ui-room-activity") == 0) {
+    va_list args;
+    va_start(args, signal);
+    const char *room_id = va_arg(args, const char *);
+    const char *sender = va_arg(args, const char *);
+    const char *snippet = va_arg(args, const char *);
+    g_free(last_emitted_signal);
+    last_emitted_signal = g_strdup(signal);
+    g_free(last_emitted_room_id);
+    last_emitted_room_id = g_strdup(room_id);
+    g_free(last_emitted_sender);
+    last_emitted_sender = g_strdup(sender);
+    g_free(last_emitted_snippet);
+    last_emitted_snippet = g_strdup(snippet);
+    va_end(args);
+  }
+}
+
+void test_matrix_room_activity_signal() {
+  // Reset
+  g_free(last_emitted_signal);
+  last_emitted_signal = NULL;
+  g_free(last_emitted_room_id);
+  last_emitted_room_id = NULL;
+
+  // Construct dummy incoming message
+  MatrixMsgData *msg = g_new0(MatrixMsgData, 1);
+  msg->user_id = g_strdup("test_user"); // matches purple_account_get_username
+  msg->room_id = g_strdup("test_room_123");
+  msg->sender = g_strdup("@alice:matrix.org");
+  msg->message = g_strdup("<b>Hello World</b>");
+  msg->event_id = g_strdup("$event_test");
+  msg->timestamp = 1000;
+
+  // Need to ensure purple_find_conversation_with_account_mock returns a valid
+  // conv so matrix_record_recent_event doesn't crash
+  PurpleConversation *conv = purple_find_conversation_with_account_mock(
+      PURPLE_CONV_TYPE_CHAT, "test_room_123", NULL);
+  g_assert_nonnull(conv);
+
+  process_msg_cb(msg);
+
+  g_assert_cmpstr(last_emitted_signal, ==, "matrix-ui-room-activity");
+  g_assert_cmpstr(last_emitted_room_id, ==, "test_room_123");
+  g_assert_cmpstr(last_emitted_sender, ==, "@alice:matrix.org");
+  g_assert_cmpstr(last_emitted_snippet, ==, "Hello World");
+}
+
+void test_matrix_mute_state() {
+  // Use mock conv
+  PurpleConversation *conv = purple_find_conversation_with_account_mock(
+      PURPLE_CONV_TYPE_CHAT, "test_room_123", NULL);
+
+  purple_conversation_set_data(conv, "matrix_room_muted", g_strdup("1"));
+  const char *val = purple_conversation_get_data(conv, "matrix_room_muted");
+  g_assert_cmpstr(val, ==, "1");
+
+  // matrix_room_muted behavior requires that clearing it is correctly null or
+  // missing
+  mock_purple_conversation_set_data(conv, "matrix_room_muted", NULL);
+  val = purple_conversation_get_data(conv, "matrix_room_muted");
+  g_assert_null(val);
+}
+
+// Global hash table to mock conversation data
+GHashTable *mock_conv_data = NULL;
+
+void mock_purple_conversation_set_data(PurpleConversation *conv,
+                                       const char *key, gpointer data) {
+  if (!mock_conv_data) {
+    mock_conv_data =
+        g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+  }
+  char *full_key = g_strdup_printf("%p_%s", conv, key);
+  if (data) {
+    g_hash_table_insert(mock_conv_data, full_key, data);
+  } else {
+    g_hash_table_remove(mock_conv_data, full_key);
+    g_free(full_key);
+  }
+}
+
+gpointer mock_purple_conversation_get_data(PurpleConversation *conv,
+                                           const char *key) {
+  if (!mock_conv_data)
+    return NULL;
+  char *full_key = g_strdup_printf("%p_%s", conv, key);
+  gpointer res = g_hash_table_lookup(mock_conv_data, full_key);
+  g_free(full_key);
+  return res;
+}
+
+void test_matrix_inspector_state_memory() {
+  PurpleAccount *account = find_matrix_account();
+  g_assert_nonnull(account);
+
+  // Room that exists in mock
+  const char *room_id = "test_room_123";
+
+  // Initially NULL
+  const char *initial = matrix_ui_get_inspector_last_event_id(room_id);
+  g_assert_null(initial);
+
+  // Set an event ID
+  matrix_ui_set_inspector_last_event_id(room_id, "$event1");
+  const char *updated = matrix_ui_get_inspector_last_event_id(room_id);
+  g_assert_cmpstr(updated, ==, "$event1");
+
+  // Overwrite
+  matrix_ui_set_inspector_last_event_id(room_id, "$event2");
+  updated = matrix_ui_get_inspector_last_event_id(room_id);
+  g_assert_cmpstr(updated, ==, "$event2");
+
+  // Clear
+  matrix_ui_set_inspector_last_event_id(room_id, NULL);
+  updated = matrix_ui_get_inspector_last_event_id(room_id);
+  g_assert_null(updated);
+}
+
 int main(int argc, char **argv) {
   g_test_init(&argc, &argv, NULL);
   g_test_add_func("/matrix/get_chat_name", test_matrix_get_chat_name);
@@ -626,6 +777,11 @@ int main(int argc, char **argv) {
   g_test_add_func("/matrix/ui/list_icon", test_matrix_list_icon);
   g_test_add_func("/matrix/ui/status_text_null",
                   test_matrix_status_text_null_handling);
+  g_test_add_func("/matrix/ui/inspector_state_memory",
+                  test_matrix_inspector_state_memory);
+  g_test_add_func("/matrix/ui/room_activity_signal",
+                  test_matrix_room_activity_signal);
+  g_test_add_func("/matrix/ui/mute_state", test_matrix_mute_state);
   return g_test_run();
 }
 // Additional Libpurple Mocks
@@ -668,3 +824,46 @@ void purple_matrix_rust_set_thread_list_callback(
 void purple_matrix_rust_set_poll_list_callback(
     void (*cb)(const char *room_id, const char *event_id, const char *sender,
                const char *question, const char *options_str)) {}
+
+void purple_matrix_rust_search_room_messages(const char *user_id,
+                                             const char *room_id,
+                                             const char *search_term) {}
+void purple_matrix_rust_search_room_members(const char *user_id,
+                                            const char *room_id,
+                                            const char *search_term) {}
+void purple_matrix_rust_fetch_room_preview(const char *user_id,
+                                           const char *room_id_or_alias) {}
+void purple_matrix_rust_resync_room_keys(const char *user_id,
+                                         const char *room_id) {}
+void purple_matrix_rust_debug_crypto_status(const char *user_id) {}
+void purple_matrix_rust_list_own_devices(const char *user_id) {}
+void purple_matrix_rust_mark_unread(const char *user_id, const char *room_id,
+                                    bool unread) {}
+void purple_matrix_rust_list_polls(const char *user_id, const char *room_id) {}
+void purple_matrix_rust_who_read(const char *user_id, const char *room_id) {}
+void purple_matrix_rust_get_supported_versions(const char *user_id) {}
+void purple_matrix_rust_get_my_profile(const char *user_id) {}
+void purple_matrix_rust_get_server_info(const char *user_id) {}
+void purple_matrix_rust_resync_recent_history(const char *user_id,
+                                              const char *room_id) {}
+void purple_matrix_rust_search_stickers(const char *user_id,
+                                        const char *search_term) {}
+void purple_matrix_rust_export_keys(const char *user_id, const char *path,
+                                    const char *passphrase) {}
+void purple_matrix_rust_upgrade_room(const char *user_id, const char *room_id,
+                                     const char *new_version) {}
+void purple_matrix_rust_get_space_hierarchy(const char *user_id,
+                                            const char *room_id) {}
+void purple_matrix_rust_set_room_join_rule(const char *user_id,
+                                           const char *room_id,
+                                           const char *rule) {}
+void purple_matrix_rust_set_room_history_visibility(const char *user_id,
+                                                    const char *room_id,
+                                                    const char *visibility) {}
+void purple_matrix_rust_set_room_guest_access(const char *user_id,
+                                              const char *room_id, bool allow) {
+}
+void purple_matrix_rust_restore_backup(const char *user_id,
+                                       const char *recovery_key) {}
+void purple_matrix_rust_bootstrap_cross_signing_with_password(
+    const char *user_id, const char *password) {}

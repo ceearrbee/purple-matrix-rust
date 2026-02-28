@@ -831,6 +831,8 @@ static void discover_center_exec_cb(void *user_data,
     return;
   }
 
+  purple_account_set_string(account, "last_discover_target", target);
+
   const char *username = purple_account_get_username(account);
   if (action == 0) {
     /* Join */
@@ -843,6 +845,10 @@ static void discover_center_exec_cb(void *user_data,
     purple_notify_info(my_plugin, "Discover Center", "Directory Search",
                        "Directory search is not yet implemented. Please "
                        "specify a direct room ID or alias to join.");
+  } else if (action == 3) {
+    /* Explore Space Hierarchy */
+    purple_roomlist_show_with_account(account);
+    purple_matrix_rust_get_space_hierarchy(username, target);
   }
 }
 
@@ -861,11 +867,15 @@ static void action_discover_center_cb(PurplePluginAction *action) {
   purple_request_field_choice_add(f_action, "Join Room");
   purple_request_field_choice_add(f_action, "Knock on Room");
   purple_request_field_choice_add(f_action, "Search Directory");
+  purple_request_field_choice_add(f_action, "Explore Space Hierarchy");
   purple_request_field_group_add_field(group, f_action);
 
+  const char *last_target =
+      purple_account_get_string(account, "last_discover_target", "");
   purple_request_field_group_add_field(
-      group, purple_request_field_string_new(
-                 "target", "Room ID, Alias, or Search Term", "", FALSE));
+      group, purple_request_field_string_new("target",
+                                             "Room ID, Alias, or Search Term",
+                                             last_target, FALSE));
 
   purple_request_field_group_add_field(
       group, purple_request_field_string_new(

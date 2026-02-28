@@ -17,8 +17,9 @@ fn handle_auth_failure(client: &Client) {
     let user_id = client.user_id().map(|u| u.to_string());
     if let Some(ref uid) = user_id {
         CLIENTS.remove(uid);
-        let entry = keyring::Entry::new("purple-matrix-rust", uid).unwrap();
-        let _ = entry.delete_password();
+        if let Ok(entry) = keyring::Entry::new("purple-matrix-rust", uid) {
+            let _ = entry.delete_password();
+        }
     }
 
     if let Some(mut path) = DATA_PATH.lock().unwrap_or_else(|e| e.into_inner()).clone() {
@@ -50,8 +51,16 @@ pub async fn start_sync_loop(client: Client) {
             let error_str = e.to_string();
             eprintln!("CRITICAL FALLBACK ERROR: Initial sync_once failed for {}: {}", user_id, error_str);
             log::error!("Initial sync_once failed for {}: {}", user_id, error_str);
-            if is_auth_failure(&error_str) { handle_auth_failure(&client_for_sync); return; }
-            panic!("FORCE PANIC ON SYNC ONCE FAILURE: {}", error_str);
+            if is_auth_failure(&error_str) { 
+                handle_auth_failure(&client_for_sync); 
+            } else {
+                let event = crate::ffi::FfiEvent::LoginFailed {
+                    user_id: user_id.clone(),
+                    message: format!("Initial sync error: {}", error_str),
+                };
+                let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+            }
+            return;
         }
     };
 
@@ -109,23 +118,24 @@ pub async fn start_sync_loop(client: Client) {
                         }
                     }
                     if let Ok(pl) = room.power_levels().await {
-                        let self_id = client_clone.user_id().unwrap();
-                        let my_level = pl.for_user(self_id);
-                        let is_admin = my_level >= matrix_sdk::ruma::int!(100);
-                        let can_kick = my_level >= pl.kick;
-                        let can_ban = my_level >= pl.ban;
-                        let can_redact = my_level >= pl.redact;
-                        let can_invite = my_level >= pl.invite;
-                        let pl_event = crate::ffi::FfiEvent::PowerLevelUpdate {
-                            user_id: user_id_clone,
-                            room_id: room_id_clone,
-                            is_admin,
-                            can_kick,
-                            can_ban,
-                            can_redact,
-                            can_invite,
-                        };
-                        let _ = crate::ffi::EVENTS_CHANNEL.0.send(pl_event);
+                        if let Some(self_id) = client_clone.user_id() {
+                            let my_level = pl.for_user(self_id);
+                            let is_admin = my_level >= matrix_sdk::ruma::int!(100);
+                            let can_kick = my_level >= pl.kick;
+                            let can_ban = my_level >= pl.ban;
+                            let can_redact = my_level >= pl.redact;
+                            let can_invite = my_level >= pl.invite;
+                            let pl_event = crate::ffi::FfiEvent::PowerLevelUpdate {
+                                user_id: user_id_clone,
+                                room_id: room_id_clone,
+                                is_admin,
+                                can_kick,
+                                can_ban,
+                                can_redact,
+                                can_invite,
+                            };
+                            let _ = crate::ffi::EVENTS_CHANNEL.0.send(pl_event);
+                        }
                     }
                 }
             }
@@ -190,15 +200,16 @@ async fn process_sync_event_for_history(client: &Client, room: &matrix_sdk::Room
         is_encrypted = true;
         let event_id = timeline_event.event_id().map(|e| e.to_string()).unwrap_or_default();
         let raw_json = timeline_event.raw().json().get().to_string();
-        let raw_original = matrix_sdk::ruma::serde::Raw::<matrix_sdk::ruma::events::room::encrypted::OriginalSyncRoomEncryptedEvent>::from_json_string(raw_json).unwrap();
-        match room.decrypt_event(&raw_original, None).await {
-             Ok(decrypted) => {
-                  log::debug!("Successfully decrypted history event {}", event_id);
-                  any_event_opt = decrypted.raw().deserialize().ok();
-             },
-             Err(e) => {
-                  log::warn!("Failed to decrypt history event {}: {:?}", event_id, e);
-             }
+        if let Ok(raw_original) = matrix_sdk::ruma::serde::Raw::<matrix_sdk::ruma::events::room::encrypted::OriginalSyncRoomEncryptedEvent>::from_json_string(raw_json) {
+            match room.decrypt_event(&raw_original, None).await {
+                 Ok(decrypted) => {
+                      log::debug!("Successfully decrypted history event {}", event_id);
+                      any_event_opt = decrypted.raw().deserialize().ok();
+                 },
+                 Err(e) => {
+                      log::warn!("Failed to decrypt history event {}: {:?}", event_id, e);
+                 }
+            }
         }
     }
 
@@ -294,15 +305,16 @@ pub async fn fetch_room_history_logic_with_limit(client: Client, full_room_id: S
                          is_encrypted = true;
                          let event_id = timeline_event.event_id().map(|e| e.to_string()).unwrap_or_default();
                          let raw_json = timeline_event.raw().json().get().to_string();
-                         let raw_original = matrix_sdk::ruma::serde::Raw::<matrix_sdk::ruma::events::room::encrypted::OriginalSyncRoomEncryptedEvent>::from_json_string(raw_json).unwrap();
-                         match room.decrypt_event(&raw_original, None).await {
-                              Ok(decrypted) => {
-                                   log::debug!("Successfully decrypted fetched history event {}", event_id);
-                                   any_event_opt = decrypted.raw().deserialize().ok();
-                              },
-                              Err(e) => {
-                                   log::warn!("Failed to decrypt fetched history event {}: {:?}", event_id, e);
-                              }
+                         if let Ok(raw_original) = matrix_sdk::ruma::serde::Raw::<matrix_sdk::ruma::events::room::encrypted::OriginalSyncRoomEncryptedEvent>::from_json_string(raw_json) {
+                             match room.decrypt_event(&raw_original, None).await {
+                                  Ok(decrypted) => {
+                                       log::debug!("Successfully decrypted fetched history event {}", event_id);
+                                       any_event_opt = decrypted.raw().deserialize().ok();
+                                  },
+                                  Err(e) => {
+                                       log::warn!("Failed to decrypt fetched history event {}: {:?}", event_id, e);
+                                  }
+                             }
                          }
                      }
 

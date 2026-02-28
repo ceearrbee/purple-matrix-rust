@@ -26,12 +26,10 @@ static void matrix_conv_data_replace(PurpleConversation *conv, const char *key,
 }
 
 static void matrix_record_recent_event(PurpleConversation *conv,
-                                       const char *event_id,
-                                       const char *sender,
+                                       const char *event_id, const char *sender,
                                        const char *message,
                                        const char *thread_root_id,
-                                       gboolean encrypted,
-                                       guint64 timestamp) {
+                                       gboolean encrypted, guint64 timestamp) {
   int i;
   char key_id[64], key_sender[64], key_msg[64], key_ts[64], key_enc[64],
       key_thread[64];
@@ -49,13 +47,13 @@ static void matrix_record_recent_event(PurpleConversation *conv,
     const char *v = NULL;
 
     g_snprintf(prev_id, sizeof(prev_id), "matrix_recent_event_id_%d", i - 1);
-    g_snprintf(prev_sender, sizeof(prev_sender), "matrix_recent_event_sender_%d",
-               i - 1);
+    g_snprintf(prev_sender, sizeof(prev_sender),
+               "matrix_recent_event_sender_%d", i - 1);
     g_snprintf(prev_msg, sizeof(prev_msg), "matrix_recent_event_msg_%d", i - 1);
     g_snprintf(prev_ts, sizeof(prev_ts), "matrix_recent_event_ts_%d", i - 1);
     g_snprintf(prev_enc, sizeof(prev_enc), "matrix_recent_event_enc_%d", i - 1);
-    g_snprintf(prev_thread, sizeof(prev_thread), "matrix_recent_event_thread_%d",
-               i - 1);
+    g_snprintf(prev_thread, sizeof(prev_thread),
+               "matrix_recent_event_thread_%d", i - 1);
 
     g_snprintf(key_id, sizeof(key_id), "matrix_recent_event_id_%d", i);
     g_snprintf(key_sender, sizeof(key_sender), "matrix_recent_event_sender_%d",
@@ -209,6 +207,9 @@ static gboolean process_msg_cb(gpointer data) {
   /* Signal UI that room is (potentially) encrypted if we see an encrypted msg
    */
   if (d->encrypted) {
+    purple_debug_info("matrix-ui-signal",
+                      "Dispatching matrix-ui-room-encrypted room_id=%s\n",
+                      d->room_id);
     purple_signal_emit(my_plugin, "matrix-ui-room-encrypted", d->room_id, TRUE);
   }
 
@@ -233,6 +234,10 @@ static gboolean process_msg_cb(gpointer data) {
         if ((int)strlen(plain) > 120)
           plain[120] = '\0';
         snippet = sanitize_markup_text(plain);
+        purple_debug_info(
+            "matrix-ui-signal",
+            "Dispatching matrix-ui-room-activity room_id=%s sender=%s\n",
+            d->room_id, d->sender ? d->sender : "user");
         purple_signal_emit(my_plugin, "matrix-ui-room-activity", d->room_id,
                            d->sender ? d->sender : "user",
                            snippet ? snippet : "");
@@ -346,6 +351,10 @@ static gboolean process_typing_cb(gpointer data) {
       serv_got_typing(gc, d->who, 0,
                       d->is_typing ? PURPLE_TYPING : PURPLE_NOT_TYPING);
       /* Signal UI plugin */
+      purple_debug_info(
+          "matrix-ui-signal",
+          "Dispatching matrix-ui-room-typing room_id=%s who=%s typing=%d\n",
+          d->room_id, d->who, d->is_typing);
       purple_signal_emit(my_plugin, "matrix-ui-room-typing", d->room_id, d->who,
                          d->is_typing);
     }

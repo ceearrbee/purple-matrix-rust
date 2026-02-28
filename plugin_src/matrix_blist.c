@@ -293,6 +293,9 @@ void room_mute_callback(const char *user_id, const char *room_id, bool muted) {
       purple_conversation_set_data(conv, "matrix_room_muted", g_strdup(state));
     }
   }
+  purple_debug_info("matrix-ui-signal",
+                    "Dispatching matrix-ui-room-muted room_id=%s muted=%d\n",
+                    room_id, muted);
   purple_signal_emit(my_plugin, "matrix-ui-room-muted", room_id, muted);
 }
 
@@ -427,8 +430,10 @@ static gboolean process_roomlist_add_cb(gpointer data) {
   // Account lookup not strictly needed for the global roomlist view, but good
   // for context
   if (active_roomlist) {
-    PurpleRoomlistRoom *room =
-        purple_roomlist_room_new(PURPLE_ROOMLIST_ROOMTYPE_ROOM, d->name, NULL);
+    PurpleRoomlistRoomType type = d->is_space
+                                      ? PURPLE_ROOMLIST_ROOMTYPE_CATEGORY
+                                      : PURPLE_ROOMLIST_ROOMTYPE_ROOM;
+    PurpleRoomlistRoom *room = purple_roomlist_room_new(type, d->name, NULL);
     purple_roomlist_room_add_field(active_roomlist, room, d->id);
     purple_roomlist_room_add_field(active_roomlist, room, d->topic);
     purple_roomlist_room_add(active_roomlist, room);
@@ -441,12 +446,13 @@ static gboolean process_roomlist_add_cb(gpointer data) {
 }
 
 void roomlist_add_cb(const char *user_id, const char *name, const char *id,
-                     const char *topic, guint64 count) {
+                     const char *topic, guint64 count, gboolean is_space) {
   RoomListData *d = g_new0(RoomListData, 1);
   d->name = g_strdup(name);
   d->id = g_strdup(id);
   d->topic = g_strdup(topic);
   d->count = count;
+  d->is_space = is_space;
   g_idle_add(process_roomlist_add_cb, d);
 }
 
@@ -740,4 +746,17 @@ GList *blist_node_menu_cb(PurpleBlistNode *node) {
     }
   }
   return m;
+}
+
+void matrix_roomlist_expand_category(PurpleRoomlist *list,
+                                     PurpleRoomlistRoom *category) {
+  PurpleAccount *account = find_matrix_account();
+  if (!account)
+    return;
+  const char *user_id = purple_account_get_username(account);
+  GList *fields = purple_roomlist_room_get_fields(category);
+  if (fields && fields->data) {
+    const char *space_id = (const char *)fields->data;
+    purple_matrix_rust_get_space_hierarchy(user_id, space_id);
+  }
 }

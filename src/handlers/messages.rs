@@ -87,17 +87,18 @@ pub async fn handle_encrypted(event: matrix_sdk::ruma::serde::Raw<matrix_sdk::ru
      use matrix_sdk::ruma::events::AnySyncTimelineEvent;
      use matrix_sdk::ruma::events::AnySyncMessageLikeEvent;
      
-     let raw_original = matrix_sdk::ruma::serde::Raw::<matrix_sdk::ruma::events::room::encrypted::OriginalSyncRoomEncryptedEvent>::from_json_string(event.json().get().to_string()).unwrap();
-     match room.decrypt_event(&raw_original, None).await {
-         Ok(decrypted) => {
-             if let Ok(any_event) = decrypted.raw().deserialize() {
-                 if let AnySyncTimelineEvent::MessageLike(msg_like) = any_event {
-                     match msg_like {
-                         AnySyncMessageLikeEvent::RoomMessage(_) => {
-                             let raw_msg = matrix_sdk::ruma::serde::Raw::<matrix_sdk::ruma::events::room::message::SyncRoomMessageEvent>::from_json_string(decrypted.raw().json().get().to_string()).unwrap();
-                             handle_room_message(raw_msg, room).await;
-                             return;
-                         },
+     if let Ok(raw_original) = matrix_sdk::ruma::serde::Raw::<matrix_sdk::ruma::events::room::encrypted::OriginalSyncRoomEncryptedEvent>::from_json_string(event.json().get().to_string()) {
+         match room.decrypt_event(&raw_original, None).await {
+             Ok(decrypted) => {
+                 if let Ok(any_event) = decrypted.raw().deserialize() {
+                     if let AnySyncTimelineEvent::MessageLike(msg_like) = any_event {
+                         match msg_like {
+                             AnySyncMessageLikeEvent::RoomMessage(_) => {
+                                 if let Ok(raw_msg) = matrix_sdk::ruma::serde::Raw::<matrix_sdk::ruma::events::room::message::SyncRoomMessageEvent>::from_json_string(decrypted.raw().json().get().to_string()) {
+                                     handle_room_message(raw_msg, room).await;
+                                 }
+                                 return;
+                             },
                          AnySyncMessageLikeEvent::Sticker(sticker_ev) => {
                              handle_sticker(sticker_ev, room).await;
                              return;
@@ -110,6 +111,7 @@ pub async fn handle_encrypted(event: matrix_sdk::ruma::serde::Raw<matrix_sdk::ru
          Err(e) => {
              log::warn!("Failed to decrypt live event: {:?}", e);
          }
+     }
      }
 
      if let Ok(ev) = event.deserialize() {
@@ -166,9 +168,13 @@ pub async fn handle_redaction(event: matrix_sdk::ruma::events::room::redaction::
 }
 
 fn sanitize_mime_ext(mime: &str, default: &str) -> String {
-    let mut ext = mime.split('/').last().unwrap_or(default).to_string();
-    ext.retain(|c| c.is_ascii_alphanumeric());
-    if ext.is_empty() { default.to_string() } else { ext }
+    if let Some(ext) = mime_guess::get_mime_extensions_str(mime).and_then(|exts| exts.first()) {
+        ext.to_string()
+    } else {
+        let mut fallback = mime.split('/').last().unwrap_or(default).to_string();
+        fallback.retain(|c| c.is_ascii_alphanumeric());
+        if fallback.is_empty() { default.to_string() } else { fallback }
+    }
 }
 
 pub async fn render_room_message(ev: &matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent, room: &Room) -> String {
