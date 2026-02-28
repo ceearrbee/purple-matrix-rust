@@ -2,8 +2,8 @@
 #define MATRIX_TYPES_H
 
 #include <glib.h>
-#include <stdbool.h>
 #include <libpurple/account.h>
+#include <stdbool.h>
 
 // Structs to marshal data to main thread
 
@@ -33,6 +33,7 @@ typedef struct {
   char *avatar_url;
   char *topic;
   gboolean encrypted;
+  guint64 member_count;
 } MatrixRoomData;
 
 typedef struct {

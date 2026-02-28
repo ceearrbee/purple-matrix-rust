@@ -235,7 +235,7 @@ pub async fn render_room_message(ev: &matrix_sdk::ruma::events::room::message::O
                 },
                 Err(e) => log::warn!("Failed to get media content for {}: {:?}", content.body, e),
             }
-            format!("[Image: {}]", crate::escape_html(&content.body))
+            format!("🖼️ [Image: {}]", crate::escape_html(&content.body))
         },
         MessageType::Video(content) => {
             log::debug!("Attempting to render video: {}", content.body);
@@ -252,11 +252,11 @@ pub async fn render_room_message(ev: &matrix_sdk::ruma::events::room::message::O
                         let path_str = path.to_string_lossy().to_string();
                         let file_url = format!("file://{}", path_str);
                         log::info!("Successfully saved video to {}", path_str);
-                        return format!("<a href=\"{}\">[Video: {}]</a>", file_url, crate::escape_html(&content.body));
+                        return format!("🎞️ <b>Video:</b> <a href=\"{}\">{}</a>", file_url, crate::escape_html(&content.body));
                     }
                 }
             }
-            format!("[Video: {}]", crate::escape_html(&content.body))
+            format!("🎞️ [Video: {}]", crate::escape_html(&content.body))
         },
         MessageType::Audio(content) => {
             log::debug!("Attempting to render audio: {}", content.body);
@@ -273,11 +273,11 @@ pub async fn render_room_message(ev: &matrix_sdk::ruma::events::room::message::O
                         let path_str = path.to_string_lossy().to_string();
                         let file_url = format!("file://{}", path_str);
                         log::info!("Successfully saved audio to {}", path_str);
-                        return format!("<a href=\"{}\">[Audio: {}]</a>", file_url, crate::escape_html(&content.body));
+                        return format!("🎵 <b>Audio:</b> <a href=\"{}\">{}</a>", file_url, crate::escape_html(&content.body));
                     }
                 }
             }
-            format!("[Audio: {}]", crate::escape_html(&content.body))
+            format!("🎵 [Audio: {}]", crate::escape_html(&content.body))
         },
         MessageType::File(content) => {
             log::debug!("Attempting to render file: {}", content.body);
@@ -293,11 +293,11 @@ pub async fn render_room_message(ev: &matrix_sdk::ruma::events::room::message::O
                         let path_str = path.to_string_lossy().to_string();
                         let file_url = format!("file://{}", path_str);
                         log::info!("Successfully saved file to {}", path_str);
-                        return format!("<a href=\"{}\">[File: {}]</a>", file_url, crate::escape_html(&content.body));
+                        return format!("📁 <b>File:</b> <a href=\"{}\">{}</a>", file_url, crate::escape_html(&content.body));
                     }
                 }
             }
-            format!("[File: {}]", crate::escape_html(&content.body))
+            format!("📁 [File: {}]", crate::escape_html(&content.body))
         },
         _ => crate::get_display_html(&ev.content),
     }

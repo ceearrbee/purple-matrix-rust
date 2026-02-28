@@ -75,6 +75,32 @@ pub extern "C" fn purple_matrix_rust_poll_vote(user_id: *const c_char, room_id: 
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_poll_end(user_id: *const c_char, room_id: *const c_char, poll_id: *const c_char, text: *const c_char) {
+    if user_id.is_null() || room_id.is_null() || poll_id.is_null() || text.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let poll_id_str = unsafe { CStr::from_ptr(poll_id).to_string_lossy().into_owned() };
+    let text_str = unsafe { CStr::from_ptr(text).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::{RoomId, EventId};
+            use matrix_sdk::ruma::events::poll::end::PollEndEventContent;
+            use matrix_sdk::ruma::events::message::TextContentBlock;
+            use matrix_sdk::ruma::events::AnyMessageLikeEventContent;
+
+            if let (Ok(rid), Ok(eid)) = (<&RoomId>::try_from(room_id_str.as_str()), <&EventId>::try_from(poll_id_str.as_str())) {
+                if let Some(room) = client.get_room(rid) {
+                    let end_content = PollEndEventContent::new(TextContentBlock::plain(text_str), eid.to_owned());
+                    let content = AnyMessageLikeEventContent::PollEnd(end_content);
+                    let _ = room.send(content).await;
+                }
+            }
+        });
+    });
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_list_polls(user_id: *const c_char, room_id: *const c_char) {
     if user_id.is_null() || room_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };

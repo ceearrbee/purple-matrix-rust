@@ -43,6 +43,7 @@ typedef enum {
   FFI_EVENT_SAS_REQUEST = 26,
   FFI_EVENT_SAS_HAVE_EMOJI = 27,
   FFI_EVENT_SHOW_VERIFICATION_QR = 28,
+  FFI_EVENT_POWER_LEVEL_UPDATE = 29,
 } FfiEventType;
 
 typedef struct {
@@ -69,6 +70,7 @@ typedef struct {
   char *avatar_url;
   char *topic;
   bool encrypted;
+  guint64 member_count;
 } CRoomJoined;
 typedef struct {
   char *user_id;
@@ -111,6 +113,15 @@ typedef struct {
   char *topic;
   guint64 member_count;
 } CRoomListAdd;
+typedef struct {
+  char *user_id;
+  char *room_id;
+  bool is_admin;
+  bool can_kick;
+  bool can_ban;
+  bool can_redact;
+  bool can_invite;
+} CPowerLevelUpdate;
 typedef struct {
   char *user_id;
   char *room_id_or_alias;
@@ -281,6 +292,9 @@ extern void purple_matrix_rust_list_threads(const char *user_id,
                                             const char *room_id);
 extern void purple_matrix_rust_list_polls(const char *user_id,
                                           const char *room_id);
+extern void purple_matrix_rust_poll_end(const char *user_id,
+                                        const char *room_id,
+                                        const char *poll_id, const char *text);
 extern void purple_matrix_rust_search_room_messages(const char *user_id,
                                                     const char *room_id,
                                                     const char *term);

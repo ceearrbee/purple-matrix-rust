@@ -91,7 +91,7 @@ pub extern "C" fn purple_matrix_rust_poll_event(
                     is_typing,
                 })) as *mut c_void
             ),
-            FfiEvent::RoomJoined { user_id, room_id, name, group_name, avatar_url, topic, encrypted } => (
+            FfiEvent::RoomJoined { user_id, room_id, name, group_name, avatar_url, topic, encrypted, member_count } => (
                 3,
                 Box::into_raw(Box::new(CRoomJoined {
                     user_id: to_c_char(&user_id),
@@ -101,6 +101,7 @@ pub extern "C" fn purple_matrix_rust_poll_event(
                     avatar_url: to_c_char_opt(&avatar_url),
                     topic: to_c_char_opt(&topic),
                     encrypted,
+                    member_count,
                 })) as *mut c_void
             ),
             FfiEvent::RoomLeft { user_id, room_id } => (
@@ -278,6 +279,18 @@ pub extern "C" fn purple_matrix_rust_poll_event(
                     user_data,
                 })) as *mut c_void
             ),
+            FfiEvent::PowerLevelUpdate { user_id, room_id, is_admin, can_kick, can_ban, can_redact, can_invite } => (
+                29,
+                Box::into_raw(Box::new(CPowerLevelUpdate {
+                    user_id: to_c_char(&user_id),
+                    room_id: to_c_char(&room_id),
+                    is_admin,
+                    can_kick,
+                    can_ban,
+                    can_redact,
+                    can_invite,
+                })) as *mut c_void
+            ),
         };
 
         unsafe {
@@ -440,6 +453,11 @@ pub extern "C" fn purple_matrix_rust_free_event(ev_type: i32, data: *mut c_void)
                 free_c_char(b.sticker_id);
                 free_c_char(b.uri);
                 free_c_char(b.description);
+            },
+            29 => {
+                let b = Box::from_raw(data as *mut CPowerLevelUpdate);
+                free_c_char(b.user_id);
+                free_c_char(b.room_id);
             },
             _ => log::error!("Unknown FFI event type to free: {}", ev_type),
         }

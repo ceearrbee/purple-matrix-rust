@@ -42,6 +42,7 @@ pub struct CRoomJoined {
     pub avatar_url: *mut c_char,
     pub topic: *mut c_char,
     pub encrypted: bool,
+    pub member_count: u64,
 }
 
 #[repr(C)]
@@ -147,6 +148,17 @@ pub struct CPollList {
 }
 
 #[repr(C)]
+pub struct CPowerLevelUpdate {
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub is_admin: bool,
+    pub can_kick: bool,
+    pub can_ban: bool,
+    pub can_redact: bool,
+    pub can_invite: bool,
+}
+
+#[repr(C)]
 pub struct CRoomListAdd {
     pub user_id: *mut c_char,
     pub room_id: *mut c_char,
@@ -232,6 +244,7 @@ pub enum FfiEvent {
         avatar_url: Option<String>,
         topic: Option<String>,
         encrypted: bool,
+        member_count: u64,
     },
     RoomLeft {
         user_id: String,
@@ -300,6 +313,15 @@ pub enum FfiEvent {
         question: Option<String>,
         sender: Option<String>,
         options_str: Option<String>,
+    },
+    PowerLevelUpdate {
+        user_id: String,
+        room_id: String,
+        is_admin: bool,
+        can_kick: bool,
+        can_ban: bool,
+        can_redact: bool,
+        can_invite: bool,
     },
     RoomListAdd {
         user_id: String,

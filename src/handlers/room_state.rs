@@ -90,3 +90,30 @@ pub async fn handle_tombstone(event: SyncRoomTombstoneEvent, room: Room) {
         let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
     }
 }
+
+pub async fn handle_power_levels(_event: matrix_sdk::ruma::events::room::power_levels::SyncRoomPowerLevelsEvent, room: matrix_sdk::Room) {
+    if let Ok(pl) = room.power_levels().await {
+        let client = room.client();
+        let user_id = client.user_id().unwrap().as_str().to_string();
+        let room_id = room.room_id().as_str().to_string();
+        
+        let self_id = client.user_id().unwrap();
+        let my_level = pl.for_user(self_id);
+        let is_admin = my_level >= matrix_sdk::ruma::int!(100);
+        let can_kick = my_level >= pl.kick;
+        let can_ban = my_level >= pl.ban;
+        let can_redact = my_level >= pl.redact;
+        let can_invite = my_level >= pl.invite;
+        
+        let event = crate::ffi::FfiEvent::PowerLevelUpdate {
+            user_id,
+            room_id,
+            is_admin,
+            can_kick,
+            can_ban,
+            can_redact,
+            can_invite,
+        };
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+    }
+}

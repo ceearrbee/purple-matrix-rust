@@ -66,6 +66,7 @@ pub async fn start_sync_loop(client: Client) {
         let group = crate::grouping::get_room_group_name(&room).await;
         let topic = room.topic().unwrap_or_default();
         let is_encrypted = room.get_state_event_static::<matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent>().await.ok().flatten().is_some();
+        let member_count = room.joined_members_count();
         
         let event = crate::ffi::FfiEvent::RoomJoined {
             user_id: user_id.clone(),
@@ -75,6 +76,7 @@ pub async fn start_sync_loop(client: Client) {
             avatar_url: None,
             topic: Some(topic.clone()),
             encrypted: is_encrypted,
+            member_count,
         };
         let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
 
@@ -86,6 +88,7 @@ pub async fn start_sync_loop(client: Client) {
         let group_clone = group.clone();
         let topic_clone = topic.clone();
         let is_encrypted_clone = is_encrypted;
+        let member_count_clone = member_count;
 
         tokio::spawn(async move {
             if let Ok(ruma_room_id) = matrix_sdk::ruma::RoomId::parse(&room_id_clone) {
@@ -93,16 +96,36 @@ pub async fn start_sync_loop(client: Client) {
                     if let Some(url) = room.avatar_url() {
                         if let Some(path) = crate::media_helper::download_avatar(&client_clone, &url, &room_id_clone).await {
                              let event = crate::ffi::FfiEvent::RoomJoined {
-                                 user_id: user_id_clone,
-                                 room_id: room_id_clone,
+                                 user_id: user_id_clone.clone(),
+                                 room_id: room_id_clone.clone(),
                                  name: name_clone,
                                  group_name: group_clone,
                                  avatar_url: Some(path.to_string()),
                                  topic: Some(topic_clone),
                                  encrypted: is_encrypted_clone,
+                                 member_count: member_count_clone,
                              };
                              let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
                         }
+                    }
+                    if let Ok(pl) = room.power_levels().await {
+                        let self_id = client_clone.user_id().unwrap();
+                        let my_level = pl.for_user(self_id);
+                        let is_admin = my_level >= matrix_sdk::ruma::int!(100);
+                        let can_kick = my_level >= pl.kick;
+                        let can_ban = my_level >= pl.ban;
+                        let can_redact = my_level >= pl.redact;
+                        let can_invite = my_level >= pl.invite;
+                        let pl_event = crate::ffi::FfiEvent::PowerLevelUpdate {
+                            user_id: user_id_clone,
+                            room_id: room_id_clone,
+                            is_admin,
+                            can_kick,
+                            can_ban,
+                            can_redact,
+                            can_invite,
+                        };
+                        let _ = crate::ffi::EVENTS_CHANNEL.0.send(pl_event);
                     }
                 }
             }
@@ -137,6 +160,7 @@ pub async fn start_sync_loop(client: Client) {
     client_for_sync.add_event_handler(room_state::handle_room_member);
     client_for_sync.add_event_handler(room_state::handle_stripped_member);
     client_for_sync.add_event_handler(room_state::handle_tombstone);
+    client_for_sync.add_event_handler(room_state::handle_power_levels);
     client_for_sync.add_event_handler(account_data::handle_account_data);
     client_for_sync.add_event_handler(polls::handle_poll_start);
     client_for_sync.add_event_handler(receipts::handle_receipt);

@@ -301,8 +301,12 @@ static gboolean process_chat_topic_cb(gpointer data) {
   if (account && purple_account_get_connection(account) != NULL) {
     PurpleConversation *conv = purple_find_chat(
         purple_account_get_connection(account), get_chat_id(d->room_id));
-    if (conv)
-      purple_conv_chat_set_topic(PURPLE_CONV_CHAT(conv), d->sender, d->topic);
+    if (conv) {
+      g_free(purple_conversation_get_data(conv, "matrix_real_topic"));
+      purple_conversation_set_data(conv, "matrix_real_topic",
+                                   g_strdup(d->topic));
+      matrix_ui_refresh_room_chips(conv);
+    }
   }
   g_free(d->user_id);
   g_free(d->room_id);

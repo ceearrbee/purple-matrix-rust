@@ -22,7 +22,18 @@ typedef struct {
   char *description;
   char *timestamp_str;
   char *alias;
+  guint64 ts;
 } MatrixThreadInfo;
+
+static gint sort_threads_by_ts(gconstpointer a, gconstpointer b) {
+  MatrixThreadInfo *ta = (MatrixThreadInfo *)a;
+  MatrixThreadInfo *tb = (MatrixThreadInfo *)b;
+  if (ta->ts > tb->ts)
+    return -1;
+  if (ta->ts < tb->ts)
+    return 1;
+  return 0;
+}
 
 static void free_matrix_thread_info(MatrixThreadInfo *info) {
   if (!info)
@@ -124,6 +135,8 @@ static gboolean thread_list_ui_idle_cb(gpointer data) {
   purple_notify_searchresults_button_add(results, PURPLE_NOTIFY_BUTTON_CONTINUE,
                                          thread_search_result_cb);
 
+  list = g_list_sort(list, sort_threads_by_ts);
+
   for (GList *it = list; it; it = it->next) {
     MatrixThreadInfo *info = (MatrixThreadInfo *)it->data;
     if (info) {
@@ -170,6 +183,7 @@ static gboolean process_thread_item_cb(gpointer user_data) {
     info->description =
         g_strdup_printf("%" G_GUINT64_FORMAT " messages", d->count);
     info->alias = g_strdup(d->latest_msg ? d->latest_msg : "No text");
+    info->ts = d->ts;
 
     if (d->ts > 0) {
       time_t raw_ts = (time_t)(d->ts / 1000);
@@ -185,7 +199,7 @@ static gboolean process_thread_item_cb(gpointer user_data) {
 
     GList *list = g_hash_table_lookup(thread_lists, d->room_id);
     if (list) {
-      g_list_append(list, info);
+      list = g_list_append(list, info);
     } else {
       list = g_list_append(NULL, info);
       g_hash_table_insert(thread_lists, g_strdup(d->room_id), list);
@@ -385,7 +399,7 @@ static gboolean process_poll_item_cb(gpointer user_data) {
 
     GList *list = g_hash_table_lookup(poll_lists, d->room_id);
     if (list) {
-      g_list_append(list, info);
+      list = g_list_append(list, info);
     } else {
       list = g_list_append(NULL, info);
       g_hash_table_insert(poll_lists, g_strdup(d->room_id), list);
@@ -533,7 +547,7 @@ static gboolean process_search_item_cb(gpointer user_data) {
 
     GList *list = g_hash_table_lookup(search_results_map, d->room_id);
     if (list) {
-      g_list_append(list, info);
+      list = g_list_append(list, info);
     } else {
       list = g_list_append(NULL, info);
       g_hash_table_insert(search_results_map, g_strdup(d->room_id), list);
@@ -683,4 +697,38 @@ char *matrix_get_chat_name(GHashTable *components) {
     return NULL;
   const char *room_id = g_hash_table_lookup(components, "room_id");
   return room_id ? g_strdup(room_id) : NULL;
+}
+
+void matrix_ui_refresh_room_chips(PurpleConversation *conv) {
+  if (!conv || purple_conversation_get_type(conv) != PURPLE_CONV_TYPE_CHAT)
+    return;
+
+  const char *real_topic =
+      purple_conversation_get_data(conv, "matrix_real_topic");
+  const char *is_enc =
+      purple_conversation_get_data(conv, "matrix_room_encrypted");
+  const char *is_muted =
+      purple_conversation_get_data(conv, "matrix_room_muted");
+  const char *member_count =
+      purple_conversation_get_data(conv, "matrix_room_member_count");
+
+  GString *topic_buf = g_string_new("");
+
+  if (is_enc && strcmp(is_enc, "1") == 0)
+    g_string_append(topic_buf, "[Encrypted 🔒] ");
+  if (is_muted && strcmp(is_muted, "1") == 0)
+    g_string_append(topic_buf, "[Muted 🔕] ");
+  if (member_count && *member_count)
+    g_string_append_printf(topic_buf, "[Members: %s 👥] ", member_count);
+
+  if (topic_buf->len > 0)
+    g_string_append(topic_buf, "| ");
+
+  if (real_topic && *real_topic)
+    g_string_append(topic_buf, real_topic);
+  else
+    g_string_append(topic_buf, "(No topic)");
+
+  purple_conv_chat_set_topic(PURPLE_CONV_CHAT(conv), "System", topic_buf->str);
+  g_string_free(topic_buf, TRUE);
 }
