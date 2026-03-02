@@ -57,7 +57,7 @@ pub fn sanitize_matrix_html(input: &str) -> String {
     use regex::Regex;
     use once_cell::sync::Lazy;
 
-    static RE_ALLOWED_TAG: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)<(/?)(b|strong|i|em|u|s|strike|del|blockquote|p|br|span|a|img|code|pre|font|hr|ul|ol|li)(\s+[^>]*)?>").expect("Valid regex"));
+    static RE_ALLOWED_TAG: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)<(/?)(b|strong|i|em|u|s|strike|del|blockquote|p|br|span|a|img|code|pre|font|hr|ul|ol|li|mx-reply)(\s+[^>]*)?>").expect("Valid regex"));
     
     let mut output = String::new();
     let mut last_end = 0;

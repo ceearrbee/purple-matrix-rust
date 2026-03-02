@@ -715,10 +715,23 @@ static void menu_action_reply_dialog_cb(void *user_data, const char *text) {
   PurpleConversation *conv = purple_find_conversation_with_account(
       PURPLE_CONV_TYPE_ANY, room_id, account);
   if (conv && text && *text) {
+    const char *selected_id =
+        purple_conversation_get_data(conv, "matrix-ui-selected-event-id");
     const char *last_id = purple_conversation_get_data(conv, "last_event_id");
-    if (last_id)
+    const char *target_id = selected_id ? selected_id : last_id;
+
+    if (target_id) {
       purple_matrix_rust_send_reply(purple_account_get_username(account),
-                                    room_id, last_id, text);
+                                    room_id, target_id, text);
+      if (conv) {
+        char *clean_text = purple_markup_escape_text(text, -1);
+        char *disp = g_strdup_printf("<b>[Reply]</b> %s", clean_text);
+        purple_conversation_write(conv, purple_account_get_username(account),
+                                  disp, PURPLE_MESSAGE_SEND, time(NULL));
+        g_free(disp);
+        g_free(clean_text);
+      }
+    }
   }
   g_free(room_id);
 }
@@ -1561,25 +1574,13 @@ typedef struct {
   char *event_id;
 } MatrixUiReactCtx;
 
-static void matrix_ui_react_text_cb(void *user_data, const char *key) {
-  MatrixUiReactCtx *ctx = (MatrixUiReactCtx *)user_data;
-  PurpleAccount *account = find_matrix_account();
-  if (account && ctx && ctx->room_id && ctx->event_id && key && *key) {
-    purple_matrix_rust_send_reaction(purple_account_get_username(account),
-                                     ctx->room_id, ctx->event_id, key);
-  }
-  if (ctx) {
-    g_free(ctx->room_id);
-    g_free(ctx->event_id);
-    g_free(ctx);
-  }
-}
+static void matrix_ui_open_reaction_picker(const char *room_id,
+                                           const char *event_id);
 
 void matrix_ui_action_react(const char *room_id) {
   PurpleAccount *account = find_matrix_account();
   PurpleConversation *conv = NULL;
   const char *event_id = NULL;
-  MatrixUiReactCtx *ctx = NULL;
   if (!account || !room_id || !*room_id)
     return;
   conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id,
@@ -1593,14 +1594,7 @@ void matrix_ui_action_react(const char *room_id) {
         "No recent event ID is available in this conversation.");
     return;
   }
-  ctx = g_new0(MatrixUiReactCtx, 1);
-  ctx->room_id = g_strdup(room_id);
-  ctx->event_id = g_strdup(event_id);
-  purple_request_input(my_plugin, "Add Reaction", "Reaction Key",
-                       "Enter emoji or reaction key (example: 👍).", NULL,
-                       FALSE, FALSE, NULL, "_React",
-                       G_CALLBACK(matrix_ui_react_text_cb), "_Cancel", NULL,
-                       account, NULL, conv, ctx);
+  matrix_ui_open_reaction_picker(room_id, event_id);
 }
 
 static const char *matrix_last_event_for_room(PurpleAccount *account,
@@ -1667,6 +1661,16 @@ static void matrix_ui_pick_edit_text_cb(void *user_data, const char *text) {
   if (account && ctx && ctx->room_id && ctx->event_id && text && *text) {
     purple_matrix_rust_send_edit(purple_account_get_username(account),
                                  ctx->room_id, ctx->event_id, text);
+    PurpleConversation *conv = purple_find_conversation_with_account(
+        PURPLE_CONV_TYPE_ANY, ctx->room_id, account);
+    if (conv) {
+      char *esc_text = g_markup_escape_text(text, -1);
+      char *disp = g_strdup_printf("<i>[Edited]</i> %s", esc_text);
+      purple_conversation_write(conv, purple_account_get_username(account), disp,
+                                PURPLE_MESSAGE_SEND, time(NULL));
+      g_free(disp);
+      g_free(esc_text);
+    }
   }
   if (ctx) {
     g_free(ctx->room_id);
@@ -1682,6 +1686,13 @@ static void matrix_ui_pick_redact_reason_cb(void *user_data,
   if (account && ctx && ctx->room_id && ctx->event_id) {
     purple_matrix_rust_redact_event(purple_account_get_username(account),
                                     ctx->room_id, ctx->event_id, reason);
+    PurpleConversation *conv = purple_find_conversation_with_account(
+        PURPLE_CONV_TYPE_ANY, ctx->room_id, account);
+    if (conv) {
+      purple_conversation_write(conv, purple_account_get_username(account),
+                                "<i>[Redacted a message]</i>",
+                                PURPLE_MESSAGE_SEND, time(NULL));
+    }
   }
   if (ctx) {
     g_free(ctx->room_id);
@@ -1812,6 +1823,94 @@ matrix_ui_event_thread_root_exact_for_room_event(const char *room_id,
   return NULL;
 }
 
+static void matrix_ui_react_fields_cb(void *user_data,
+                                      PurpleRequestFields *fields) {
+  MatrixUiReactCtx *ctx = (MatrixUiReactCtx *)user_data;
+  PurpleAccount *account = find_matrix_account();
+  PurpleRequestField *f_choice = purple_request_fields_get_field(fields, "choice");
+  PurpleRequestField *f_custom = purple_request_fields_get_field(fields, "custom");
+  const char *key = NULL;
+  int choice = 0;
+
+  if (!account || !ctx || !f_choice || !f_custom)
+    goto cleanup;
+
+  choice = purple_request_field_choice_get_value(f_choice);
+  if (choice == 0) {
+    /* Custom */
+    key = purple_request_field_string_get_value(f_custom);
+  } else {
+    /* Map choice to emoji */
+    const char *emojis[] = {"", "👍", "❤️", "😂", "😮", "😢", "🔥", "✅", "❌"};
+    if (choice < (int)(sizeof(emojis) / sizeof(emojis[0]))) {
+      key = emojis[choice];
+    }
+  }
+
+  if (key && *key) {
+    purple_matrix_rust_send_reaction(purple_account_get_username(account),
+                                     ctx->room_id, ctx->event_id, key);
+    PurpleConversation *conv = purple_find_conversation_with_account(
+        PURPLE_CONV_TYPE_ANY, ctx->room_id, account);
+    if (conv) {
+      char *esc_key = g_markup_escape_text(key, -1);
+      char *disp = g_strdup_printf(
+          "<i>[Reacted with <span size='x-large'>%s</span>]</i>", esc_key);
+      purple_conversation_write(conv, purple_account_get_username(account), 
+                                disp, PURPLE_MESSAGE_SEND, time(NULL));
+      g_free(disp);
+      g_free(esc_key);
+    }
+  }
+
+cleanup:
+  if (ctx) {
+    g_free(ctx->room_id);
+    g_free(ctx->event_id);
+    g_free(ctx);
+  }
+}
+
+static void matrix_ui_open_reaction_picker(const char *room_id,
+                                           const char *event_id) {
+  PurpleAccount *account = find_matrix_account();
+  PurpleRequestFields *fields;
+  PurpleRequestFieldGroup *group;
+  PurpleRequestField *field;
+  MatrixUiReactCtx *ctx;
+
+  if (!account || !room_id || !event_id)
+    return;
+
+  fields = purple_request_fields_new();
+  group = purple_request_field_group_new("Select Reaction");
+  purple_request_fields_add_group(fields, group);
+
+  field = purple_request_field_choice_new("choice", "Common Reactions", 0);
+  purple_request_field_choice_add(field, "Custom (Use text box below)");
+  purple_request_field_choice_add(field, "👍 Thumbs Up");
+  purple_request_field_choice_add(field, "❤️ Heart");
+  purple_request_field_choice_add(field, "😂 Laughing");
+  purple_request_field_choice_add(field, "😮 Surprised");
+  purple_request_field_choice_add(field, "😢 Sad");
+  purple_request_field_choice_add(field, "🔥 Fire");
+  purple_request_field_choice_add(field, "✅ Check");
+  purple_request_field_choice_add(field, "❌ Cross");
+  purple_request_field_group_add_field(group, field);
+
+  field = purple_request_field_string_new("custom", "Custom Text/Emoji", NULL,
+                                          FALSE);
+  purple_request_field_group_add_field(group, field);
+
+  ctx = g_new0(MatrixUiReactCtx, 1);
+  ctx->room_id = g_strdup(room_id);
+  ctx->event_id = g_strdup(event_id);
+
+  purple_request_fields(my_plugin, "Add Reaction", "Choose a reaction", NULL,
+                        fields, "_React", G_CALLBACK(matrix_ui_react_fields_cb),
+                        "_Cancel", NULL, account, NULL, NULL, ctx);
+}
+
 static void matrix_ui_open_event_action_dialog(const char *room_id,
                                                const char *event_id,
                                                MatrixEventPickAction action) {
@@ -1820,14 +1919,7 @@ static void matrix_ui_open_event_action_dialog(const char *room_id,
     return;
 
   if (action == MATRIX_EVENT_PICK_REACT) {
-    MatrixUiReactCtx *ctx = g_new0(MatrixUiReactCtx, 1);
-    ctx->room_id = g_strdup(room_id);
-    ctx->event_id = g_strdup(event_id);
-    purple_request_input(my_plugin, "Add Reaction", "Reaction Key",
-                         "Enter emoji or reaction key (example: 👍).", NULL,
-                         FALSE, FALSE, NULL, "_React",
-                         G_CALLBACK(matrix_ui_react_text_cb), "_Cancel", NULL,
-                         account, NULL, NULL, ctx);
+    matrix_ui_open_reaction_picker(room_id, event_id);
     return;
   }
 
@@ -2557,7 +2649,6 @@ void matrix_ui_action_show_last_event_details(const char *room_id) {
 void matrix_ui_action_react_latest(const char *room_id) {
   PurpleAccount *account = find_matrix_account();
   const char *event_id = NULL;
-  MatrixUiReactCtx *ctx = NULL;
   if (!account || !room_id || !*room_id)
     return;
   event_id = matrix_last_event_for_room(account, room_id);
@@ -2566,14 +2657,7 @@ void matrix_ui_action_react_latest(const char *room_id) {
                         "No recent event ID is available in this room.");
     return;
   }
-  ctx = g_new0(MatrixUiReactCtx, 1);
-  ctx->room_id = g_strdup(room_id);
-  ctx->event_id = g_strdup(event_id);
-  purple_request_input(my_plugin, "Add Reaction", "Reaction Key",
-                       "Enter emoji or reaction key (example: 👍).", NULL,
-                       FALSE, FALSE, NULL, "_React",
-                       G_CALLBACK(matrix_ui_react_text_cb), "_Cancel", NULL,
-                       account, NULL, NULL, ctx);
+  matrix_ui_open_reaction_picker(room_id, event_id);
 }
 
 void matrix_ui_action_list_polls(const char *room_id) {
@@ -2972,6 +3056,13 @@ static void matrix_ui_redact_reason_cb(void *user_data, const char *reason) {
                                     ctx->room_id, ctx->event_id, reason);
     purple_notify_info(my_plugin, "Redact Event", "Redaction Submitted",
                        "The redaction request has been sent to the server.");
+    PurpleConversation *conv = purple_find_conversation_with_account(
+        PURPLE_CONV_TYPE_ANY, ctx->room_id, account);
+    if (conv) {
+      purple_conversation_write(conv, purple_account_get_username(account),
+                                "<i>[Redacted a message]</i>",
+                                PURPLE_MESSAGE_SEND, time(NULL));
+    }
   }
   if (ctx) {
     g_free(ctx->room_id);
@@ -3061,6 +3152,16 @@ static void matrix_ui_edit_text_cb(void *user_data, const char *text) {
   if (account && ctx && ctx->room_id && ctx->event_id && text && *text) {
     purple_matrix_rust_send_edit(purple_account_get_username(account),
                                  ctx->room_id, ctx->event_id, text);
+    PurpleConversation *conv = purple_find_conversation_with_account(
+        PURPLE_CONV_TYPE_ANY, ctx->room_id, account);
+    if (conv) {
+      char *esc_text = g_markup_escape_text(text, -1);
+      char *disp = g_strdup_printf("<i>[Edited]</i> %s", esc_text);
+      purple_conversation_write(conv, purple_account_get_username(account), disp,
+                                PURPLE_MESSAGE_SEND, time(NULL));
+      g_free(disp);
+      g_free(esc_text);
+    }
   }
   if (ctx) {
     g_free(ctx->room_id);

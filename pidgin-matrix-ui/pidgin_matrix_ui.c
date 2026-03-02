@@ -8,6 +8,8 @@
 #include <libpurple/plugin.h>
 #include <libpurple/signals.h>
 #include <libpurple/util.h>
+#include <libpurple/core.h>
+#include <libpurple/util.h>
 #include <libpurple/version.h>
 #include <pidgin/gtkconv.h>
 #include <pidgin/pidgin.h>
@@ -19,6 +21,8 @@
 #define MATRIX_UI_MUTED_LABEL_KEY "matrix-ui-muted-label"
 #define MATRIX_UI_ACTIVITY_LABEL_KEY "matrix-ui-activity-label"
 #define MATRIX_UI_USERLIST_HOOKED_KEY "matrix-ui-userlist-hooked"
+#define MATRIX_UI_POPUP_HOOKED_KEY "matrix-ui-popup-hooked"
+#define MATRIX_UI_SELECTED_EVENT_ID_KEY "matrix-ui-selected-event-id"
 
 typedef struct {
   PurpleConversation *conv;
@@ -36,9 +40,20 @@ typedef struct {
   char *signal_name;
 } RoomUserActionData;
 
+/* Local Utilities */
+static char *local_sanitize_markup_text(const char *input) {
+  if (!input)
+    return g_strdup("");
+  char *tmp = purple_markup_strip_html(input);
+  char *ret = g_strdup(tmp ? tmp : "");
+  g_free(tmp);
+  return ret;
+}
+
 /* Forward Declarations */
 static void on_menu_dash(gpointer d);
 static void on_menu_reply(gpointer d);
+static void on_menu_reply_latest(gpointer d);
 static void on_menu_start_thread(gpointer d);
 static void on_menu_threads(gpointer d);
 static void on_menu_sticker(gpointer d);
@@ -132,18 +147,45 @@ static gboolean is_conv_room_muted(PurpleConversation *conv) {
 }
 
 static gboolean on_activity_label_button_press_cb(GtkWidget *widget,
-                                                  GdkEventButton *event,
-                                                  gpointer data) {
+                                                   GdkEventButton *event,
+                                                   gpointer data) {
   PurpleConversation *conv = (PurpleConversation *)data;
   (void)widget;
   if (!conv || !event || event->type != GDK_BUTTON_PRESS)
     return FALSE;
+
   if (event->button == 1) {
+    /* Left click: Show last event details */
     emit_matrix_signal(conv, "matrix-ui-action-show-last-event-details");
     return TRUE;
   }
+
   if (event->button == 3) {
-    emit_matrix_signal(conv, "matrix-ui-action-message-inspector");
+    /* Right click: Show a small menu for the activity label */
+    GtkWidget *menu = gtk_menu_new();
+    GtkWidget *item;
+
+    item = gtk_menu_item_new_with_label("Reply to Latest");
+    g_signal_connect_swapped(G_OBJECT(item), "activate",
+                             G_CALLBACK(on_menu_reply_latest), conv);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("React to Latest...");
+    g_signal_connect_swapped(G_OBJECT(item), "activate",
+                             G_CALLBACK(on_menu_react_latest), conv);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_separator_menu_item_new();
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    item = gtk_menu_item_new_with_label("Message Inspector...");
+    g_signal_connect_swapped(G_OBJECT(item), "activate",
+                             G_CALLBACK(on_menu_message_inspector), conv);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+
+    gtk_widget_show_all(menu);
+    gtk_menu_popup(GTK_MENU(menu), NULL, NULL, NULL, NULL, event->button,
+                   event->time);
     return TRUE;
   }
   return FALSE;
@@ -259,6 +301,12 @@ static void on_menu_dash(gpointer d) {
 static void on_menu_reply(gpointer d) {
   emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-reply");
 }
+static void on_menu_reply_latest(gpointer d) {
+  PurpleConversation *conv = (PurpleConversation *)d;
+  purple_conversation_set_data(conv, MATRIX_UI_SELECTED_EVENT_ID_KEY, NULL);
+  emit_matrix_signal(conv, "matrix-ui-action-reply");
+}
+
 static void on_menu_start_thread(gpointer d) {
   emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-start-thread");
 }
@@ -444,6 +492,168 @@ static void on_menu_ignore_user(gpointer d) {
 }
 static void on_menu_unignore_user(gpointer d) {
   emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-unignore-user");
+}
+
+static void identify_event_at_iter(PurpleConversation *conv, GtkTextIter *iter) {
+  GtkTextIter start = *iter;
+  GtkTextIter end = *iter;
+  char *line_text = NULL;
+  char *clean_line = NULL;
+  int i;
+
+  gtk_text_iter_set_line_offset(&start, 0);
+  if (!gtk_text_iter_ends_line(&end)) {
+    gtk_text_iter_forward_to_line_end(&end);
+  }
+
+  line_text = gtk_text_iter_get_text(&start, &end);
+  if (!line_text)
+    return;
+
+  clean_line = local_sanitize_markup_text(line_text);
+  g_free(line_text);
+
+  purple_debug_info("matrix-ui", "identify_event_at_iter: Searching for event in line: '%s'\n", clean_line);
+
+  g_free(purple_conversation_get_data(conv, MATRIX_UI_SELECTED_EVENT_ID_KEY));
+  purple_conversation_set_data(conv, MATRIX_UI_SELECTED_EVENT_ID_KEY, NULL);
+
+  for (i = 0; i < 10; i++) {
+    char key_id[64], key_msg[64], key_sender[64];
+    const char *ev_id, *ev_msg, *ev_sender;
+
+    g_snprintf(key_id, sizeof(key_id), "matrix_recent_event_id_%d", i);
+    g_snprintf(key_msg, sizeof(key_msg), "matrix_recent_event_msg_%d", i);
+    g_snprintf(key_sender, sizeof(key_sender), "matrix_recent_event_sender_%d",
+               i);
+
+    ev_id = purple_conversation_get_data(conv, key_id);
+    ev_msg = purple_conversation_get_data(conv, key_msg);
+    ev_sender = purple_conversation_get_data(conv, key_sender);
+
+    if (ev_id && ev_msg && strlen(ev_msg) > 3) {
+      /* Simple heuristic: check if the stored snippet is part of this line.
+       * We also check for the sender name to increase accuracy. */
+      if (strstr(clean_line, ev_msg) != NULL) {
+        if (!ev_sender || !*ev_sender || strstr(clean_line, ev_sender) != NULL) {
+          purple_conversation_set_data(conv, MATRIX_UI_SELECTED_EVENT_ID_KEY,
+                                       g_strdup(ev_id));
+          break;
+        }
+      }
+    }
+  }
+  g_free(clean_line);
+}
+
+static gboolean imhtml_button_press_cb(GtkWidget *widget, GdkEventButton *event,
+                                       gpointer data) {
+  PurpleConversation *conv = (PurpleConversation *)data;
+  GtkTextView *view = GTK_TEXT_VIEW(widget);
+  GtkTextIter iter;
+  int x, y;
+
+  if (event->button != 3)
+    return FALSE;
+
+  gtk_text_view_window_to_buffer_coords(view, GTK_TEXT_WINDOW_WIDGET, event->x,
+                                        event->y, &x, &y);
+  gtk_text_view_get_iter_at_location(view, &iter, x, y);
+
+  identify_event_at_iter(conv, &iter);
+
+  return FALSE;
+}
+
+static void imhtml_populate_popup_cb(GtkWidget *imhtml, GtkMenu *menu,
+                                     gpointer data) {
+  PurpleConversation *conv = (PurpleConversation *)data;
+  GtkWidget *item;
+  GtkWidget *matrix_item;
+  GtkWidget *matrix_menu;
+
+  if (!conv)
+    return;
+
+  item = gtk_separator_menu_item_new();
+  gtk_menu_shell_prepend(GTK_MENU_SHELL(menu), item);
+  gtk_widget_show(item);
+
+  const char *selected_id =
+      purple_conversation_get_data(conv, MATRIX_UI_SELECTED_EVENT_ID_KEY);
+
+  if (selected_id) {
+    item = gtk_menu_item_new_with_label("Matrix Reply");
+    g_signal_connect_swapped(G_OBJECT(item), "activate",
+                             G_CALLBACK(on_menu_reply), conv);
+    gtk_menu_shell_prepend(GTK_MENU_SHELL(menu), item);
+    gtk_widget_show(item);
+  }
+
+  matrix_item = gtk_menu_item_new_with_label("Matrix Options");
+  gtk_menu_shell_prepend(GTK_MENU_SHELL(menu), matrix_item);
+  gtk_widget_show(matrix_item);
+
+  matrix_menu = gtk_menu_new();
+  gtk_menu_item_set_submenu(GTK_MENU_ITEM(matrix_item), matrix_menu);
+
+  if (selected_id) {
+    item = gtk_menu_item_new_with_label("Reply to this message");
+    g_signal_connect_swapped(G_OBJECT(item), "activate",
+                             G_CALLBACK(on_menu_reply), conv);
+    gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
+    gtk_widget_show(item);
+
+    item = gtk_menu_item_new_with_label("React to this message...");
+    g_signal_connect_swapped(G_OBJECT(item), "activate",
+                             G_CALLBACK(on_menu_react_pick_event), conv);
+    gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
+    gtk_widget_show(item);
+
+    item = gtk_separator_menu_item_new();
+    gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
+    gtk_widget_show(item);
+  }
+
+  item = gtk_menu_item_new_with_label("Reply to Latest");
+  g_signal_connect_swapped(G_OBJECT(item), "activate",
+                           G_CALLBACK(on_menu_reply_latest), conv);
+  gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
+  gtk_widget_show(item);
+
+  item = gtk_menu_item_new_with_label("Reply (Pick Event)...");
+  g_signal_connect_swapped(G_OBJECT(item), "activate",
+                           G_CALLBACK(on_menu_reply_pick_event), conv);
+  gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
+  gtk_widget_show(item);
+
+  item = gtk_menu_item_new_with_label("React (Pick Event)...");
+  g_signal_connect_swapped(G_OBJECT(item), "activate",
+                           G_CALLBACK(on_menu_react_pick_event), conv);
+  gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
+  gtk_widget_show(item);
+
+  item = gtk_menu_item_new_with_label("Edit (Pick Event)...");
+  g_signal_connect_swapped(G_OBJECT(item), "activate",
+                           G_CALLBACK(on_menu_edit_pick_event), conv);
+  gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
+  gtk_widget_show(item);
+
+  item = gtk_menu_item_new_with_label("Redact (Pick Event)...");
+  g_signal_connect_swapped(G_OBJECT(item), "activate",
+                           G_CALLBACK(on_menu_redact_pick_event), conv);
+  gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
+  gtk_widget_show(item);
+
+  item = gtk_separator_menu_item_new();
+  gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
+  gtk_widget_show(item);
+
+  item = gtk_menu_item_new_with_label("Show Last Event Details");
+  g_signal_connect_swapped(G_OBJECT(item), "activate",
+                           G_CALLBACK(on_menu_show_last_event_details), conv);
+  gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
+  gtk_widget_show(item);
 }
 
 static void room_user_action_data_free(RoomUserActionData *d) {
@@ -1365,6 +1575,17 @@ static gboolean inject_action_bar_idle_cb(gpointer data) {
   if (!ui_tooltips)
     ui_tooltips = gtk_tooltips_new();
 
+  if (!purple_conversation_get_data(conv, MATRIX_UI_POPUP_HOOKED_KEY)) {
+    if (gtkconv->imhtml && GTK_IS_WIDGET(gtkconv->imhtml)) {
+      g_signal_connect(G_OBJECT(gtkconv->imhtml), "populate-popup",
+                       G_CALLBACK(imhtml_populate_popup_cb), conv);
+      g_signal_connect(G_OBJECT(gtkconv->imhtml), "button-press-event",
+                       G_CALLBACK(imhtml_button_press_cb), conv);
+      purple_conversation_set_data(conv, MATRIX_UI_POPUP_HOOKED_KEY,
+                                   GINT_TO_POINTER(1));
+    }
+  }
+
   GtkWidget *hbox = gtk_hbox_new(FALSE, 2);
   GtkWidget *reply_btn = gtk_button_new_with_mnemonic("_Reply");
   GtkWidget *thread_start_btn = gtk_button_new_with_mnemonic("_Thread+");
@@ -1406,7 +1627,7 @@ static gboolean inject_action_bar_idle_cb(gpointer data) {
                        NULL);
   gtk_tooltips_set_tip(ui_tooltips, more_btn, "More Matrix actions", NULL);
 
-  g_signal_connect_swapped(reply_btn, "clicked", G_CALLBACK(on_menu_reply),
+  g_signal_connect_swapped(reply_btn, "clicked", G_CALLBACK(on_menu_reply_latest),
                            conv);
   g_signal_connect_swapped(thread_start_btn, "clicked",
                            G_CALLBACK(on_menu_start_thread), conv);
@@ -1475,7 +1696,7 @@ static void conversation_extended_menu_cb(PurpleConversation *conv,
     sub_actions = g_list_append(
         sub_actions,
         purple_menu_action_new("Reply to Latest",
-                               PURPLE_CALLBACK(on_menu_reply), conv, NULL));
+                               PURPLE_CALLBACK(on_menu_reply_latest), conv, NULL));
     sub_actions = g_list_append(
         sub_actions,
         purple_menu_action_new("Reply (Pick Event)",
@@ -1731,6 +1952,8 @@ static void conversation_deleted_cb(PurpleConversation *conv, gpointer data) {
   purple_conversation_set_data(conv, MATRIX_UI_ENCRYPTED_LABEL_KEY, NULL);
   purple_conversation_set_data(conv, MATRIX_UI_MUTED_LABEL_KEY, NULL);
   purple_conversation_set_data(conv, MATRIX_UI_ACTIVITY_LABEL_KEY, NULL);
+  purple_conversation_set_data(conv, MATRIX_UI_USERLIST_HOOKED_KEY, NULL);
+  purple_conversation_set_data(conv, MATRIX_UI_POPUP_HOOKED_KEY, NULL);
 }
 
 static void connect_ui_signals(PurplePlugin *plugin) {

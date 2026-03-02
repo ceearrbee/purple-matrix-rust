@@ -264,13 +264,11 @@ static gboolean process_msg_cb(gpointer data) {
 
   if (g_str_has_prefix(d->message, "[System] ")) {
     const char *sys_msg = d->message + 9;
-    PurpleConnection *gc_sys = purple_account_get_connection(account);
-    if (gc_sys) {
-      int chat_id = get_chat_id(target_id);
-      PurpleConversation *conv = purple_find_chat(gc_sys, chat_id);
-      if (conv)
-        purple_conv_chat_write(PURPLE_CONV_CHAT(conv), "", sys_msg,
-                               PURPLE_MESSAGE_SYSTEM, d->timestamp / 1000);
+    PurpleConversation *conv = purple_find_conversation_with_account(
+        PURPLE_CONV_TYPE_ANY, target_id, account);
+    if (conv) {
+      purple_conversation_write(conv, "", sys_msg, PURPLE_MESSAGE_SYSTEM,
+                                d->timestamp / 1000);
     }
     g_free(target_id);
     g_free(d->user_id);

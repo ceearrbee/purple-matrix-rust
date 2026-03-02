@@ -14,7 +14,9 @@ pub async fn handle_reaction(event: matrix_sdk::ruma::events::reaction::SyncReac
 
         let room_id = room.room_id().as_str();
         let timestamp: u64 = ev.origin_server_ts.0.into();
-        let body = format!("[Reaction] {} reacted with {}", sender, ev.content.relates_to.key);
+        let body = format!("[System] [Reaction] {} reacted with <span size='x-large'>{}</span>", 
+                           crate::escape_html(sender), 
+                           crate::escape_html(&ev.content.relates_to.key));
         let is_encrypted = room.get_state_event_static::<matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent>().await.ok().flatten().is_some();
         
         let event = crate::ffi::FfiEvent::MessageReceived {

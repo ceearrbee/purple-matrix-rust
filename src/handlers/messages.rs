@@ -103,6 +103,10 @@ pub async fn handle_encrypted(event: matrix_sdk::ruma::serde::Raw<matrix_sdk::ru
                              handle_sticker(sticker_ev, room).await;
                              return;
                          },
+                         AnySyncMessageLikeEvent::Reaction(reaction_ev) => {
+                             crate::handlers::reactions::handle_reaction(reaction_ev, room).await;
+                             return;
+                         },
                          _ => {}
                      }
                  }
@@ -156,7 +160,7 @@ pub async fn handle_redaction(event: matrix_sdk::ruma::events::room::redaction::
         let event = crate::ffi::FfiEvent::MessageReceived {
             user_id,
             sender: "System".to_string(),
-            msg: format!("[Redaction] Message {} was removed.", target_event_id),
+            msg: format!("[System] [Redaction] Message {} was removed.", target_event_id),
             room_id: Some(room_id.to_string()),
             thread_root_id: None,
             event_id: ev.event_id.to_string(),
