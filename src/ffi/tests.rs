@@ -65,7 +65,38 @@ mod tests {
             assert_eq!(user_id, "test_user");
             assert_eq!(message, "test_message");
         } else {
-            panic!("Received wrong event type from channel");
+            assert!(false, "Received wrong event type from channel");
+        }
+    }
+
+    #[test]
+    fn test_roomlist_add_dispatch() {
+        use crate::ffi::{EVENTS_CHANNEL, FfiEvent};
+        
+        let event = FfiEvent::RoomListAdd {
+            user_id: "u1".to_string(),
+            room_id: "r1".to_string(),
+            name: "n1".to_string(),
+            topic: "t1".to_string(),
+            member_count: 5,
+            is_space: false,
+            parent_id: Some("p1".to_string()),
+        };
+        
+        let _ = EVENTS_CHANNEL.0.send(event);
+        let received = EVENTS_CHANNEL.1.try_recv();
+        assert!(received.is_ok());
+        
+        if let Ok(FfiEvent::RoomListAdd { user_id, room_id, name, topic, member_count, is_space, parent_id }) = received {
+            assert_eq!(user_id, "u1");
+            assert_eq!(room_id, "r1");
+            assert_eq!(name, "n1");
+            assert_eq!(topic, "t1");
+            assert_eq!(member_count, 5);
+            assert_eq!(is_space, false);
+            assert_eq!(parent_id, Some("p1".to_string()));
+        } else {
+            assert!(false, "Received wrong event type from channel");
         }
     }
 }

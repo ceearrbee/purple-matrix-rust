@@ -320,7 +320,13 @@ pub extern "C" fn purple_matrix_rust_set_avatar_bytes(user_id: *const c_char, da
     with_client(&user_id_str.clone(), |client| {
         
         RUNTIME.spawn(async move {
-            let mime = "image/png".parse().unwrap(); 
+            let mime = match "image/png".parse() {
+                Ok(m) => m,
+                Err(_) => {
+                    log::error!("Failed to parse image/png MIME type.");
+                    return;
+                }
+            };
             
             match client.media().upload(&mime, bytes, None).await {
                 Ok(response) => {

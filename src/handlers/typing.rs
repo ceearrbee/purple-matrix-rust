@@ -28,7 +28,7 @@ pub async fn handle_typing(event: SyncTypingEvent, room: Room) {
     let mut to_remove = Vec::new();
 
     {
-        let mut guard = TYPING_STATUS.lock().unwrap();
+        let mut guard = TYPING_STATUS.lock().unwrap_or_else(|e| e.into_inner());
         let old_typing = guard.entry(room_id.to_string()).or_insert_with(HashSet::new);
 
         // Who started typing? (In current but not in old)

@@ -305,7 +305,7 @@ pub extern "C" fn purple_matrix_rust_send_sticker(user_id: *const c_char, room_i
                 if let Some(room) = client.get_room(rid) {
                     
                     let cached_mxc = {
-                        let cache = STICKER_MXC_CACHE.lock().unwrap();
+                        let cache = STICKER_MXC_CACHE.lock().unwrap_or_else(|e| e.into_inner());
                         cache.get(&url_str).cloned()
                     };
 
@@ -322,7 +322,7 @@ pub extern "C" fn purple_matrix_rust_send_sticker(user_id: *const c_char, room_i
                                  let mime = mime_guess::from_path(path).first_or_octet_stream();
                                  if let Ok(response) = client.media().upload(&mime, bytes, None).await {
                                      let mxc = response.content_uri.to_string();
-                                     let mut cache = STICKER_MXC_CACHE.lock().unwrap();
+                                     let mut cache = STICKER_MXC_CACHE.lock().unwrap_or_else(|e| e.into_inner());
                                      cache.insert(url_str.clone(), mxc.clone());
                                      mxc
                                  } else {

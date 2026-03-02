@@ -16,7 +16,10 @@ pub mod grouping;
 pub mod html_fmt;
 
 // Global Runtime/Client
-pub(crate) static RUNTIME: Lazy<Runtime> = Lazy::new(|| Runtime::new().unwrap_or_else(|e| panic!("Failed to start Tokio runtime: {}", e)));
+pub(crate) static RUNTIME: Lazy<Runtime> = Lazy::new(|| Runtime::new().unwrap_or_else(|e| {
+    log::error!("Failed to start Tokio runtime: {}", e);
+    std::process::abort();
+}));
 // user_id -> Client
 pub(crate) static CLIENTS: Lazy<DashMap<String, Client>> = Lazy::new(DashMap::new);
 pub(crate) static HISTORY_FETCHED_ROOMS: Lazy<DashSet<String>> = Lazy::new(DashSet::new);

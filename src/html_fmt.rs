@@ -63,14 +63,15 @@ pub fn sanitize_matrix_html(input: &str) -> String {
     let mut last_end = 0;
     
     for cap in RE_ALLOWED_TAG.captures_iter(input) {
-        let range = cap.get(0).unwrap().range();
+        let Some(match_0) = cap.get(0) else { continue; };
+        let range = match_0.range();
         
         let text_before = &input[last_end..range.start];
         output.push_str(&crate::escape_html(text_before));
         
-        let tag_full = cap.get(0).unwrap().as_str();
+        let tag_full = match_0.as_str();
         let is_close = cap.get(1).map_or(false, |m| m.as_str() == "/");
-        let tag_name = cap.get(2).unwrap().as_str().to_lowercase();
+        let tag_name = cap.get(2).map(|m| m.as_str().to_lowercase()).unwrap_or_default();
         let attrs = cap.get(3).map_or("", |m| m.as_str());
         
         if tag_name == "a" && !is_close {

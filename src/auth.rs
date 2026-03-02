@@ -208,17 +208,23 @@ async fn build_client(homeserver: &str, data_path: &PathBuf) -> Result<Client, m
     builder.sqlite_store(data_path, None).build().await
 }
 
-fn get_keyring_entry(username: &str) -> keyring::Entry {
-    keyring::Entry::new("purple-matrix-rust", username).unwrap()
+fn get_keyring_entry(username: &str) -> Result<keyring::Entry, keyring::Error> {
+    keyring::Entry::new("purple-matrix-rust", username)
 }
 
 fn write_session_json_secure(path: &std::path::Path, json: &str, username: &str) -> std::io::Result<()> {
     // 1. Save to keyring
-    let entry = get_keyring_entry(username);
-    if let Err(e) = entry.set_password(json) {
-        log::warn!("Failed to save session to keyring: {:?}", e);
-    } else {
-        log::info!("Session saved securely to keyring.");
+    match get_keyring_entry(username) {
+        Ok(entry) => {
+            if let Err(e) = entry.set_password(json) {
+                log::warn!("Failed to save session to keyring: {:?}", e);
+            } else {
+                log::info!("Session saved securely to keyring.");
+            }
+        },
+        Err(e) => {
+            log::warn!("Failed to initialize keyring entry: {:?}", e);
+        }
     }
 
     // 2. Save a dummy/metadata file to the data dir so we know a session exists
@@ -234,10 +240,11 @@ fn write_session_json_secure(path: &std::path::Path, json: &str, username: &str)
 
 fn load_session_json_secure(path: &std::path::Path, username: &str) -> Option<String> {
     // 1. Try to load from keyring
-    let entry = get_keyring_entry(username);
-    if let Ok(json) = entry.get_password() {
-        log::info!("Session loaded from keyring.");
-        return Some(json);
+    if let Ok(entry) = get_keyring_entry(username) {
+        if let Ok(json) = entry.get_password() {
+            log::info!("Session loaded from keyring.");
+            return Some(json);
+        }
     }
 
     // 2. Fallback to file (for migration or if keyring failed)
@@ -451,7 +458,11 @@ async fn finish_login_success(client: Client) {
     // 2. Bootstrap Crypto
     let client_for_crypto = client.clone();
     RUNTIME.spawn(async move {
-        log::info!("Bootstrapping crypto state for {}...", client_for_crypto.user_id().unwrap());
+        if let Some(uid) = client_for_crypto.user_id() {
+            log::info!("Bootstrapping crypto state for {}...", uid);
+        } else {
+            log::info!("Bootstrapping crypto state...");
+        }
         
         let encryption = client_for_crypto.encryption();
         
@@ -648,11 +659,12 @@ pub extern "C" fn purple_matrix_rust_destroy_session(user_id: *const c_char) {
     log::info!("Explicit Session Destruction Requested for {}.", user_id_str);
     
     // 1. Remove from keyring immediately (sync)
-    let entry = get_keyring_entry(&user_id_str);
-    if let Err(e) = entry.delete_password() {
-        log::warn!("Failed to delete session from keyring (might not exist): {:?}", e);
-    } else {
-        log::info!("Session removed from keyring.");
+    if let Ok(entry) = get_keyring_entry(&user_id_str) {
+        if let Err(e) = entry.delete_password() {
+            log::warn!("Failed to delete session from keyring (might not exist): {:?}", e);
+        } else {
+            log::info!("Session removed from keyring.");
+        }
     }
 
     let client_opt = crate::CLIENTS.remove(&user_id_str).map(|(_, c)| c);
