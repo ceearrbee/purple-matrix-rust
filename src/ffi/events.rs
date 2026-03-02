@@ -2,7 +2,10 @@ use std::ffi::CString;
 use std::os::raw::c_char;
 
 pub fn to_c_char(s: &str) -> *mut c_char {
-    CString::new(crate::sanitize_string(s)).unwrap_or_else(|_| CString::new("").unwrap()).into_raw()
+    match CString::new(crate::sanitize_string(s)) {
+        Ok(c) => c.into_raw(),
+        Err(_) => CString::new("").unwrap_or_default().into_raw()
+    }
 }
 
 pub fn to_c_char_opt(s: &Option<String>) -> *mut c_char {
