@@ -841,10 +841,9 @@ static void discover_center_exec_cb(void *user_data,
     /* Knock */
     purple_matrix_rust_knock(username, target, reason ? reason : "");
   } else if (action == 2) {
-    /* Search Directory - Not yet fully implemented in UI, just show a notice */
-    purple_notify_info(my_plugin, "Discover Center", "Directory Search",
-                       "Directory search is not yet implemented. Please "
-                       "specify a direct room ID or alias to join.");
+    /* Search Directory */
+    purple_roomlist_show_with_account(account);
+    purple_matrix_rust_search_public_rooms(username, target);
   } else if (action == 3) {
     /* Explore Space Hierarchy */
     purple_roomlist_show_with_account(account);

@@ -412,8 +412,7 @@ extern void purple_matrix_rust_search_room_members(const char *user_id,
 extern void purple_matrix_rust_get_supported_versions(const char *user_id);
 extern void purple_matrix_rust_get_server_info(const char *user_id);
 extern void purple_matrix_rust_search_public_rooms(const char *user_id,
-                                                   const char *search_term,
-                                                   const char *output_room_id);
+                                                   const char *search_term);
 extern void purple_matrix_rust_search_users(const char *user_id,
                                             const char *search_term,
                                             const char *room_id);

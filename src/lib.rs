@@ -227,7 +227,7 @@ mod tests {
         // Should be HTML
         if let matrix_sdk::ruma::events::room::message::MessageType::Text(text_content) = content.msgtype {
             assert!(text_content.formatted.is_some());
-            let formatted = text_content.formatted.unwrap();
+            let formatted = text_content.formatted.expect("Formatted body missing");
             assert!(formatted.body.contains("<strong>Bold</strong>") || formatted.body.contains("<b>Bold</b>"));
         } else {
             panic!("Expected Text message");
@@ -237,8 +237,8 @@ mod tests {
     #[tokio::test]
     async fn test_with_client_concurrency() {
         use std::sync::Arc;
-        let c1 = matrix_sdk::Client::builder().homeserver_url("https://example.com").build().await.unwrap();
-        let c2 = matrix_sdk::Client::builder().homeserver_url("https://example.com").build().await.unwrap();
+        let c1 = matrix_sdk::Client::builder().homeserver_url("https://example.com").build().await.expect("Failed to build client 1");
+        let c2 = matrix_sdk::Client::builder().homeserver_url("https://example.com").build().await.expect("Failed to build client 2");
         
         crate::CLIENTS.insert("user1".to_string(), c1);
         crate::CLIENTS.insert("user2".to_string(), c2);

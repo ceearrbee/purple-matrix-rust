@@ -80,15 +80,10 @@ pub extern "C" fn purple_matrix_rust_fetch_room_preview(user_id: *const c_char, 
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_search_public_rooms(user_id: *const c_char, search_term: *const c_char, output_room_id: *const c_char) {
+pub extern "C" fn purple_matrix_rust_search_public_rooms(user_id: *const c_char, search_term: *const c_char) {
      if user_id.is_null() || search_term.is_null() { return; }
      let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
      let term_str = unsafe { CStr::from_ptr(search_term).to_string_lossy().into_owned() };
-     let output_rid = if output_room_id.is_null() {
-        "System".to_string()
-     } else {
-        unsafe { CStr::from_ptr(output_room_id).to_string_lossy().into_owned() }
-     };
      
      with_client(&user_id_str.clone(), |client| {
         RUNTIME.spawn(async move {
@@ -100,19 +95,22 @@ pub extern "C" fn purple_matrix_rust_search_public_rooms(user_id: *const c_char,
              
              let mut request = PublicRoomsFilteredRequest::new();
              request.filter = filter;
-             request.limit = Some(20u32.into());
+             request.limit = Some(50u32.into());
 
              match client.send(request).await {
                  Ok(response) => {
-                      let mut result_msg = format!("Found {} public rooms:\n", response.chunk.len());
-                      for room in response.chunk.iter().take(10) {
-                          result_msg.push_str(&format!("- {} ({}): {}\n", 
-                              room.name.as_deref().unwrap_or("Unnamed"),
-                              room.room_id,
-                              room.topic.as_deref().unwrap_or("No topic")));
-                      }
-                      
-                      crate::ffi::send_system_message_to_room(&user_id_str, &output_rid, &result_msg);
+                     for room in response.chunk {
+                         let event = crate::ffi::FfiEvent::RoomListAdd {
+                             user_id: user_id_str.clone(),
+                             room_id: room.room_id.to_string(),
+                             name: room.name.unwrap_or_default(),
+                             topic: room.topic.unwrap_or_default(),
+                             member_count: u64::from(room.num_joined_members) as usize,
+                             is_space: false,
+                             parent_id: None,
+                         };
+                         let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+                     }
                  },
                  Err(e) => log::error!("Failed to search public rooms: {:?}", e),
              }
