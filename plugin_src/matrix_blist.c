@@ -519,15 +519,20 @@ static void matrix_chat_tooltip_text(PurpleChat *chat,
   const char *room_id = g_hash_table_lookup(comp, "room_id");
   const char *topic = g_hash_table_lookup(comp, "topic");
   const char *enc = g_hash_table_lookup(comp, "encrypted");
-  if (room_id)
-    purple_notify_user_info_add_pair(user_info, "Room ID", room_id);
+  if (room_id) {
+    char *esc_id = g_markup_escape_text(room_id, -1);
+    purple_notify_user_info_add_pair(user_info, "Room ID", esc_id);
+    g_free(esc_id);
+  }
   purple_notify_user_info_add_pair(user_info, "Security",
                                    (enc && strcmp(enc, "1") == 0)
                                        ? "End-to-End Encrypted"
                                        : "Unencrypted / Public");
   if (topic && strlen(topic) > 0) {
     char *clean = sanitize_markup_text(topic);
-    purple_notify_user_info_add_pair(user_info, "Topic", clean);
+    char *esc_topic = g_markup_escape_text(clean, -1);
+    purple_notify_user_info_add_pair(user_info, "Topic", esc_topic);
+    g_free(esc_topic);
     g_free(clean);
   }
 }
@@ -538,13 +543,22 @@ void matrix_tooltip_text(PurpleBuddy *buddy, PurpleNotifyUserInfo *user_info,
     matrix_chat_tooltip_text((PurpleChat *)buddy, user_info, full);
     return;
   }
-  purple_notify_user_info_add_pair(user_info, "Matrix ID",
-                                   purple_buddy_get_name(buddy));
-  PurpleStatus *status =
-      purple_presence_get_active_status(purple_buddy_get_presence(buddy));
-  const char *msg = purple_status_get_attr_string(status, "message");
-  if (msg)
-    purple_notify_user_info_add_pair(user_info, "Status Message", msg);
+  char *esc_id = g_markup_escape_text(purple_buddy_get_name(buddy), -1);
+  purple_notify_user_info_add_pair(user_info, "Matrix ID", esc_id);
+  g_free(esc_id);
+
+  PurplePresence *presence = purple_buddy_get_presence(buddy);
+  if (presence) {
+    PurpleStatus *status = purple_presence_get_active_status(presence);
+    if (status) {
+      const char *msg = purple_status_get_attr_string(status, "message");
+      if (msg) {
+        char *esc_msg = g_markup_escape_text(msg, -1);
+        purple_notify_user_info_add_pair(user_info, "Status Message", esc_msg);
+        g_free(esc_msg);
+      }
+    }
+  }
 }
 
 void matrix_add_buddy(PurpleConnection *gc, PurpleBuddy *buddy,
@@ -571,6 +585,7 @@ static gboolean process_invite_cb(gpointer data) {
       g_hash_table_insert(comp, g_strdup("room_id"), g_strdup(d->room_id));
       serv_got_chat_invite(gc, d->room_id, d->inviter, "Incoming Matrix Invite",
                            comp);
+      g_hash_table_destroy(comp);
     }
   }
   g_free(d->user_id);
@@ -601,9 +616,10 @@ static gboolean process_update_buddy_cb(gpointer data) {
         gchar *contents;
         gsize length;
         if (g_file_get_contents(d->avatar_url, &contents, &length, NULL)) {
-          purple_buddy_set_icon(buddy,
-                                purple_buddy_icon_new(account, d->user_id,
-                                                      contents, length, NULL));
+          PurpleBuddyIcon *icon =
+              purple_buddy_icon_new(account, d->user_id, contents, length, NULL);
+          purple_buddy_set_icon(buddy, icon);
+          purple_buddy_icon_unref(icon);
         }
         /* In libpurple 2.x, buddy icons are usually managed via
          * set_buddy_icon_path if custom */

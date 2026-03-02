@@ -53,12 +53,12 @@ pub struct MatrixClientHandle;
 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_init() {
-    tracing_subscriber::fmt()
+    let _ = tracing_subscriber::fmt()
         .with_env_filter("info,matrix_sdk=debug,reqwest=debug,matrix_sdk_crypto=debug")
         .with_writer(std::io::stderr)
-        .init();
+        .try_init();
     
-    log::info!("Rust backend initialized using tracing_subscriber");
+    log::info!("Rust backend initialized (tracing_subscriber configured)");
     
     RUNTIME.spawn(async {
         media_helper::cleanup_media_files().await;

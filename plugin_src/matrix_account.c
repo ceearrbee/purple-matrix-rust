@@ -144,9 +144,12 @@ static gboolean process_login_failed_cb(gpointer data) {
   PurpleAccount *account = find_matrix_account();
   if (account && purple_account_get_connection(account) != NULL) {
     PurpleConnection *gc = purple_account_get_connection(account);
-    if (gc)
+    if (gc) {
+      char *esc_reason = g_markup_escape_text(reason, -1);
       purple_connection_error_reason(gc, PURPLE_CONNECTION_ERROR_NETWORK_ERROR,
-                                     reason);
+                                     esc_reason);
+      g_free(esc_reason);
+    }
   }
   g_free(reason);
   return FALSE;
@@ -247,11 +250,20 @@ static gboolean process_user_info_cb(gpointer data) {
   PurpleAccount *account = find_matrix_account_by_id(d->user_id);
   if (account && purple_account_get_connection(account) != NULL) {
     PurpleNotifyUserInfo *info = purple_notify_user_info_new();
-    purple_notify_user_info_add_pair(info, "Matrix ID", d->target_user_id);
-    if (d->display_name)
-      purple_notify_user_info_add_pair(info, "Display Name", d->display_name);
-    if (d->avatar_url)
-      purple_notify_user_info_add_pair(info, "Avatar URL", d->avatar_url);
+    char *esc_id = g_markup_escape_text(d->target_user_id, -1);
+    purple_notify_user_info_add_pair(info, "Matrix ID", esc_id);
+    g_free(esc_id);
+
+    if (d->display_name) {
+      char *esc_dn = g_markup_escape_text(d->display_name, -1);
+      purple_notify_user_info_add_pair(info, "Display Name", esc_dn);
+      g_free(esc_dn);
+    }
+    if (d->avatar_url) {
+      char *esc_av = g_markup_escape_text(d->avatar_url, -1);
+      purple_notify_user_info_add_pair(info, "Avatar URL", esc_av);
+      g_free(esc_av);
+    }
     purple_notify_userinfo(purple_account_get_connection(account),
                            d->target_user_id, info, NULL, NULL);
     purple_notify_user_info_destroy(info);
@@ -440,11 +452,13 @@ static gboolean process_sas_emoji_cb(gpointer data) {
   vd->flow_id = g_strdup(ed->flow_id);
   PurpleAccount *account = find_matrix_account();
   if (account && purple_account_get_connection(account) != NULL) {
-    char *msg = g_strdup_printf("Match?\n\n%s", ed->emojis);
+    char *esc_emojis = g_markup_escape_text(ed->emojis, -1);
+    char *msg = g_strdup_printf("Match?\n\n%s", esc_emojis);
     purple_request_action(NULL, "Emojis", msg, ed->user_id, 0, NULL, NULL, NULL,
                           vd, 2, "Match", G_CALLBACK(sas_match_cb), "Mismatch",
                           G_CALLBACK(sas_match_cb));
     g_free(msg);
+    g_free(esc_emojis);
   } else {
     g_free(vd->user_id);
     g_free(vd->flow_id);

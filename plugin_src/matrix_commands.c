@@ -2833,8 +2833,9 @@ static void matrix_ui_search_public_cb(void *user_data, const char *term) {
   char *room_id = (char *)user_data;
   PurpleAccount *account = find_matrix_account();
   if (account && term && *term) {
+    purple_roomlist_show_with_account(account);
     purple_matrix_rust_search_public_rooms(purple_account_get_username(account),
-                                           term, room_id ? room_id : "");
+                                           term);
   }
   g_free(room_id);
 }
@@ -4009,7 +4010,6 @@ static PurpleCmdRet cmd_search_public(PurpleConversation *conv,
                                       const gchar *cmd, gchar **args,
                                       gchar **error, void *data) {
   PurpleAccount *account = purple_conversation_get_account(conv);
-  const char *output_room_id = "";
   if (!account)
     account = find_matrix_account();
   if (!account) {
@@ -4020,11 +4020,9 @@ static PurpleCmdRet cmd_search_public(PurpleConversation *conv,
     *error = g_strdup("Usage: /search_public <term>");
     return PURPLE_CMD_RET_FAILED;
   }
-  if (conv && purple_conversation_get_type(conv) == PURPLE_CONV_TYPE_CHAT) {
-    output_room_id = purple_conversation_get_name(conv);
-  }
+  purple_roomlist_show_with_account(account);
   purple_matrix_rust_search_public_rooms(purple_account_get_username(account),
-                                         args[0], output_room_id);
+                                         args[0]);
   return PURPLE_CMD_RET_OK;
 }
 

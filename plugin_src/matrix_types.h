@@ -45,6 +45,7 @@ typedef struct {
 } MatrixUserInfoData;
 
 typedef struct {
+  char *user_id;
   char *name;
   char *id;
   char *topic;

@@ -35,10 +35,10 @@ GHashTable *room_id_map = NULL;
 static PurplePluginPrefFrame *
 matrix_get_plugin_pref_frame(PurplePlugin *plugin);
 static void matrix_pref_changed_cb(const char *name, PurplePrefType type,
-                                   gconstpointer val, gpointer data);
+                                    gconstpointer val, gpointer data);
+static gboolean plugin_unload(PurplePlugin *plugin);
 
-static PurplePluginUiInfo prefs_info = {
-    .get_plugin_pref_frame = matrix_get_plugin_pref_frame,
+static PurplePluginUiInfo prefs_info = {    .get_plugin_pref_frame = matrix_get_plugin_pref_frame,
 };
 
 static PurplePluginPrefFrame *
@@ -1184,18 +1184,6 @@ static gboolean plugin_load(PurplePlugin *plugin) {
   return TRUE;
 }
 
-static gboolean plugin_unload(PurplePlugin *plugin) {
-  if (rust_poll_timer_id > 0) {
-    purple_timeout_remove(rust_poll_timer_id);
-    rust_poll_timer_id = 0;
-  }
-
-  purple_signals_disconnect_by_handle(plugin);
-  purple_signals_unregister_by_instance(plugin);
-  purple_prefs_disconnect_by_handle(plugin);
-  return TRUE;
-}
-
 static PurplePluginProtocolInfo prpl_info = {
     .options =
         OPT_PROTO_CHAT_TOPIC | OPT_PROTO_PASSWORD_OPTIONAL | OPT_PROTO_IM_IMAGE,
@@ -1285,4 +1273,31 @@ static void init_plugin(PurplePlugin *plugin) {
   if (!purple_prefs_exists(MATRIX_PREF_SESSION_ACTION))
     purple_prefs_add_string(MATRIX_PREF_SESSION_ACTION, "none");
 }
+
+static gboolean plugin_unload(PurplePlugin *plugin) {
+  if (rust_poll_timer_id > 0) {
+    purple_timeout_remove(rust_poll_timer_id);
+    rust_poll_timer_id = 0;
+  }
+
+  purple_signals_disconnect_by_handle(plugin);
+  purple_signals_unregister_by_instance(plugin);
+  purple_prefs_disconnect_by_handle(plugin);
+
+  if (room_id_map) {
+    g_hash_table_destroy(room_id_map);
+    room_id_map = NULL;
+  }
+
+  matrix_utils_cleanup();
+
+  if (prpl_info.protocol_options) {
+    g_list_free_full(prpl_info.protocol_options,
+                     (GDestroyNotify)purple_account_option_destroy);
+    prpl_info.protocol_options = NULL;
+  }
+
+  return TRUE;
+}
+
 PURPLE_INIT_PLUGIN(matrix_rust, init_plugin, info)

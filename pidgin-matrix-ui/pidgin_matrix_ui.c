@@ -1196,12 +1196,14 @@ static void handle_room_typing_cb(const char *room_id, const char *who,
             purple_conversation_get_data(conv, MATRIX_UI_TYPING_LABEL_KEY);
         if (label && GTK_IS_LABEL(label)) {
           if (is_typing) {
+            char *esc_who = g_markup_escape_text(who, -1);
             char *txt =
                 g_strdup_printf("<span size='smaller' color='#666'><i>%s is "
                                 "typing...</i></span>",
-                                who);
+                                esc_who);
             gtk_label_set_markup(GTK_LABEL(label), txt);
             g_free(txt);
+            g_free(esc_who);
           } else {
             gtk_label_set_text(GTK_LABEL(label), "");
           }
@@ -1286,11 +1288,17 @@ static void handle_room_activity_cb(const char *room_id, const char *sender,
           safe = g_strdup(snippet ? snippet : "");
           if ((int)strlen(safe) > 80)
             safe[80] = '\0';
+          
+          char *esc_sender = g_markup_escape_text(sender ? sender : "user", -1);
+          char *esc_snippet = g_markup_escape_text(safe, -1);
+          
           msg = g_strdup_printf(
               "<span size='smaller' color='#666'>Last: %s: %s</span>",
-              sender ? sender : "user", safe);
+              esc_sender, esc_snippet);
           gtk_label_set_markup(GTK_LABEL(label), msg);
           g_free(msg);
+          g_free(esc_sender);
+          g_free(esc_snippet);
           g_free(safe);
         }
       }
@@ -1322,6 +1330,8 @@ static gboolean hook_chat_user_list_idle_cb(gpointer data) {
   return FALSE;
 }
 
+static GtkTooltips *ui_tooltips = NULL;
+
 static gboolean inject_action_bar_idle_cb(gpointer data) {
   PurpleConversation *conv = (PurpleConversation *)data;
   if (!g_list_find(purple_get_conversations(), conv))
@@ -1352,22 +1362,10 @@ static gboolean inject_action_bar_idle_cb(gpointer data) {
   if (!vbox || !GTK_IS_VBOX(vbox))
     return FALSE;
 
-  GtkWidget *hbox = gtk_hbox_new(FALSE, 2);
+  if (!ui_tooltips)
+    ui_tooltips = gtk_tooltips_new();
 
-  /* Encryption / Mute Status */
-  GtkWidget *enc_label = gtk_label_new("");
-  gtk_box_pack_start(GTK_BOX(hbox), enc_label, FALSE, FALSE, 5);
-  purple_conversation_set_data(conv, MATRIX_UI_ENCRYPTED_LABEL_KEY, enc_label);
-  GtkWidget *muted_label = gtk_label_new("");
-  gtk_box_pack_start(GTK_BOX(hbox), muted_label, FALSE, FALSE, 2);
-  purple_conversation_set_data(conv, MATRIX_UI_MUTED_LABEL_KEY, muted_label);
-  if (is_conv_room_muted(conv)) {
-    gtk_label_set_markup(GTK_LABEL(muted_label),
-                         "<span color='#aa6600'>M</span>");
-    gtk_widget_set_tooltip_text(muted_label, "This room is muted.");
-    gtk_widget_set_has_tooltip(muted_label, TRUE);
-  }
-  GtkTooltips *tooltips = gtk_tooltips_new();
+  GtkWidget *hbox = gtk_hbox_new(FALSE, 2);
   GtkWidget *reply_btn = gtk_button_new_with_mnemonic("_Reply");
   GtkWidget *thread_start_btn = gtk_button_new_with_mnemonic("_Thread+");
   GtkWidget *threads_btn = gtk_button_new_with_mnemonic("T_hreads");
@@ -1394,19 +1392,19 @@ static gboolean inject_action_bar_idle_cb(gpointer data) {
     gtk_box_pack_start(GTK_BOX(hbox), btn, FALSE, FALSE, 0);
   }
 
-  gtk_tooltips_set_tip(tooltips, reply_btn, "Reply to latest event", NULL);
-  gtk_tooltips_set_tip(tooltips, thread_start_btn,
+  gtk_tooltips_set_tip(ui_tooltips, reply_btn, "Reply to latest event", NULL);
+  gtk_tooltips_set_tip(ui_tooltips, thread_start_btn,
                        "Start a new thread from latest event", NULL);
-  gtk_tooltips_set_tip(tooltips, threads_btn, "Show room threads", NULL);
-  gtk_tooltips_set_tip(tooltips, poll_btn, "Create a poll", NULL);
-  gtk_tooltips_set_tip(tooltips, polls_btn, "List polls and vote", NULL);
-  gtk_tooltips_set_tip(tooltips, msg_btn, "React/edit/redact/report actions",
+  gtk_tooltips_set_tip(ui_tooltips, threads_btn, "Show room threads", NULL);
+  gtk_tooltips_set_tip(ui_tooltips, poll_btn, "Create a poll", NULL);
+  gtk_tooltips_set_tip(ui_tooltips, polls_btn, "List polls and vote", NULL);
+  gtk_tooltips_set_tip(ui_tooltips, msg_btn, "React/edit/redact/report actions",
                        NULL);
-  gtk_tooltips_set_tip(tooltips, admin_btn, "Room admin and server actions",
+  gtk_tooltips_set_tip(ui_tooltips, admin_btn, "Room admin and server actions",
                        NULL);
-  gtk_tooltips_set_tip(tooltips, moderate_btn, "Kick, ban, or unban users",
+  gtk_tooltips_set_tip(ui_tooltips, moderate_btn, "Kick, ban, or unban users",
                        NULL);
-  gtk_tooltips_set_tip(tooltips, more_btn, "More Matrix actions", NULL);
+  gtk_tooltips_set_tip(ui_tooltips, more_btn, "More Matrix actions", NULL);
 
   g_signal_connect_swapped(reply_btn, "clicked", G_CALLBACK(on_menu_reply),
                            conv);
@@ -1457,8 +1455,8 @@ static void conversation_created_cb(PurpleConversation *conv, gpointer data) {
   PurpleAccount *account = purple_conversation_get_account(conv);
   if (account && strcmp(purple_account_get_protocol_id(account),
                         "prpl-matrix-rust") == 0) {
-    g_timeout_add(1000, inject_action_bar_idle_cb, conv);
-    g_timeout_add(1000, hook_chat_user_list_idle_cb, conv);
+    purple_timeout_add(1000, inject_action_bar_idle_cb, conv);
+    purple_timeout_add(1000, hook_chat_user_list_idle_cb, conv);
   }
 }
 
@@ -1726,12 +1724,23 @@ static void conversation_extended_menu_cb(PurpleConversation *conv,
   }
 }
 
-static gboolean plugin_load(PurplePlugin *plugin) {
+static void conversation_deleted_cb(PurpleConversation *conv, gpointer data) {
+  /* No special cleanup needed for child widgets, but we can clear data keys */
+  purple_conversation_set_data(conv, MATRIX_UI_ACTION_BAR_KEY, NULL);
+  purple_conversation_set_data(conv, MATRIX_UI_TYPING_LABEL_KEY, NULL);
+  purple_conversation_set_data(conv, MATRIX_UI_ENCRYPTED_LABEL_KEY, NULL);
+  purple_conversation_set_data(conv, MATRIX_UI_MUTED_LABEL_KEY, NULL);
+  purple_conversation_set_data(conv, MATRIX_UI_ACTIVITY_LABEL_KEY, NULL);
+}
+
+static void connect_ui_signals(PurplePlugin *plugin) {
   void *conv_handle = purple_conversations_get_handle();
   PurplePlugin *matrix_plugin = purple_plugins_find_with_id("prpl-matrix-rust");
 
   purple_signal_connect(conv_handle, "conversation-created", plugin,
                         PURPLE_CALLBACK(conversation_created_cb), NULL);
+  purple_signal_connect(conv_handle, "deleting-conversation", plugin,
+                        PURPLE_CALLBACK(conversation_deleted_cb), NULL);
   purple_signal_connect(conv_handle, "conversation-extended-menu", plugin,
                         PURPLE_CALLBACK(conversation_extended_menu_cb), NULL);
 
@@ -1748,10 +1757,31 @@ static gboolean plugin_load(PurplePlugin *plugin) {
 
   for (GList *it = purple_get_conversations(); it; it = it->next)
     conversation_created_cb((PurpleConversation *)it->data, NULL);
+}
+
+static void core_initialized_cb(gpointer data) {
+  PurplePlugin *plugin = (PurplePlugin *)data;
+  connect_ui_signals(plugin);
+}
+
+static gboolean plugin_load(PurplePlugin *plugin) {
+  if (purple_get_core() != NULL && purple_conversations_get_handle() != NULL) {
+    connect_ui_signals(plugin);
+  } else {
+    purple_signal_connect(purple_get_core(), "core-initialized", plugin,
+                          PURPLE_CALLBACK(core_initialized_cb), plugin);
+  }
   return TRUE;
 }
 
 static gboolean plugin_unload(PurplePlugin *plugin) {
+  purple_signals_disconnect_by_handle(plugin);
+
+  if (ui_tooltips) {
+    g_object_unref(G_OBJECT(ui_tooltips));
+    ui_tooltips = NULL;
+  }
+
   for (GList *it = purple_get_conversations(); it != NULL; it = it->next) {
     PurpleConversation *conv = (PurpleConversation *)it->data;
     GtkWidget *bar =

@@ -699,6 +699,29 @@ char *matrix_get_chat_name(GHashTable *components) {
   return room_id ? g_strdup(room_id) : NULL;
 }
 
+void matrix_utils_cleanup(void) {
+  g_mutex_lock(&thread_lists_mutex);
+  if (thread_lists) {
+    g_hash_table_destroy(thread_lists);
+    thread_lists = NULL;
+  }
+  g_mutex_unlock(&thread_lists_mutex);
+
+  g_mutex_lock(&poll_lists_mutex);
+  if (poll_lists) {
+    g_hash_table_destroy(poll_lists);
+    poll_lists = NULL;
+  }
+  g_mutex_unlock(&poll_lists_mutex);
+
+  g_mutex_lock(&search_results_mutex);
+  if (search_results_map) {
+    g_hash_table_destroy(search_results_map);
+    search_results_map = NULL;
+  }
+  g_mutex_unlock(&search_results_mutex);
+}
+
 void matrix_ui_refresh_room_chips(PurpleConversation *conv) {
   if (!conv || purple_conversation_get_type(conv) != PURPLE_CONV_TYPE_CHAT)
     return;

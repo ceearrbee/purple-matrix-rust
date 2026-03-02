@@ -19,6 +19,7 @@ PurpleAccount *find_matrix_account_by_id(const char *user_id);
 char *matrix_get_chat_name(GHashTable *components);
 guint32 get_history_page_size(PurpleAccount *account);
 void matrix_ui_refresh_room_chips(PurpleConversation *conv);
+void matrix_utils_cleanup(void);
 
 // Callback Declarations
 void show_user_info_cb(const char *user_id, const char *display_name,
