@@ -10,7 +10,7 @@ pub async fn handle_room_topic(event: SyncRoomTopicEvent, room: Room) {
         let room_id = room.room_id().as_str();
         let timestamp: u64 = ev.origin_server_ts.0.into();
         let client = room.client();
-        let me = client.user_id().unwrap();
+        let Some(me) = client.user_id() else { return; };
         let local_user_id = me.as_str().to_string();
 
         let body = format!("[System] {} set the topic to: {}", sender, topic);
@@ -37,7 +37,7 @@ pub async fn handle_room_member(event: SyncRoomMemberEvent, room: Room) {
         let room_id = room.room_id().as_str();
         let timestamp: u64 = ev.origin_server_ts.0.into();
         let client = room.client();
-        let me = client.user_id().unwrap();
+        let Some(me) = client.user_id() else { return; };
         let local_user_id = me.as_str().to_string();
 
         let body = match ev.content.membership {
@@ -72,7 +72,7 @@ pub async fn handle_tombstone(event: SyncRoomTombstoneEvent, room: Room) {
         let new_room = ev.content.replacement_room.as_str();
         let timestamp: u64 = ev.origin_server_ts.0.into();
         let client = room.client();
-        let me = client.user_id().unwrap();
+        let Some(me) = client.user_id() else { return; };
         let local_user_id = me.as_str().to_string();
 
         let body = format!("[System] This room has been upgraded. New room ID: {}", new_room);
@@ -94,10 +94,10 @@ pub async fn handle_tombstone(event: SyncRoomTombstoneEvent, room: Room) {
 pub async fn handle_power_levels(_event: matrix_sdk::ruma::events::room::power_levels::SyncRoomPowerLevelsEvent, room: matrix_sdk::Room) {
     if let Ok(pl) = room.power_levels().await {
         let client = room.client();
-        let user_id = client.user_id().unwrap().as_str().to_string();
+        let Some(self_id) = client.user_id() else { return; };
+        let user_id = self_id.as_str().to_string();
         let room_id = room.room_id().as_str().to_string();
         
-        let self_id = client.user_id().unwrap();
         let my_level = pl.for_user(self_id);
         let is_admin = my_level >= matrix_sdk::ruma::int!(100);
         let can_kick = my_level >= pl.kick;

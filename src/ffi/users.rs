@@ -211,10 +211,17 @@ pub extern "C" fn purple_matrix_rust_get_user_info(account_user_id: *const c_cha
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string())
                             .unwrap_or_else(|| user_id_str.clone());
-                        let avatar_url = profile.get("avatar_url")
+                        let mxc_url_str = profile.get("avatar_url")
                             .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
                             .unwrap_or_default();
+                        
+                        let mut avatar_url = mxc_url_str.to_string();
+                        if !mxc_url_str.is_empty() {
+                            let mxc_uri = <&matrix_sdk::ruma::MxcUri>::from(mxc_url_str);
+                            if let Some(path) = crate::media_helper::download_avatar(&client, &mxc_uri.to_owned(), &user_id_str).await {
+                                avatar_url = path.to_string();
+                            }
+                        }
                         
                         let is_online = false; 
 

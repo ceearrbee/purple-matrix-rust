@@ -4,28 +4,12 @@ use std::os::raw::c_char;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use matrix_sdk::Client;
 use crate::{RUNTIME, DATA_PATH, CLIENTS};
 use crate::sync_logic;
 
-static SSO_IN_PROGRESS: Mutex<bool> = Mutex::new(false);
 const SSO_CALLBACK_TIMEOUT_SECS: u64 = 180;
-
-fn set_sso_in_progress(value: bool) {
-    let mut guard = SSO_IN_PROGRESS.lock().unwrap();
-    *guard = value;
-}
-
-fn try_begin_sso() -> bool {
-    let mut guard = SSO_IN_PROGRESS.lock().unwrap();
-    if *guard {
-        return false;
-    }
-    *guard = true;
-    true
-}
 
 fn extract_login_token(input: &str) -> Option<String> {
     let trimmed = input.trim();
@@ -77,7 +61,6 @@ async fn finish_sso_internal(client: Client, token: String) {
     // 1. Check session
     if client.session().is_some() {
         log::info!("Client already has a session, ignoring SSO completion.");
-        set_sso_in_progress(false);
         return;
     }
     
@@ -91,7 +74,6 @@ async fn finish_sso_internal(client: Client, token: String) {
     match client.matrix_auth().login_token(&token).initial_device_display_name("Pidgin (Rust)").await {
         Ok(_) => {
             log::info!("SSO Login Successful! Persisting session...");
-            set_sso_in_progress(false);
             get_finishing_sso().remove(&pending_id);
             finish_login_success(client).await;
         },
@@ -101,7 +83,7 @@ async fn finish_sso_internal(client: Client, token: String) {
             log::error!("{}", err_msg);
             
             if (err_msg.contains("Mismatched") || err_msg.contains("Session")) && !err_msg.contains("Invalid login token") {
-                log::warn!("SSO mismatch detected. Wiping data and restarting SSO flow...");
+                log::warn!("SSO mismatch detected. Wiping data and retrying SSO flow immediately...");
                 
                 // 1. Preserve config
                 let hs_url = client.homeserver().to_string();
@@ -123,25 +105,30 @@ async fn finish_sso_internal(client: Client, token: String) {
                     
                     // 4. Rebuild Client
                     match build_client(&hs_url, &path).await {
-                        Ok(_new_client) => {
-                            // Attempt, retrying with the same token can fail with
-                            // "Invalid login token". Report the error so the user can start a fresh SSO round.
-                            log::info!("Client rebuilt. SSO requires a fresh manual login attempt.");
-                            set_sso_in_progress(false);
-                            report_login_failure("Mismatched account session detected. Please restart the SSO login process from the UI.".to_string());
+                        Ok(new_client) => {
+                            log::info!("Client rebuilt. Retrying login_token...");
+                            match new_client.matrix_auth().login_token(&token).initial_device_display_name("Pidgin (Rust)").await {
+                                Ok(_) => {
+                                    log::info!("SSO Login Successful on retry! Persisting session...");
+                                    finish_login_success(new_client).await;
+                                },
+                                Err(retry_e) => {
+                                    let retry_err_msg = format!("SSO Login Failed on retry: {:?}", retry_e);
+                                    log::error!("{}", retry_err_msg);
+                                    report_login_failure("Mismatched account session detected, and recovery failed. Please restart the SSO login process from the UI.".to_string());
+                                }
+                            }
                         },
                         Err(e_build) => {
-                            set_sso_in_progress(false);
                             log::error!("Failed to rebuild client for retry: {:?}", e_build);
                             report_login_failure(format!("Failed to rebuild client during SSO recovery: {:?}", e_build));
                         }
                     }
                 }
             } else {
-                set_sso_in_progress(false);
                 // Notify user of non-mismatch error
                 let event = crate::ffi::FfiEvent::LoginFailed {
-                    user_id: client.user_id().map(|u| u.to_string()).unwrap_or_default(),
+                    user_id: pending_id,
                     message: err_msg,
                 };
                 let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
@@ -496,11 +483,6 @@ fn report_login_failure(msg: String) {
 }
 
 fn start_sso_flow(client: Client) {
-    if !try_begin_sso() {
-        log::warn!("SSO flow requested while one is already in progress; ignoring duplicate request.");
-        return;
-    }
-
     let rt = tokio::runtime::Handle::current();
         
     rt.spawn_blocking(move || {
@@ -508,7 +490,6 @@ fn start_sso_flow(client: Client) {
             let listener = match tiny_http::Server::http("127.0.0.1:0") {
                 Ok(l) => l,
                 Err(e) => {
-                    set_sso_in_progress(false);
                     log::error!("Failed to start local HTTP server: {}", e);
                     report_login_failure(format!("Failed to start local SSO callback server: {}", e));
                     return;
@@ -518,7 +499,6 @@ fn start_sso_flow(client: Client) {
             let port = match listener.server_addr().to_ip() {
                 Some(addr) => addr.port(),
                 None => {
-                    set_sso_in_progress(false);
                     report_login_failure("Failed to bind local SSO callback listener to an IP address.".to_string());
                     return;
                 }
@@ -531,7 +511,6 @@ fn start_sso_flow(client: Client) {
             let sso_url = match RUNTIME.block_on(client.matrix_auth().get_sso_login_url(&redirect_url, None)) {
                 Ok(u) => u,
                 Err(e) => {
-                    set_sso_in_progress(false);
                     log::error!("Failed to generate SSO URL: {:?}", e);
                     report_login_failure(format!("Failed to start SSO login: {:?}", e));
                     return;
@@ -553,7 +532,6 @@ fn start_sso_flow(client: Client) {
             // Wait for callback requests until we get loginToken.
             loop {
                 if Instant::now() >= deadline {
-                    set_sso_in_progress(false);
                     report_login_failure(format!(
                         "SSO timed out after {} seconds. Please try login again.",
                         SSO_CALLBACK_TIMEOUT_SECS
@@ -588,7 +566,6 @@ fn start_sso_flow(client: Client) {
                         continue;
                     }
                     Err(e) => {
-                        set_sso_in_progress(false);
                         report_login_failure(format!("SSO callback server failed: {}", e));
                         break;
                     }

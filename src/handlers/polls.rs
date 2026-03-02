@@ -3,7 +3,7 @@ use matrix_sdk::Room;
 pub async fn handle_poll_start(event: matrix_sdk::ruma::events::poll::start::SyncPollStartEvent, room: Room) {
     if let matrix_sdk::ruma::events::poll::start::SyncPollStartEvent::Original(ev) = event {
         let client = room.client();
-        let me = client.user_id().unwrap();
+        let Some(me) = client.user_id() else { return; };
         let local_user_id = me.as_str().to_string();
         let sender = ev.sender.as_str();
         

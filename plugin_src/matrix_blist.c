@@ -15,6 +15,7 @@
 #include <string.h>
 
 static PurpleRoomlist *active_roomlist = NULL;
+static GHashTable *roomlist_nodes = NULL;
 
 typedef struct {
   PurpleAccount *account;
@@ -80,10 +81,6 @@ static gboolean process_room_cb(gpointer data) {
   PurpleAccount *account = find_matrix_account_by_id(d->user_id);
 
   if (!account || purple_account_get_connection(account) == NULL) {
-    goto cleanup;
-  }
-
-  if (d->room_id && strchr(d->room_id, '|')) {
     goto cleanup;
   }
 
@@ -433,33 +430,49 @@ static gboolean process_roomlist_add_cb(gpointer data) {
     PurpleRoomlistRoomType type = d->is_space
                                       ? PURPLE_ROOMLIST_ROOMTYPE_CATEGORY
                                       : PURPLE_ROOMLIST_ROOMTYPE_ROOM;
-    PurpleRoomlistRoom *room = purple_roomlist_room_new(type, d->name, NULL);
+    PurpleRoomlistRoom *parent = NULL;
+    if (d->parent_id && roomlist_nodes) {
+        parent = g_hash_table_lookup(roomlist_nodes, d->parent_id);
+    }
+    PurpleRoomlistRoom *room = purple_roomlist_room_new(type, d->name, parent);
     purple_roomlist_room_add_field(active_roomlist, room, d->id);
     purple_roomlist_room_add_field(active_roomlist, room, d->topic);
     purple_roomlist_room_add(active_roomlist, room);
+    if (roomlist_nodes && d->id) {
+        g_hash_table_insert(roomlist_nodes, g_strdup(d->id), room);
+    }
   }
+  g_free(d->user_id);
   g_free(d->name);
   g_free(d->id);
   g_free(d->topic);
+  g_free(d->parent_id);
   g_free(d);
   return FALSE;
 }
-
 void roomlist_add_cb(const char *user_id, const char *name, const char *id,
-                     const char *topic, guint64 count, gboolean is_space) {
+                     const char *topic, guint64 count, gboolean is_space,
+                     const char *parent_id) {
   RoomListData *d = g_new0(RoomListData, 1);
+  d->user_id = g_strdup(user_id);
   d->name = g_strdup(name);
   d->id = g_strdup(id);
   d->topic = g_strdup(topic);
   d->count = count;
   d->is_space = is_space;
+  d->parent_id = g_strdup(parent_id);
   g_idle_add(process_roomlist_add_cb, d);
 }
 
 PurpleRoomlist *matrix_roomlist_get_list(PurpleConnection *gc) {
   if (active_roomlist)
     purple_roomlist_unref(active_roomlist);
+  if (roomlist_nodes)
+    g_hash_table_destroy(roomlist_nodes);
+
   active_roomlist = purple_roomlist_new(purple_connection_get_account(gc));
+  roomlist_nodes = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+
   GList *fields = NULL;
   fields = g_list_append(
       fields, purple_roomlist_field_new(PURPLE_ROOMLIST_FIELD_STRING, "Room ID",
@@ -474,8 +487,13 @@ PurpleRoomlist *matrix_roomlist_get_list(PurpleConnection *gc) {
 }
 
 void matrix_roomlist_cancel(PurpleRoomlist *list) {
-  if (list == active_roomlist)
+  if (list == active_roomlist) {
     active_roomlist = NULL;
+    if (roomlist_nodes) {
+        g_hash_table_destroy(roomlist_nodes);
+        roomlist_nodes = NULL;
+    }
+  }
   purple_roomlist_unref(list);
 }
 const char *matrix_list_icon(PurpleAccount *account, PurpleBuddy *buddy) {
@@ -580,10 +598,13 @@ static gboolean process_update_buddy_cb(gpointer data) {
       }
       if (d->avatar_url && strlen(d->avatar_url) > 0 &&
           g_file_test(d->avatar_url, G_FILE_TEST_EXISTS)) {
-        purple_buddy_set_icon(
-            buddy, purple_buddy_icon_new(account, d->user_id,
-                                         (void *)g_strdup(d->avatar_url),
-                                         strlen(d->avatar_url), NULL));
+        gchar *contents;
+        gsize length;
+        if (g_file_get_contents(d->avatar_url, &contents, &length, NULL)) {
+          purple_buddy_set_icon(buddy,
+                                purple_buddy_icon_new(account, d->user_id,
+                                                      contents, length, NULL));
+        }
         /* In libpurple 2.x, buddy icons are usually managed via
          * set_buddy_icon_path if custom */
         purple_blist_node_set_string((PurpleBlistNode *)buddy, "buddy_icon",
@@ -705,20 +726,25 @@ GList *blist_node_menu_cb(PurpleBlistNode *node) {
   purple_debug_info("matrix", "blist_node_menu_cb: node type=%d\n", node->type);
 
   if (PURPLE_BLIST_NODE_IS_CHAT(node)) {
-    action = purple_menu_action_new(
-        "Room Settings...", PURPLE_CALLBACK(menu_action_room_settings_cb), node,
-        NULL);
-    m = g_list_append(m, action);
+    PurpleChat *chat = (PurpleChat *)node;
+    PurpleAccount *account = purple_chat_get_account(chat);
+    if (account && strcmp(purple_account_get_protocol_id(account),
+                          "prpl-matrix-rust") == 0) {
+      action = purple_menu_action_new(
+          "Room Settings...", PURPLE_CALLBACK(menu_action_room_settings_cb),
+          node, NULL);
+      m = g_list_append(m, action);
 
-    action = purple_menu_action_new(
-        "Room Dashboard...",
-        PURPLE_CALLBACK(menu_action_room_dashboard_blist_cb), node, NULL);
-    m = g_list_append(m, action);
+      action = purple_menu_action_new(
+          "Room Dashboard...",
+          PURPLE_CALLBACK(menu_action_room_dashboard_blist_cb), node, NULL);
+      m = g_list_append(m, action);
 
-    action = purple_menu_action_new(
-        "Leave Matrix Room...",
-        PURPLE_CALLBACK(menu_action_room_leave_blist_cb), node, NULL);
-    m = g_list_append(m, action);
+      action = purple_menu_action_new(
+          "Leave Matrix Room...",
+          PURPLE_CALLBACK(menu_action_room_leave_blist_cb), node, NULL);
+      m = g_list_append(m, action);
+    }
   } else if (PURPLE_BLIST_NODE_IS_BUDDY(node)) {
     PurpleBuddy *buddy = (PurpleBuddy *)node;
     PurpleAccount *account = purple_buddy_get_account(buddy);

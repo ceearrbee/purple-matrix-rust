@@ -64,7 +64,9 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
                                                                         match room.decrypt_event(&raw_original, None).await {
                                                                             Ok(decrypted) => {
                                                                                 log::debug!("Successfully decrypted thread root {} on attempt {}", root_id, attempt + 1);
-                                                                                root_raw = matrix_sdk::ruma::serde::Raw::from_json_string(decrypted.raw().json().get().to_string()).unwrap();
+                                                                                if let Ok(parsed) = matrix_sdk::ruma::serde::Raw::from_json_string(decrypted.raw().json().get().to_string()) {
+                                                                                    root_raw = parsed;
+                                                                                }
                                                                                 root_decryption_failed = false;
                                                                                 break;
                                                                             },
@@ -124,7 +126,9 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
                                                                             match room.decrypt_event(&raw_original, None).await {
                                                                                 Ok(decrypted) => {
                                                                                     log::debug!("Successfully decrypted latest thread event {} on attempt {}", latest_id, attempt + 1);
-                                                                                    latest_raw_val = matrix_sdk::ruma::serde::Raw::from_json_string(decrypted.raw().json().get().to_string()).unwrap();
+                                                                                    if let Ok(parsed) = matrix_sdk::ruma::serde::Raw::from_json_string(decrypted.raw().json().get().to_string()) {
+                                                                                        latest_raw_val = parsed;
+                                                                                    }
                                                                                     latest_decryption_failed = false;
                                                                                     break;
                                                                                 },

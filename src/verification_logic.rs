@@ -1,6 +1,9 @@
 use matrix_sdk::encryption::verification::{SasVerification, Verification};
 use matrix_sdk::Client;
+use dashmap::DashMap;
+use once_cell::sync::Lazy;
 
+pub static ACTIVE_SAS_FLOWS: Lazy<DashMap<String, SasVerification>> = Lazy::new(|| DashMap::new());
 
 pub async fn handle_verification_request(client: Client, event: matrix_sdk::ruma::events::key::verification::request::ToDeviceKeyVerificationRequestEvent) {
     let user_id = client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
@@ -20,8 +23,8 @@ pub async fn handle_verification_request(client: Client, event: matrix_sdk::ruma
 pub async fn handle_sas_verification(sas: SasVerification, client: Client) {
     let user_id = client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
     let target = sas.other_user_id().as_str();
-    // Fallback: use other_user_id as context since flow_id() is missing in this version
-    let flow_id = sas.other_user_id().as_str();
+    // Fallback: use other_user_id joined with our local time or just an id
+    let flow_id = format!("{}_{}", sas.other_user_id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
 
     log::info!("Handling SAS verification flow for {}", target);
 
@@ -31,10 +34,11 @@ pub async fn handle_sas_verification(sas: SasVerification, client: Client) {
             emoji_str.push_str(&format!("{} ({}) ", emoji.symbol, emoji.description));
         }
 
+        ACTIVE_SAS_FLOWS.insert(flow_id.clone(), sas.clone());
         let event = crate::ffi::FfiEvent::SasHaveEmoji {
             user_id: user_id.clone(),
             target_user_id: target.to_string(),
-            flow_id: flow_id.to_string(),
+            flow_id: flow_id.clone(),
             emojis: emoji_str,
         };
         let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);

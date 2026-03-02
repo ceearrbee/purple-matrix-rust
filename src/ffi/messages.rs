@@ -446,9 +446,8 @@ pub extern "C" fn purple_matrix_rust_send_reply(user_id: *const c_char, room_id:
             
             if let (Ok(room_id), Ok(event_id)) = (<&RoomId>::try_from(room_id_str.as_str()), <&EventId>::try_from(event_id_str.as_str())) {
                 if let Some(room) = client.get_room(room_id) {
-                    let mut content = crate::create_message_content(text_str);
                     
-                    // Construct reply relation (basic)
+                    let mut content = crate::create_message_content(text_str);
                     content.relates_to = Some(Relation::Reply { in_reply_to: InReplyTo::new(event_id.to_owned()) });
                     
                     if let Err(e) = room.send(content).await {

@@ -24,6 +24,8 @@ pub extern "C" fn purple_matrix_rust_fetch_public_rooms_for_list(user_id: *const
                              name: room.name.unwrap_or_default(),
                              topic: room.topic.unwrap_or_default(),
                              member_count: u64::from(room.num_joined_members) as usize,
+                             is_space: false,
+                             parent_id: None,
                          };
                          let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
                      }

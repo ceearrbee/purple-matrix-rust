@@ -113,6 +113,7 @@ typedef struct {
   char *topic;
   guint64 member_count;
   bool is_space;
+  char *parent_id;
 } CRoomListAdd;
 typedef struct {
   char *user_id;

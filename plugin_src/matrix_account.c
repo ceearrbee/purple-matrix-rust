@@ -247,16 +247,17 @@ static gboolean process_user_info_cb(gpointer data) {
   PurpleAccount *account = find_matrix_account_by_id(d->user_id);
   if (account && purple_account_get_connection(account) != NULL) {
     PurpleNotifyUserInfo *info = purple_notify_user_info_new();
-    purple_notify_user_info_add_pair(info, "Matrix ID", d->user_id);
+    purple_notify_user_info_add_pair(info, "Matrix ID", d->target_user_id);
     if (d->display_name)
       purple_notify_user_info_add_pair(info, "Display Name", d->display_name);
     if (d->avatar_url)
       purple_notify_user_info_add_pair(info, "Avatar URL", d->avatar_url);
-    purple_notify_userinfo(purple_account_get_connection(account), d->user_id,
-                           info, NULL, NULL);
+    purple_notify_userinfo(purple_account_get_connection(account),
+                           d->target_user_id, info, NULL, NULL);
     purple_notify_user_info_destroy(info);
   }
   g_free(d->user_id);
+  g_free(d->target_user_id);
   g_free(d->display_name);
   g_free(d->avatar_url);
   g_free(d);
@@ -267,12 +268,11 @@ void show_user_info_cb(const char *user_id, const char *display_name,
                        const char *avatar_url, const char *target_user_id,
                        bool is_online) {
   MatrixUserInfoData *d = g_new0(MatrixUserInfoData, 1);
-  d->user_id = g_strdup(target_user_id);
+  d->user_id = g_strdup(user_id);
+  d->target_user_id = g_strdup(target_user_id);
   d->display_name = g_strdup(display_name);
   d->avatar_url = g_strdup(avatar_url);
   d->is_online = is_online;
-  /* We use d->user_id to store the account context for now in
-   * MatrixUserInfoData, let's fix the struct too */
   g_idle_add(process_user_info_cb, d);
 }
 

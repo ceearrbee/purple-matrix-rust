@@ -211,7 +211,7 @@ pub async fn render_room_message(ev: &matrix_sdk::ruma::events::room::message::O
             match room.client().media().get_media_content(&request, true).await {
                 Ok(bytes) => {
                     let cb_opt = {
-                        let guard = crate::ffi::IMGSTORE_ADD_CALLBACK.lock().unwrap();
+                        let guard = crate::ffi::IMGSTORE_ADD_CALLBACK.lock().unwrap_or_else(|e| e.into_inner());
                         *guard
                     };
                     if let Some(cb) = cb_opt {

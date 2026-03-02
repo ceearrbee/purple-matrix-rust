@@ -5,7 +5,7 @@ pub async fn handle_reaction(event: matrix_sdk::ruma::events::reaction::SyncReac
         log::info!("Reaction received: {} from {}", ev.content.relates_to.key, ev.sender);
         
         let client = room.client();
-        let me = client.user_id().unwrap();
+        let Some(me) = client.user_id() else { return; };
         let local_user_id = me.as_str().to_string();
         let sender = ev.sender.as_str();
         
@@ -34,7 +34,7 @@ pub async fn handle_reaction(event: matrix_sdk::ruma::events::reaction::SyncReac
 pub async fn handle_sticker(event: matrix_sdk::ruma::events::sticker::SyncStickerEvent, room: Room) {
     if let matrix_sdk::ruma::events::sticker::SyncStickerEvent::Original(ev) = event {
         let client = room.client();
-        let me = client.user_id().unwrap();
+        let Some(me) = client.user_id() else { return; };
         let local_user_id = me.as_str().to_string();
         let sender = ev.sender.as_str();
         

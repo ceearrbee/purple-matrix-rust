@@ -652,7 +652,7 @@ static gboolean poll_rust_channel_cb(gpointer user_data) {
     case FFI_EVENT_ROOM_LIST_ADD: {
       CRoomListAdd *s = (CRoomListAdd *)data;
       roomlist_add_cb(s->user_id, s->name, s->room_id, s->topic,
-                      s->member_count, s->is_space);
+                      s->member_count, s->is_space, s->parent_id);
       break;
     }
     case FFI_EVENT_ROOM_PREVIEW: {

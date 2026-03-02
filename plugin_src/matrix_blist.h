@@ -23,7 +23,8 @@ void power_level_update_callback(const char *user_id, const char *room_id,
 void invite_callback(const char *user_id, const char *room_id,
                      const char *inviter);
 void roomlist_add_cb(const char *user_id, const char *name, const char *id,
-                     const char *topic, guint64 count, gboolean is_space);
+                     const char *topic, guint64 count, gboolean is_space,
+                     const char *parent_id);
 void matrix_roomlist_expand_category(PurpleRoomlist *list, PurpleRoomlistRoom *category);
 void update_buddy_callback(const char *user_id, const char *alias,
                            const char *avatar_url);

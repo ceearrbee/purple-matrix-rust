@@ -246,22 +246,20 @@ pub extern "C" fn purple_matrix_rust_accept_sas(user_id: *const c_char, target_u
 pub extern "C" fn purple_matrix_rust_confirm_sas(user_id: *const c_char, target_user_id: *const c_char, flow_id: *const c_char, is_match: bool) {
     if user_id.is_null() || target_user_id.is_null() || flow_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    let target_user_id_str = unsafe { CStr::from_ptr(target_user_id).to_string_lossy().into_owned() };
     let flow_id_str = unsafe { CStr::from_ptr(flow_id).to_string_lossy().into_owned() };
 
-    with_client(&user_id_str.clone(), |client| {
+    with_client(&user_id_str.clone(), |_client| {
         RUNTIME.spawn(async move {
-            use matrix_sdk::ruma::UserId;
-            if let Ok(uid) = <&UserId>::try_from(target_user_id_str.as_str()) {
-                if let Some(verification) = client.encryption().get_verification(uid, &flow_id_str).await {
-                    if let Some(sas) = verification.sas() {
-                        if is_match {
-                            let _ = sas.confirm().await;
-                        } else {
-                            let _ = sas.mismatch().await;
-                        }
-                    }
+            if let Some((_, sas)) = crate::verification_logic::ACTIVE_SAS_FLOWS.remove(&flow_id_str) {
+                if is_match {
+                    let _ = sas.confirm().await;
+                    log::info!("Confirmed SAS verification match for flow {}", flow_id_str);
+                } else {
+                    let _ = sas.mismatch().await;
+                    log::info!("Rejected SAS verification mismatch for flow {}", flow_id_str);
                 }
+            } else {
+                log::error!("Could not find active SAS flow for id {}", flow_id_str);
             }
         });
     });

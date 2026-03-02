@@ -50,6 +50,7 @@ typedef struct {
   char *topic;
   guint64 count;
   gboolean is_space;
+  char *parent_id;
 } RoomListData;
 
 typedef struct {
