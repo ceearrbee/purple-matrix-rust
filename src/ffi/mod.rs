@@ -82,6 +82,15 @@ pub extern "C" fn purple_matrix_rust_poll_event(
                     encrypted,
                 })) as *mut c_void
             ),
+            FfiEvent::ReactionsChanged { user_id, room_id, event_id, reactions_text } => (
+                30,
+                Box::into_raw(Box::new(CReactionsChanged {
+                    user_id: to_c_char(&user_id),
+                    room_id: to_c_char(&room_id),
+                    event_id: to_c_char(&event_id),
+                    reactions_text: to_c_char(&reactions_text),
+                })) as *mut c_void
+            ),
             FfiEvent::Typing { user_id, room_id, who, is_typing } => (
                 2,
                 Box::into_raw(Box::new(CTyping {
@@ -173,6 +182,15 @@ pub extern "C" fn purple_matrix_rust_poll_event(
                 24,
                 Box::into_raw(Box::new(CSso {
                     url: to_c_char(&url),
+                })) as *mut c_void
+            ),
+            FfiEvent::MessageEdited { user_id, room_id, event_id, new_msg } => (
+                31,
+                Box::into_raw(Box::new(CMessageEdited {
+                    user_id: to_c_char(&user_id),
+                    room_id: to_c_char(&room_id),
+                    event_id: to_c_char(&event_id),
+                    new_msg: to_c_char(&new_msg),
                 })) as *mut c_void
             ),
             FfiEvent::SasRequest { user_id, target_user_id, flow_id } => (
@@ -411,6 +429,20 @@ pub extern "C" fn purple_matrix_rust_free_event(ev_type: i32, data: *mut c_void)
                 free_c_char(b.question);
                 free_c_char(b.sender);
                 free_c_char(b.options_str);
+            },
+            30 => {
+                let b = Box::from_raw(data as *mut CReactionsChanged);
+                free_c_char(b.user_id);
+                free_c_char(b.room_id);
+                free_c_char(b.event_id);
+                free_c_char(b.reactions_text);
+            },
+            31 => {
+                let b = Box::from_raw(data as *mut CMessageEdited);
+                free_c_char(b.user_id);
+                free_c_char(b.room_id);
+                free_c_char(b.event_id);
+                free_c_char(b.new_msg);
             },
             10 => {
                 let b = Box::from_raw(data as *mut CRoomListAdd);

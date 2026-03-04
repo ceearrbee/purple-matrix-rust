@@ -1,7 +1,7 @@
 use crate::{CLIENTS, DATA_PATH};
 use matrix_sdk::{
     config::SyncSettings,
-    Client, 
+    Client, Room
 };
 
 use crate::handlers::{messages, presence, typing, reactions, room_state, account_data, polls, receipts};
@@ -174,6 +174,10 @@ pub async fn start_sync_loop(client: Client) {
     client_for_sync.add_event_handler(account_data::handle_account_data);
     client_for_sync.add_event_handler(polls::handle_poll_start);
     client_for_sync.add_event_handler(receipts::handle_receipt);
+
+    client_for_sync.add_event_handler(|event: matrix_sdk::ruma::events::AnySyncTimelineEvent, room: Room| async move {
+        log::debug!("Sync event received in room {}: {:?}", room.room_id(), event.event_type());
+    });
 
     client_for_sync.add_event_handler(|event: matrix_sdk::ruma::events::key::verification::request::ToDeviceKeyVerificationRequestEvent, client: Client| async move {
              crate::verification_logic::handle_verification_request(client, event).await;

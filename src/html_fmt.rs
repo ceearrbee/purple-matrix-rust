@@ -2,23 +2,20 @@
 
 pub fn style_reply(quoted_body: &str, reply_body: &str) -> String {
     format!(
-        "<blockquote style=\"border-left: 3px solid #ccc; padding-left: 8px; margin-left: 5px; color: #666; font-size: 90%;\">{}</blockquote><br/>{}",
+        "<table cellspacing='0' cellpadding='0'><tr><td bgcolor='#008080' width='3'></td><td style='padding-left: 8px;'><font color='#777777' size='2'>{}</font></td></tr></table><br/>{}",
         quoted_body,
         reply_body
     )
+}
+
+pub fn style_edit(body: &str) -> String {
+    format!("{} <font color='#777777' size='1'>(edited)</font>", body)
 }
 
 pub fn style_redaction(sender: &str) -> String {
     format!(
         "<span style=\"color: #999; font-style: italic;\">🚫 [Redacted] {} removed a message.</span>",
         crate::escape_html(sender)
-    )
-}
-
-pub fn style_edit(body: &str) -> String {
-    format!(
-        "{} <span style=\"color: #888; font-size: 80%;\">(edited)</span>",
-        body
     )
 }
 

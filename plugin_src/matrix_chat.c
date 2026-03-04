@@ -285,11 +285,8 @@ static gboolean process_msg_cb(gpointer data) {
 
   PurpleConnection *gc = purple_account_get_connection(account);
   if (gc) {
-    int chat_id = get_chat_id(target_id);
-    PurpleConversation *conv = purple_find_chat(gc, chat_id);
-    if (!conv)
-      conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_CHAT,
-                                                   target_id, account);
+    PurpleConversation *conv = purple_find_conversation_with_account(
+        PURPLE_CONV_TYPE_ANY, target_id, account);
 
     if (d->thread_root_id && strlen(d->thread_root_id) > 0 &&
         separate_threads) {
@@ -307,6 +304,8 @@ static gboolean process_msg_cb(gpointer data) {
 
       g_free(s_msg);
       g_free(s_sender);
+    } else {
+      purple_debug_info("matrix", "process_msg_cb: No conversation found for target_id=%s\n", target_id);
     }
   }
 
@@ -326,6 +325,7 @@ static gboolean process_msg_cb(gpointer data) {
 void msg_callback(const char *user_id, const char *sender, const char *msg,
                   const char *room_id, const char *thread_root_id,
                   const char *event_id, guint64 timestamp, bool encrypted) {
+  purple_debug_info("matrix", "msg_callback: sender=%s msg=%s\n", sender, msg);
   MatrixMsgData *d = g_new0(MatrixMsgData, 1);
   d->user_id = g_strdup(user_id);
   d->sender = g_strdup(sender);
@@ -362,6 +362,81 @@ static gboolean process_typing_cb(gpointer data) {
   g_free(d->who);
   g_free(d);
   return FALSE;
+}
+
+static gboolean process_reactions_changed_cb(gpointer data) {
+  MatrixReactionsData *d = (MatrixReactionsData *)data;
+  PurpleAccount *account = find_matrix_account_by_id(d->user_id);
+  if (account) {
+    PurpleConversation *conv = purple_find_conversation_with_account(
+        PURPLE_CONV_TYPE_ANY, d->room_id, account);
+    if (conv) {
+      char key[128];
+      g_snprintf(key, sizeof(key), "matrix_reactions_%s", d->event_id);
+      g_free(purple_conversation_get_data(conv, key));
+      purple_conversation_set_data(conv, key, g_strdup(d->reactions_text));
+
+      purple_debug_info("matrix-ui-signal",
+                        "Dispatching matrix-ui-reactions-changed room_id=%s "
+                        "event_id=%s text=%s\n",
+                        d->room_id, d->event_id, d->reactions_text);
+      purple_debug_info("matrix-ui-signal",
+                        "Emitting matrix-ui-reactions-changed for room=%s event=%s\n",
+                        d->room_id, d->event_id);
+      purple_signal_emit(my_plugin, "matrix-ui-reactions-changed", d->room_id,
+                         d->event_id, d->reactions_text);
+    }
+  }
+  g_free(d->user_id);
+  g_free(d->room_id);
+  g_free(d->event_id);
+  g_free(d->reactions_text);
+  g_free(d);
+  return FALSE;
+}
+
+static gboolean process_message_edited_cb(gpointer data) {
+  MatrixEditData *d = (MatrixEditData *)data;
+  PurpleAccount *account = find_matrix_account_by_id(d->user_id);
+  if (account) {
+    PurpleConversation *conv = purple_find_conversation_with_account(
+        PURPLE_CONV_TYPE_ANY, d->room_id, account);
+    if (conv) {
+      purple_debug_info("matrix-ui-signal",
+                        "Dispatching matrix-ui-message-edited room_id=%s "
+                        "event_id=%s\n",
+                        d->room_id, d->event_id);
+      purple_signal_emit(my_plugin, "matrix-ui-message-edited", d->room_id,
+                         d->event_id, d->new_msg);
+    }
+  }
+  g_free(d->user_id);
+  g_free(d->room_id);
+  g_free(d->event_id);
+  g_free(d->new_msg);
+  g_free(d);
+  return FALSE;
+}
+
+void message_edited_callback(const char *user_id, const char *room_id,
+                             const char *event_id, const char *new_msg) {
+  MatrixEditData *d = g_new0(MatrixEditData, 1);
+  d->user_id = g_strdup(user_id);
+  d->room_id = g_strdup(room_id);
+  d->event_id = g_strdup(event_id);
+  d->new_msg = g_strdup(new_msg);
+  g_idle_add(process_message_edited_cb, d);
+}
+
+void reactions_changed_callback(const char *user_id, const char *room_id,
+                                const char *event_id,
+                                const char *reactions_text) {
+  MatrixReactionsData *d = g_new0(MatrixReactionsData, 1);
+  d->user_id = g_strdup(user_id);
+  d->room_id = g_strdup(room_id);
+  d->event_id = g_strdup(event_id);
+  d->reactions_text = g_strdup(reactions_text);
+  g_idle_add(process_reactions_changed_cb, d);
 }
 
 void typing_callback(const char *user_id, const char *room_id, const char *who,

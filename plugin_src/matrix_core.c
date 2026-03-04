@@ -599,6 +599,7 @@ static gboolean poll_rust_channel_cb(gpointer user_data) {
     if (!data)
       continue;
 
+    purple_debug_info("matrix-ffi", "Received FFI event type %d\n", ev_type);
     switch (ev_type) {
     case FFI_EVENT_MESSAGE_RECEIVED: {
       CMessageReceived *s = (CMessageReceived *)data;
@@ -687,6 +688,17 @@ static gboolean poll_rust_channel_cb(gpointer user_data) {
       CSearch *s = (CSearch *)data;
       search_result_cb(s->user_id, s->room_id, s->sender, s->message,
                        s->timestamp_str);
+      break;
+    }
+    case FFI_EVENT_REACTIONS_CHANGED: {
+      CReactionsChanged *s = (CReactionsChanged *)data;
+      reactions_changed_callback(s->user_id, s->room_id, s->event_id,
+                                 s->reactions_text);
+      break;
+    }
+    case FFI_EVENT_MESSAGE_EDITED: {
+      CMessageEdited *s = (CMessageEdited *)data;
+      message_edited_callback(s->user_id, s->room_id, s->event_id, s->new_msg);
       break;
     }
     case FFI_EVENT_ROOM_MUTE: {
@@ -1020,6 +1032,16 @@ static gboolean plugin_load(PurplePlugin *plugin) {
                          purple_value_new(PURPLE_TYPE_STRING),
                          purple_value_new(PURPLE_TYPE_STRING),
                          purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-reactions-changed",
+                         handle_room_activity_marshal, NULL, 3,
+                         purple_value_new(PURPLE_TYPE_STRING),
+                         purple_value_new(PURPLE_TYPE_STRING),
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-message-edited",
+                         handle_room_activity_marshal, NULL, 3,
+                         purple_value_new(PURPLE_TYPE_STRING),
+                         purple_value_new(PURPLE_TYPE_STRING),
+                         purple_value_new(PURPLE_TYPE_STRING));
 
   purple_signal_connect(plugin, "matrix-ui-action-show-dashboard", plugin,
                         PURPLE_CALLBACK(handle_show_dashboard_signal), NULL);
@@ -1240,7 +1262,7 @@ static PurplePluginInfo info = {.magic = PURPLE_PLUGIN_MAGIC,
                                 .priority = PURPLE_PRIORITY_DEFAULT,
                                 .id = "prpl-matrix-rust",
                                 .name = "Matrix (Rust)",
-                                .version = "0.1",
+                                .version = "0.4.0",
                                 .summary = "Matrix Protocol Plugin",
                                 .description = "Using matrix-rust-sdk",
                                 .load = plugin_load,

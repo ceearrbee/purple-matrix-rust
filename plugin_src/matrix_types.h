@@ -21,8 +21,22 @@ typedef struct {
 typedef struct {
   char *user_id;
   char *room_id;
+  char *event_id;
+  char *reactions_text;
+} MatrixReactionsData;
+
+typedef struct {
+  char *user_id;
+  char *room_id;
+  char *event_id;
+  char *new_msg;
+} MatrixEditData;
+
+typedef struct {
+  char *user_id;
+  char *room_id;
   char *who;
-  gboolean is_typing;
+  bool is_typing;
 } MatrixTypingData;
 
 typedef struct {

@@ -723,14 +723,6 @@ static void menu_action_reply_dialog_cb(void *user_data, const char *text) {
     if (target_id) {
       purple_matrix_rust_send_reply(purple_account_get_username(account),
                                     room_id, target_id, text);
-      if (conv) {
-        char *clean_text = purple_markup_escape_text(text, -1);
-        char *disp = g_strdup_printf("<b>[Reply]</b> %s", clean_text);
-        purple_conversation_write(conv, purple_account_get_username(account),
-                                  disp, PURPLE_MESSAGE_SEND, time(NULL));
-        g_free(disp);
-        g_free(clean_text);
-      }
     }
   }
   g_free(room_id);
@@ -760,9 +752,13 @@ static void menu_action_thread_dialog_cb(void *user_data, const char *text) {
   PurpleConversation *conv = purple_find_conversation_with_account(
       PURPLE_CONV_TYPE_ANY, room_id, account);
   if (conv && text && *text) {
+    const char *selected_id =
+        purple_conversation_get_data(conv, "matrix-ui-selected-event-id");
     const char *last_id = purple_conversation_get_data(conv, "last_event_id");
-    if (last_id) {
-      char *vid = g_strdup_printf("%s|%s", room_id, last_id);
+    const char *target_id = selected_id ? selected_id : last_id;
+
+    if (target_id) {
+      char *vid = g_strdup_printf("%s|%s", room_id, target_id);
       ensure_thread_in_blist(account, vid, "Thread", room_id);
       purple_matrix_rust_send_message(purple_account_get_username(account), vid,
                                       text);
@@ -1661,16 +1657,6 @@ static void matrix_ui_pick_edit_text_cb(void *user_data, const char *text) {
   if (account && ctx && ctx->room_id && ctx->event_id && text && *text) {
     purple_matrix_rust_send_edit(purple_account_get_username(account),
                                  ctx->room_id, ctx->event_id, text);
-    PurpleConversation *conv = purple_find_conversation_with_account(
-        PURPLE_CONV_TYPE_ANY, ctx->room_id, account);
-    if (conv) {
-      char *esc_text = g_markup_escape_text(text, -1);
-      char *disp = g_strdup_printf("<i>[Edited]</i> %s", esc_text);
-      purple_conversation_write(conv, purple_account_get_username(account), disp,
-                                PURPLE_MESSAGE_SEND, time(NULL));
-      g_free(disp);
-      g_free(esc_text);
-    }
   }
   if (ctx) {
     g_free(ctx->room_id);
@@ -1686,13 +1672,6 @@ static void matrix_ui_pick_redact_reason_cb(void *user_data,
   if (account && ctx && ctx->room_id && ctx->event_id) {
     purple_matrix_rust_redact_event(purple_account_get_username(account),
                                     ctx->room_id, ctx->event_id, reason);
-    PurpleConversation *conv = purple_find_conversation_with_account(
-        PURPLE_CONV_TYPE_ANY, ctx->room_id, account);
-    if (conv) {
-      purple_conversation_write(conv, purple_account_get_username(account),
-                                "<i>[Redacted a message]</i>",
-                                PURPLE_MESSAGE_SEND, time(NULL));
-    }
   }
   if (ctx) {
     g_free(ctx->room_id);
@@ -1850,17 +1829,6 @@ static void matrix_ui_react_fields_cb(void *user_data,
   if (key && *key) {
     purple_matrix_rust_send_reaction(purple_account_get_username(account),
                                      ctx->room_id, ctx->event_id, key);
-    PurpleConversation *conv = purple_find_conversation_with_account(
-        PURPLE_CONV_TYPE_ANY, ctx->room_id, account);
-    if (conv) {
-      char *esc_key = g_markup_escape_text(key, -1);
-      char *disp = g_strdup_printf(
-          "<i>[Reacted with <span size='x-large'>%s</span>]</i>", esc_key);
-      purple_conversation_write(conv, purple_account_get_username(account), 
-                                disp, PURPLE_MESSAGE_SEND, time(NULL));
-      g_free(disp);
-      g_free(esc_key);
-    }
   }
 
 cleanup:
@@ -3056,13 +3024,6 @@ static void matrix_ui_redact_reason_cb(void *user_data, const char *reason) {
                                     ctx->room_id, ctx->event_id, reason);
     purple_notify_info(my_plugin, "Redact Event", "Redaction Submitted",
                        "The redaction request has been sent to the server.");
-    PurpleConversation *conv = purple_find_conversation_with_account(
-        PURPLE_CONV_TYPE_ANY, ctx->room_id, account);
-    if (conv) {
-      purple_conversation_write(conv, purple_account_get_username(account),
-                                "<i>[Redacted a message]</i>",
-                                PURPLE_MESSAGE_SEND, time(NULL));
-    }
   }
   if (ctx) {
     g_free(ctx->room_id);
@@ -3152,16 +3113,6 @@ static void matrix_ui_edit_text_cb(void *user_data, const char *text) {
   if (account && ctx && ctx->room_id && ctx->event_id && text && *text) {
     purple_matrix_rust_send_edit(purple_account_get_username(account),
                                  ctx->room_id, ctx->event_id, text);
-    PurpleConversation *conv = purple_find_conversation_with_account(
-        PURPLE_CONV_TYPE_ANY, ctx->room_id, account);
-    if (conv) {
-      char *esc_text = g_markup_escape_text(text, -1);
-      char *disp = g_strdup_printf("<i>[Edited]</i> %s", esc_text);
-      purple_conversation_write(conv, purple_account_get_username(account), disp,
-                                PURPLE_MESSAGE_SEND, time(NULL));
-      g_free(disp);
-      g_free(esc_text);
-    }
   }
   if (ctx) {
     g_free(ctx->room_id);

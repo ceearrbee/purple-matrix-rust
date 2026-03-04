@@ -44,6 +44,8 @@ typedef enum {
   FFI_EVENT_SAS_HAVE_EMOJI = 27,
   FFI_EVENT_SHOW_VERIFICATION_QR = 28,
   FFI_EVENT_POWER_LEVEL_UPDATE = 29,
+  FFI_EVENT_REACTIONS_CHANGED = 30,
+  FFI_EVENT_MESSAGE_EDITED = 31,
 } FfiEventType;
 
 typedef struct {
@@ -148,6 +150,18 @@ typedef struct {
   guint64 count;
   guint64 ts;
 } CThreadList;
+typedef struct {
+  char *user_id;
+  char *room_id;
+  char *event_id;
+  char *new_msg;
+} CMessageEdited;
+typedef struct {
+  char *user_id;
+  char *room_id;
+  char *event_id;
+  char *reactions_text;
+} CReactionsChanged;
 typedef struct {
   char *user_id;
   char *room_id;

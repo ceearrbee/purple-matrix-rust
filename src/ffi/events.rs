@@ -224,6 +224,22 @@ pub struct CSticker {
     pub user_data: usize,
 }
 
+#[repr(C)]
+pub struct CMessageEdited {
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub event_id: *mut c_char,
+    pub new_msg: *mut c_char,
+}
+
+#[repr(C)]
+pub struct CReactionsChanged {
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub event_id: *mut c_char,
+    pub reactions_text: *mut c_char,
+}
+
 pub enum FfiEvent {
     MessageReceived {
         user_id: String,
@@ -294,6 +310,12 @@ pub enum FfiEvent {
     },
     SsoUrl {
         url: String,
+    },
+    MessageEdited {
+        user_id: String,
+        room_id: String,
+        event_id: String,
+        new_msg: String,
     },
     SasRequest {
         user_id: String,
@@ -376,5 +398,11 @@ pub enum FfiEvent {
         uri: String,
         description: String,
         user_data: usize,
+    },
+    ReactionsChanged {
+        user_id: String,
+        room_id: String,
+        event_id: String,
+        reactions_text: String,
     }
 }
