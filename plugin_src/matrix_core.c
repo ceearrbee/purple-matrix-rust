@@ -710,16 +710,6 @@ static gboolean poll_rust_channel_cb(gpointer user_data) {
       message_edited_callback(s->user_id, s->room_id, s->event_id, s->new_msg);
       break;
     }
-    case FFI_EVENT_ROOM_MUTE: {
-      CRoomMute *s = (CRoomMute *)data;
-      room_mute_callback(s->user_id, s->room_id, s->muted);
-      break;
-    }
-    case FFI_EVENT_ROOM_TAG: {
-      CRoomTag *s = (CRoomTag *)data;
-      room_tag_callback(s->user_id, s->room_id, s->tag);
-      break;
-    }
     case FFI_EVENT_POWER_LEVEL_UPDATE: {
       CPowerLevelUpdate *s = (CPowerLevelUpdate *)data;
       power_level_update_callback(s->user_id, s->room_id, s->is_admin,
