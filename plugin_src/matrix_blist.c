@@ -610,6 +610,9 @@ static gboolean process_update_buddy_cb(gpointer data) {
     if (buddy) {
       if (d->alias && strlen(d->alias) > 0) {
         purple_blist_alias_buddy(buddy, d->alias);
+        if (strcmp(d->user_id, purple_account_get_username(account)) == 0) {
+          purple_account_set_alias(account, d->alias);
+        }
       }
       if (d->avatar_url && strlen(d->avatar_url) > 0 &&
           g_file_test(d->avatar_url, G_FILE_TEST_EXISTS)) {
@@ -625,6 +628,12 @@ static gboolean process_update_buddy_cb(gpointer data) {
          * set_buddy_icon_path if custom */
         purple_blist_node_set_string((PurpleBlistNode *)buddy, "buddy_icon",
                                      d->avatar_url);
+        if (strcmp(d->user_id, purple_account_get_username(account)) == 0) {
+          purple_buddy_icons_set_for_user(account, d->user_id, NULL, 0, NULL); // Clear cache? 
+          // Actually purple_buddy_icons_set_for_user expects data.
+          // For local user, we usually use purple_account_set_buddy_icon_path
+          purple_account_set_buddy_icon_path(account, d->avatar_url);
+        }
       }
     }
   }

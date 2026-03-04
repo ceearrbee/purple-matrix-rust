@@ -19,8 +19,8 @@
 #define MATRIX_UI_TYPING_LABEL_KEY "matrix-ui-typing-label"
 #define MATRIX_UI_ENCRYPTED_LABEL_KEY "matrix-ui-encrypted-label"
 #define MATRIX_UI_MUTED_LABEL_KEY "matrix-ui-muted-label"
-#define MATRIX_UI_ACTIVITY_LABEL_KEY "matrix-ui-activity-label"
-#define MATRIX_UI_USERLIST_HOOKED_KEY "matrix-ui-userlist-hooked"
+#define MATRIX_UI_READ_RECEIPT_LABEL_KEY "matrix-ui-read-receipt-label"
+#define MATRIX_UI_TOPIC_LABEL_KEY "matrix-ui-topic-label"
 #define MATRIX_UI_POPUP_HOOKED_KEY "matrix-ui-popup-hooked"
 #define MATRIX_UI_SELECTED_EVENT_ID_KEY "matrix-ui-selected-event-id"
 #define MATRIX_UI_SELECTED_EVENT_SENDER_KEY "matrix-ui-selected-event-sender"
@@ -52,6 +52,26 @@ static void emit_matrix_signal(PurpleConversation *conv, const char *signal_name
   }
 }
 
+/* Forward Declarations */
+static void on_menu_reply(gpointer d);
+static void on_menu_reply_latest(gpointer d);
+static void on_menu_start_thread(gpointer d);
+static void on_menu_threads(gpointer d);
+static void on_menu_poll(gpointer d);
+static void on_menu_list_polls(gpointer d);
+static void on_menu_react_pick_event(gpointer d);
+static void on_menu_edit_pick_event(gpointer d);
+static void on_menu_redact_pick_event(gpointer d);
+static void on_menu_show_last_event_details(gpointer d);
+static void on_menu_dash(gpointer d);
+static void on_menu_moderate(gpointer d);
+static void on_menu_room_settings(gpointer d);
+static void on_menu_invite_user(gpointer d);
+static void on_menu_send_file(gpointer d);
+static void on_menu_mark_unread(gpointer d);
+static void on_menu_mark_read(gpointer d);
+static void on_menu_send_location(gpointer d);
+
 static void on_menu_reply(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-reply"); }
 static void on_menu_reply_latest(gpointer d) {
   PurpleConversation *conv = (PurpleConversation *)d;
@@ -59,11 +79,74 @@ static void on_menu_reply_latest(gpointer d) {
   emit_matrix_signal(conv, "matrix-ui-action-reply");
 }
 static void on_menu_start_thread(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-start-thread"); }
+static void on_menu_threads(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-list-threads"); }
 static void on_menu_poll(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-poll"); }
+static void on_menu_list_polls(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-list-polls"); }
 static void on_menu_react_pick_event(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-react-pick-event"); }
 static void on_menu_edit_pick_event(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-edit-pick-event"); }
 static void on_menu_redact_pick_event(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-redact-pick-event"); }
 static void on_menu_show_last_event_details(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-show-last-event-details"); }
+static void on_menu_dash(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-show-dashboard"); }
+static void on_menu_moderate(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-moderate"); }
+static void on_menu_room_settings(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-room-settings"); }
+static void on_menu_invite_user(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-invite-user"); }
+static void on_menu_send_file(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-send-file"); }
+static void on_menu_mark_unread(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-mark-unread"); }
+static void on_menu_mark_read(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-mark-read"); }
+static void on_menu_send_location(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-send-location"); }
+
+static void on_matrix_message_actions_clicked(GtkWidget *b, PurpleConversation *c) {
+  GtkWidget *menu = gtk_menu_new();
+  GtkWidget *item;
+  item = gtk_menu_item_new_with_label("React...");
+  g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_react_pick_event), c);
+  gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+  item = gtk_menu_item_new_with_label("Edit...");
+  g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_edit_pick_event), c);
+  gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+  item = gtk_menu_item_new_with_label("Redact...");
+  g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_redact_pick_event), c);
+  gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+  gtk_widget_show_all(menu);
+  gtk_menu_popup(GTK_MENU(menu), NULL, NULL, NULL, NULL, 0, gtk_get_current_event_time());
+}
+
+static void on_matrix_admin_actions_clicked(GtkWidget *b, PurpleConversation *c) {
+  GtkWidget *menu = gtk_menu_new();
+  GtkWidget *item;
+  item = gtk_menu_item_new_with_label("Room Settings...");
+  g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_room_settings), c);
+  gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+  item = gtk_menu_item_new_with_label("Moderate Room...");
+  g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_moderate), c);
+  gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+  gtk_widget_show_all(menu);
+  gtk_menu_popup(GTK_MENU(menu), NULL, NULL, NULL, NULL, 0, gtk_get_current_event_time());
+}
+
+static void on_matrix_more_actions_clicked(GtkWidget *b, PurpleConversation *c) {
+  GtkWidget *menu = gtk_menu_new();
+  GtkWidget *item;
+  item = gtk_menu_item_new_with_label("Invite User...");
+  g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_invite_user), c);
+  gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+  item = gtk_menu_item_new_with_label("Send File...");
+  g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_send_file), c);
+  gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+  item = gtk_menu_item_new_with_label("Send Location...");
+  g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_send_location), c);
+  gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+  item = gtk_separator_menu_item_new();
+  gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+  item = gtk_menu_item_new_with_label("Mark Unread");
+  g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_mark_unread), c);
+  gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+  item = gtk_menu_item_new_with_label("Mark Read");
+  g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_mark_read), c);
+  gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+  gtk_widget_show_all(menu);
+  gtk_menu_popup(GTK_MENU(menu), NULL, NULL, NULL, NULL, 0, gtk_get_current_event_time());
+}
 
 static void identify_event_at_iter(PurpleConversation *conv, GtkTextIter *iter) {
   GtkTextIter start = *iter;
@@ -86,35 +169,45 @@ static void identify_event_at_iter(PurpleConversation *conv, GtkTextIter *iter) 
   g_free(purple_conversation_get_data(conv, MATRIX_UI_SELECTED_EVENT_SENDER_KEY));
   purple_conversation_set_data(conv, MATRIX_UI_SELECTED_EVENT_SENDER_KEY, NULL);
 
-  // Search for the marker (M:event_id)
-  const char *marker_start = strstr(clean_line, "(M:");
-  if (marker_start) {
-    const char *marker_end = strchr(marker_start + 3, ')');
-    if (marker_end) {
-        char *ev_id = g_strndup(marker_start + 3, marker_end - (marker_start + 3));
-        purple_conversation_set_data(conv, MATRIX_UI_SELECTED_EVENT_ID_KEY, g_strdup(ev_id));
-        purple_debug_info("matrix-ui", "identify_event_at_iter: Found event_id from marker: %s\n", ev_id);
+  const char *markers[] = {"[MXID:", "_MX_ID:", "_MXID:["};
+  for (int m=0; m<3; m++) {
+    const char *marker_start = strstr(clean_line, markers[m]);
+    if (marker_start) {
+        const char *id_start = marker_start + strlen(markers[m]);
+        char *ev_id = g_strdup(id_start);
         
-        for (i = 0; i < 10; i++) {
-            char key_id[64], key_sender[64];
-            g_snprintf(key_id, sizeof(key_id), "matrix_recent_event_id_%d", i);
-            g_snprintf(key_sender, sizeof(key_sender), "matrix_recent_event_sender_%d", i);
-            const char *stored_id = purple_conversation_get_data(conv, key_id);
-            if (stored_id && strcmp(stored_id, ev_id) == 0) {
-                const char *stored_sender = purple_conversation_get_data(conv, key_sender);
-                if (stored_sender) {
-                    purple_conversation_set_data(conv, MATRIX_UI_SELECTED_EVENT_SENDER_KEY, g_strdup(stored_sender));
+        char *end_ptr = strchr(ev_id, ']');
+        if (end_ptr) *end_ptr = '\0';
+        else {
+            // If no bracket, take until space or end
+            char *space = strchr(ev_id, ' ');
+            if (space) *space = '\0';
+        }
+        
+        if (ev_id && strlen(ev_id) > 5) {
+            purple_conversation_set_data(conv, MATRIX_UI_SELECTED_EVENT_ID_KEY, g_strdup(ev_id));
+            for (i = 0; i < 10; i++) {
+                char key_id[64], key_sender[64];
+                g_snprintf(key_id, sizeof(key_id), "matrix_recent_event_id_%d", i);
+                g_snprintf(key_sender, sizeof(key_sender), "matrix_recent_event_sender_%d", i);
+                const char *stored_id = purple_conversation_get_data(conv, key_id);
+                if (stored_id && strcmp(stored_id, ev_id) == 0) {
+                    const char *stored_sender = purple_conversation_get_data(conv, key_sender);
+                    if (stored_sender) {
+                        purple_conversation_set_data(conv, MATRIX_UI_SELECTED_EVENT_SENDER_KEY, g_strdup(stored_sender));
+                    }
+                    break;
                 }
-                break;
             }
+            g_free(ev_id);
+            g_free(clean_line);
+            return;
         }
         g_free(ev_id);
-        g_free(clean_line);
-        return;
     }
   }
 
-  // Fallback to snippet matching
+  /* Fallback to snippet matching if marker not found */
   for (i = 0; i < 10; i++) {
     char key_id[64], key_msg[64], key_sender[64];
     const char *ev_id, *ev_msg, *ev_sender;
@@ -157,7 +250,8 @@ static void imhtml_populate_popup_cb(GtkWidget *imhtml, GtkMenu *menu, gpointer 
   const char *selected_id = purple_conversation_get_data(conv, MATRIX_UI_SELECTED_EVENT_ID_KEY);
   const char *selected_sender = purple_conversation_get_data(conv, MATRIX_UI_SELECTED_EVENT_SENDER_KEY);
   const char *my_id = purple_account_get_username(account);
-  gboolean is_mine = (selected_sender && my_id && g_strcmp0(selected_sender, my_id) == 0);
+  const char *my_alias = purple_account_get_alias(account);
+  gboolean is_mine = (selected_sender && ((my_id && strcmp(selected_sender, my_id) == 0) || (my_alias && strcmp(selected_sender, my_alias) == 0)));
 
   item = gtk_separator_menu_item_new();
   gtk_menu_shell_prepend(GTK_MENU_SHELL(menu), item);
@@ -166,6 +260,16 @@ static void imhtml_populate_popup_cb(GtkWidget *imhtml, GtkMenu *menu, gpointer 
   if (selected_id) {
     item = gtk_menu_item_new_with_label("Matrix Reply");
     g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_reply), conv);
+    gtk_menu_shell_prepend(GTK_MENU_SHELL(menu), item);
+    gtk_widget_show(item);
+
+    item = gtk_menu_item_new_with_label("Matrix React...");
+    g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_react_pick_event), conv);
+    gtk_menu_shell_prepend(GTK_MENU_SHELL(menu), item);
+    gtk_widget_show(item);
+
+    item = gtk_menu_item_new_with_label("Matrix Thread");
+    g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_start_thread), conv);
     gtk_menu_shell_prepend(GTK_MENU_SHELL(menu), item);
     gtk_widget_show(item);
 
@@ -183,51 +287,18 @@ static void imhtml_populate_popup_cb(GtkWidget *imhtml, GtkMenu *menu, gpointer 
   matrix_menu = gtk_menu_new();
   gtk_menu_item_set_submenu(GTK_MENU_ITEM(matrix_item), matrix_menu);
 
-  if (selected_id) {
-    item = gtk_menu_item_new_with_label("Reply to this message");
-    g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_reply), conv);
-    gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
-    gtk_widget_show(item);
-
-    item = gtk_menu_item_new_with_label("React to this message...");
-    g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_react_pick_event), conv);
-    gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
-    gtk_widget_show(item);
-
-    item = gtk_menu_item_new_with_label("Start Thread from here");
-    g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_start_thread), conv);
-    gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
-    gtk_widget_show(item);
-
-    if (is_mine) {
-      item = gtk_menu_item_new_with_label("Edit this message...");
-      g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_edit_pick_event), conv);
-      gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
-      gtk_widget_show(item);
-
-      item = gtk_menu_item_new_with_label("Redact this message...");
-      g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_redact_pick_event), conv);
-      gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
-      gtk_widget_show(item);
-    }
-    item = gtk_separator_menu_item_new();
-    gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
-    gtk_widget_show(item);
-  }
-
-  item = gtk_menu_item_new_with_label("Reply to Latest");
-  g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_reply_latest), conv);
-  gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
-  gtk_widget_show(item);
-
   item = gtk_menu_item_new_with_label("Show Last Event Details");
   g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_show_last_event_details), conv);
+  gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
+  gtk_widget_show(item);
+  
+  item = gtk_menu_item_new_with_label("Room Dashboard");
+  g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_dash), conv);
   gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
   gtk_widget_show(item);
 }
 
 static void handle_message_edited_cb(const char *room_id, const char *event_id, const char *new_msg, gpointer data) {
-  purple_debug_info("matrix-ui", "handle_message_edited_cb: room=%s event=%s\n", room_id, event_id);
   PurpleAccount *account = local_find_matrix_account();
   if (!account) return;
   PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
@@ -237,30 +308,33 @@ static void handle_message_edited_cb(const char *room_id, const char *event_id, 
   GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gtkconv->imhtml));
   if (!buffer) return;
 
-  char *search_str = g_strdup_printf("(M:%s)", event_id);
-  GtkTextIter start, end;
-  gtk_text_buffer_get_start_iter(buffer, &start);
-  if (gtk_text_iter_forward_search(&start, search_str, 0, &start, &end, NULL)) {
-    purple_debug_info("matrix-ui", "handle_message_edited_cb: Found marker, updating message!\n");
-    GtkTextIter line_start = start;
-    GtkTextIter line_end = end;
-    gtk_text_iter_set_line_offset(&line_start, 0);
-    if (!gtk_text_iter_ends_line(&line_end)) gtk_text_iter_forward_to_line_end(&line_end);
+  const char *markers[] = {"[MXID:", "_MX_ID:", "_MXID:["};
+  for (int m=0; m<3; m++) {
+    char *search_str;
+    if (markers[m][0] == '[') search_str = g_strdup_printf("%s%s]", markers[m], event_id);
+    else if (g_str_has_prefix(markers[m], "_MXID:[")) search_str = g_strdup_printf("%s%s]", markers[m], event_id);
+    else search_str = g_strdup_printf("%s%s", markers[m], event_id);
     
-    /* Preserve the marker at the end of the new content */
-    char *replacement_html = g_strdup_printf("%s <font color='#ffffff' size='1'>%s</font>", new_msg, search_str);
-    
-    gtk_text_buffer_delete(buffer, &line_start, &line_end);
-    gtk_imhtml_insert_html_at_iter(GTK_IMHTML(gtkconv->imhtml), replacement_html, 0, &line_start);
-    g_free(replacement_html);
-  } else {
-    purple_debug_info("matrix-ui", "handle_message_edited_cb: Marker %s NOT FOUND\n", search_str);
+    GtkTextIter start, end;
+    gtk_text_buffer_get_start_iter(buffer, &start);
+    if (gtk_text_iter_forward_search(&start, search_str, 0, &start, &end, NULL)) {
+        GtkTextIter line_start = start;
+        GtkTextIter line_end = end;
+        gtk_text_iter_set_line_offset(&line_start, 0);
+        if (!gtk_text_iter_ends_line(&line_end)) gtk_text_iter_forward_to_line_end(&line_end);
+        
+        char *replacement_html = g_strdup_printf("%s <font color='#fdfdfd' size='1'>%s</font>", new_msg, search_str);
+        gtk_text_buffer_delete(buffer, &line_start, &line_end);
+        gtk_imhtml_insert_html_at_iter(GTK_IMHTML(gtkconv->imhtml), replacement_html, 0, &line_start);
+        g_free(replacement_html);
+        g_free(search_str);
+        return;
+    }
+    g_free(search_str);
   }
-  g_free(search_str);
 }
 
 static void handle_reactions_changed_cb(const char *room_id, const char *event_id, const char *reactions_text, gpointer data) {
-  purple_debug_info("matrix-ui", "handle_reactions_changed_cb: room=%s event=%s\n", room_id, event_id);
   PurpleAccount *account = local_find_matrix_account();
   if (!account) return;
   PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
@@ -270,42 +344,102 @@ static void handle_reactions_changed_cb(const char *room_id, const char *event_i
   GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gtkconv->imhtml));
   if (!buffer) return;
 
-  char *search_str = g_strdup_printf("(M:%s)", event_id);
-  GtkTextIter start, end;
-  gtk_text_buffer_get_start_iter(buffer, &start);
-  if (gtk_text_iter_forward_search(&start, search_str, 0, &start, &end, NULL)) {
-    purple_debug_info("matrix-ui", "handle_reactions_changed_cb: Found marker!\n");
-    GtkTextIter block_end = end;
-    if (!gtk_text_iter_ends_line(&block_end)) gtk_text_iter_forward_to_line_end(&block_end);
-    char *existing = gtk_text_buffer_get_text(buffer, &end, &block_end, FALSE);
-    if (existing && strstr(existing, "[Reactions: ")) gtk_text_buffer_delete(buffer, &end, &block_end);
-    g_free(existing);
-    const char *raw_text = reactions_text;
-    if (g_str_has_prefix(raw_text, "[System] [Reactions] ")) raw_text += 21;
-    char *esc_reactions = g_markup_escape_text(raw_text, -1);
-    char *markup = g_strdup_printf(" <span size='small' color='#666'><i>[Reactions: %s]</i></span>", esc_reactions);
-    gtk_imhtml_insert_html_at_iter(GTK_IMHTML(gtkconv->imhtml), markup, 0, &end);
-    g_free(markup);
-    g_free(esc_reactions);
-  } else {
-    purple_debug_info("matrix-ui", "handle_reactions_changed_cb: Marker %s NOT FOUND\n", search_str);
+  const char *markers[] = {"[MXID:", "_MX_ID:", "_MXID:["};
+  for (int m=0; m<3; m++) {
+    char *search_str;
+    if (markers[m][0] == '[') search_str = g_strdup_printf("%s%s]", markers[m], event_id);
+    else if (g_str_has_prefix(markers[m], "_MXID:[")) search_str = g_strdup_printf("%s%s]", markers[m], event_id);
+    else search_str = g_strdup_printf("%s%s", markers[m], event_id);
+
+    GtkTextIter start, end;
+    gtk_text_buffer_get_start_iter(buffer, &start);
+    
+    if (gtk_text_iter_forward_search(&start, search_str, 0, &start, &end, NULL)) {
+        GtkTextIter block_end = end;
+        if (!gtk_text_iter_ends_line(&block_end)) gtk_text_iter_forward_to_line_end(&block_end);
+        
+        /* Look for existing reactions block */
+        char *full_text = gtk_text_buffer_get_text(buffer, &end, &block_end, FALSE);
+        if (full_text && strstr(full_text, "[Reactions: ")) {
+            GtkTextIter del_start = end;
+            GtkTextIter del_end = end;
+            if (gtk_text_iter_forward_search(&del_start, " [Reactions: ", 0, &del_start, &del_end, &block_end)) {
+                /* Found it, delete until the end of that block */
+                if (gtk_text_iter_forward_search(&del_end, "]", 0, &del_start, &del_end, &block_end)) {
+                    gtk_text_buffer_delete(buffer, &del_start, &del_end);
+                }
+            }
+        }
+        g_free(full_text);
+
+        if (reactions_text && strlen(reactions_text) > 0) {
+            const char *raw_text = reactions_text;
+            if (g_str_has_prefix(raw_text, "[System] [Reactions] ")) raw_text += 21;
+            
+            char *esc_reactions = g_markup_escape_text(raw_text, -1);
+            /* Visual Polish: Mimic a bubble with background and border if Pidgin's renderer allows it */
+            /* Using a simple styled span */
+            char *markup = g_strdup_printf(" <span style='background-color:#eeeeee; border:1px solid #cccccc; color:#333333;'> [Reactions: %s] </span>", esc_reactions);
+            gtk_imhtml_insert_html_at_iter(GTK_IMHTML(gtkconv->imhtml), markup, 0, &end);
+            g_free(markup);
+            g_free(esc_reactions);
+        }
+        
+        g_free(search_str);
+        return;
+    }
+    g_free(search_str);
   }
-  g_free(search_str);
+}
+
+static void handle_read_receipt_cb(const char *room_id, const char *who, const char *event_id, gpointer data) {
+  PurpleAccount *account = local_find_matrix_account();
+  if (!account) return;
+  PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+  if (!conv) return;
+  GtkWidget *label = purple_conversation_get_data(conv, MATRIX_UI_READ_RECEIPT_LABEL_KEY);
+  if (label && GTK_IS_LABEL(label)) {
+    char *esc_who = g_markup_escape_text(who, -1);
+    char *txt = g_strdup_printf("<span size='smaller' color='#666'>Last Read: %s</span>", esc_who);
+    gtk_label_set_markup(GTK_LABEL(label), txt);
+    g_free(txt);
+    g_free(esc_who);
+  }
 }
 
 static void handle_room_activity_cb(const char *room_id, const char *sender, const char *snippet, gpointer data) {
   PurpleAccount *account = local_find_matrix_account();
   if (!account) return;
   PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
-  if (!conv) return;
-  GtkWidget *label = purple_conversation_get_data(conv, MATRIX_UI_ACTIVITY_LABEL_KEY);
-  if (label && GTK_IS_LABEL(label)) {
+  if (conv) {
     char *safe = g_strndup(snippet ? snippet : "", 80);
-    char *esc_sender = g_markup_escape_text(sender ? sender : "user", -1);
-    char *esc_snippet = g_markup_escape_text(safe, -1);
-    char *msg = g_strdup_printf("<span size='smaller' color='#666'>Last: %s: %s</span>", esc_sender, esc_snippet);
-    gtk_label_set_markup(GTK_LABEL(label), msg);
-    g_free(msg); g_free(esc_sender); g_free(esc_snippet); g_free(safe);
+    char *txt = g_strdup_printf("Last: %s: %s", sender ? sender : "user", safe);
+    purple_conversation_set_data(conv, "matrix_last_activity", txt);
+    g_free(safe);
+    PurpleChat *chat = purple_blist_find_chat(account, room_id);
+    if (chat) purple_blist_update_node_icon((PurpleBlistNode *)chat);
+  }
+}
+
+static void handle_room_topic_cb(const char *room_id, const char *topic, gpointer data) {
+  PurpleAccount *account = local_find_matrix_account();
+  if (!account) return;
+  PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+  if (conv) {
+    purple_conversation_set_data(conv, "matrix_topic", g_strdup(topic));
+    GtkWidget *label = purple_conversation_get_data(conv, MATRIX_UI_TOPIC_LABEL_KEY);
+    if (label && GTK_IS_LABEL(label)) {
+        char *esc_topic = g_markup_escape_text(topic, -1);
+        char *txt = g_strdup_printf("<span size='smaller' color='#444'><b>Topic:</b> %s</span>", esc_topic);
+        gtk_label_set_markup(GTK_LABEL(label), txt);
+        g_free(txt);
+        g_free(esc_topic);
+    }
+    PurpleChat *chat = purple_blist_find_chat(account, room_id);
+    if (chat) {
+        g_hash_table_replace(purple_chat_get_components(chat), g_strdup("topic"), g_strdup(topic));
+        purple_blist_update_node_icon((PurpleBlistNode *)chat);
+    }
   }
 }
 
@@ -334,11 +468,8 @@ static void handle_room_encrypted_cb(const char *room_id, gboolean is_encrypted,
   if (!conv) return;
   GtkWidget *label = purple_conversation_get_data(conv, MATRIX_UI_ENCRYPTED_LABEL_KEY);
   if (label && GTK_IS_LABEL(label)) {
-    if (is_encrypted) {
-      gtk_label_set_markup(GTK_LABEL(label), "<span color='darkgreen'>🔒</span>");
-    } else {
-      gtk_label_set_text(GTK_LABEL(label), "");
-    }
+    if (is_encrypted) gtk_label_set_markup(GTK_LABEL(label), "<span color='darkgreen'>🔒</span>");
+    else gtk_label_set_text(GTK_LABEL(label), "");
   }
 }
 
@@ -349,11 +480,8 @@ static void handle_room_muted_cb(const char *room_id, gboolean muted, gpointer d
   if (!conv) return;
   GtkWidget *label = purple_conversation_get_data(conv, MATRIX_UI_MUTED_LABEL_KEY);
   if (label && GTK_IS_LABEL(label)) {
-    if (muted) {
-      gtk_label_set_markup(GTK_LABEL(label), "<span color='#aa6600'>M</span>");
-    } else {
-      gtk_label_set_text(GTK_LABEL(label), "");
-    }
+    if (muted) gtk_label_set_markup(GTK_LABEL(label), "<span color='#aa6600'>M</span>");
+    else gtk_label_set_text(GTK_LABEL(label), "");
   }
 }
 
@@ -373,31 +501,68 @@ static gboolean inject_action_bar_idle_cb(gpointer data) {
     purple_conversation_set_data(conv, MATRIX_UI_POPUP_HOOKED_KEY, GINT_TO_POINTER(1));
   }
 
+  GtkWidget *main_vbox = gtk_vbox_new(FALSE, 0);
+  GtkWidget *topic_hbox = gtk_hbox_new(FALSE, 5);
+  GtkWidget *topic_label = gtk_label_new("");
+  gtk_label_set_ellipsize(GTK_LABEL(topic_label), PANGO_ELLIPSIZE_END);
+  gtk_misc_set_alignment(GTK_MISC(topic_label), 0.0f, 0.5f);
+  gtk_box_pack_start(GTK_BOX(topic_hbox), topic_label, TRUE, TRUE, 5);
+  purple_conversation_set_data(conv, MATRIX_UI_TOPIC_LABEL_KEY, topic_label);
+  
+  const char *topic = purple_conversation_get_data(conv, "matrix_topic");
+  if (topic) {
+      char *esc_topic = g_markup_escape_text(topic, -1);
+      char *txt = g_strdup_printf("<span size='smaller' color='#444'><b>Topic:</b> %s</span>", esc_topic);
+      gtk_label_set_markup(GTK_LABEL(topic_label), txt);
+      g_free(txt);
+      g_free(esc_topic);
+  }
+  gtk_box_pack_start(GTK_BOX(main_vbox), topic_hbox, FALSE, FALSE, 2);
+
   GtkWidget *hbox = gtk_hbox_new(FALSE, 2);
   GtkWidget *reply_btn = gtk_button_new_with_label("Reply");
-  GtkWidget *thread_btn = gtk_button_new_with_label("Thread");
-  GtkWidget *poll_btn = gtk_button_new_with_label("Poll");
-  GtkWidget *btns[] = {reply_btn, thread_btn, poll_btn};
-  for (int i=0; i<3; i++) {
+  GtkWidget *thread_btn = gtk_button_new_with_label("Thread+");
+  GtkWidget *threads_btn = gtk_button_new_with_label("Threads");
+  GtkWidget *poll_btn = gtk_button_new_with_label("Poll+");
+  GtkWidget *polls_btn = gtk_button_new_with_label("Polls");
+  GtkWidget *msg_btn = gtk_button_new_with_label("Msg");
+  GtkWidget *admin_btn = gtk_button_new_with_label("Admin");
+  GtkWidget *more_btn = gtk_button_new_with_label("More");
+
+  GtkWidget *btns[] = {reply_btn, thread_btn, threads_btn, poll_btn, polls_btn, msg_btn, admin_btn, more_btn};
+  for (int i=0; i<8; i++) {
     gtk_button_set_relief(GTK_BUTTON(btns[i]), GTK_RELIEF_NONE);
+    GtkWidget *lbl = gtk_bin_get_child(GTK_BIN(btns[i]));
+    if (GTK_IS_LABEL(lbl)) {
+        PangoFontDescription *fd = pango_font_description_from_string("sans bold 8");
+        gtk_widget_modify_font(lbl, fd);
+        pango_font_description_free(fd);
+    }
     gtk_box_pack_start(GTK_BOX(hbox), btns[i], FALSE, FALSE, 0);
   }
+
   g_signal_connect_swapped(reply_btn, "clicked", G_CALLBACK(on_menu_reply_latest), conv);
   g_signal_connect_swapped(thread_btn, "clicked", G_CALLBACK(on_menu_start_thread), conv);
+  g_signal_connect_swapped(threads_btn, "clicked", G_CALLBACK(on_menu_threads), conv);
   g_signal_connect_swapped(poll_btn, "clicked", G_CALLBACK(on_menu_poll), conv);
+  g_signal_connect_swapped(polls_btn, "clicked", G_CALLBACK(on_menu_list_polls), conv);
+  g_signal_connect(msg_btn, "clicked", G_CALLBACK(on_matrix_message_actions_clicked), conv);
+  g_signal_connect(admin_btn, "clicked", G_CALLBACK(on_matrix_admin_actions_clicked), conv);
+  g_signal_connect(more_btn, "clicked", G_CALLBACK(on_matrix_more_actions_clicked), conv);
 
-  GtkWidget *activity_label = gtk_label_new("");
-  gtk_label_set_ellipsize(GTK_LABEL(activity_label), PANGO_ELLIPSIZE_END);
-  gtk_box_pack_start(GTK_BOX(hbox), activity_label, TRUE, TRUE, 8);
-  purple_conversation_set_data(conv, MATRIX_UI_ACTIVITY_LABEL_KEY, activity_label);
+  GtkWidget *read_receipt_label = gtk_label_new("");
+  gtk_label_set_ellipsize(GTK_LABEL(read_receipt_label), PANGO_ELLIPSIZE_END);
+  gtk_box_pack_start(GTK_BOX(hbox), read_receipt_label, TRUE, TRUE, 8);
+  purple_conversation_set_data(conv, MATRIX_UI_READ_RECEIPT_LABEL_KEY, read_receipt_label);
 
   GtkWidget *typing_label = gtk_label_new("");
   gtk_box_pack_start(GTK_BOX(hbox), typing_label, FALSE, FALSE, 10);
   purple_conversation_set_data(conv, MATRIX_UI_TYPING_LABEL_KEY, typing_label);
 
-  gtk_box_pack_start(GTK_BOX(vbox), hbox, FALSE, FALSE, 0);
-  gtk_widget_show_all(hbox);
-  purple_conversation_set_data(conv, MATRIX_UI_ACTION_BAR_KEY, hbox);
+  gtk_box_pack_start(GTK_BOX(main_vbox), hbox, FALSE, FALSE, 0);
+  gtk_box_pack_start(GTK_BOX(vbox), main_vbox, FALSE, FALSE, 0);
+  gtk_widget_show_all(main_vbox);
+  purple_conversation_set_data(conv, MATRIX_UI_ACTION_BAR_KEY, main_vbox);
   return FALSE;
 }
 
@@ -419,39 +584,47 @@ static void conversation_deleted_cb(PurpleConversation *conv, gpointer data) {
 static void connect_ui_signals(PurplePlugin *plugin) {
   void *conv_handle = purple_conversations_get_handle();
   PurplePlugin *matrix_plugin = purple_plugins_find_with_id("prpl-matrix-rust");
+  if (!matrix_plugin) {
+    GList *pl;
+    for (pl = purple_plugins_get_all(); pl; pl = pl->next) {
+      PurplePlugin *p = (PurplePlugin *)pl->data;
+      if (p->info && p->info->id && strcmp(p->info->id, "prpl-matrix-rust") == 0) {
+        matrix_plugin = p; break;
+      }
+    }
+  }
   
-  purple_debug_info("matrix-ui", "connect_ui_signals: conv_handle=%p matrix_plugin=%p\n", conv_handle, matrix_plugin);
-
-  purple_signal_connect(conv_handle, "conversation-created", plugin, PURPLE_CALLBACK(conversation_created_cb), NULL);
-  purple_signal_connect(conv_handle, "deleting-conversation", plugin, PURPLE_CALLBACK(conversation_deleted_cb), NULL);
+  if (conv_handle) {
+    purple_signal_connect(conv_handle, "conversation-created", plugin, PURPLE_CALLBACK(conversation_created_cb), NULL);
+    purple_signal_connect(conv_handle, "deleting-conversation", plugin, PURPLE_CALLBACK(conversation_deleted_cb), NULL);
+  }
   
-  if (matrix_plugin && purple_plugin_is_loaded(matrix_plugin)) {
-    purple_debug_info("matrix-ui", "connect_ui_signals: Matrix plugin is loaded, connecting to Matrix signals\n");
+  if (matrix_plugin) {
     purple_signal_connect(matrix_plugin, "matrix-ui-room-typing", plugin, PURPLE_CALLBACK(handle_room_typing_cb), NULL);
     purple_signal_connect(matrix_plugin, "matrix-ui-room-encrypted", plugin, PURPLE_CALLBACK(handle_room_encrypted_cb), NULL);
     purple_signal_connect(matrix_plugin, "matrix-ui-room-muted", plugin, PURPLE_CALLBACK(handle_room_muted_cb), NULL);
     purple_signal_connect(matrix_plugin, "matrix-ui-room-activity", plugin, PURPLE_CALLBACK(handle_room_activity_cb), NULL);
     purple_signal_connect(matrix_plugin, "matrix-ui-reactions-changed", plugin, PURPLE_CALLBACK(handle_reactions_changed_cb), NULL);
     purple_signal_connect(matrix_plugin, "matrix-ui-message-edited", plugin, PURPLE_CALLBACK(handle_message_edited_cb), NULL);
-  } else {
-    purple_debug_info("matrix-ui", "connect_ui_signals: Matrix plugin not loaded yet (or not found). Will connect when loaded.\n");
+    purple_signal_connect(matrix_plugin, "matrix-ui-read-receipt", plugin, PURPLE_CALLBACK(handle_read_receipt_cb), NULL);
+    purple_signal_connect(matrix_plugin, "matrix-ui-room-topic", plugin, PURPLE_CALLBACK(handle_room_topic_cb), NULL);
   }
   for (GList *it = purple_get_conversations(); it; it = it->next) conversation_created_cb((PurpleConversation *)it->data, NULL);
 }
 
 static void plugin_load_cb(PurplePlugin *p, gpointer data) {
   if (p && p->info && p->info->id && strcmp(p->info->id, "prpl-matrix-rust") == 0) {
-    purple_debug_info("matrix-ui", "Matrix plugin JUST LOADED! Connecting signals now.\n");
     connect_ui_signals((PurplePlugin *)data);
   }
 }
 
 static gboolean plugin_load(PurplePlugin *plugin) {
-  purple_debug_info("matrix-ui", "Matrix UI Enhancer plugin loading... (plugin handle=%p)\n", plugin);
   void *plugins_handle = purple_plugins_get_handle();
   purple_signal_connect(plugins_handle, "plugin-load", plugin, PURPLE_CALLBACK(plugin_load_cb), plugin);
   
-  connect_ui_signals(plugin);
+  if (purple_get_core() != NULL && purple_conversations_get_handle() != NULL) {
+    connect_ui_signals(plugin);
+  }
   return TRUE;
 }
 

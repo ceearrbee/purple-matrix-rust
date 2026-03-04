@@ -1802,37 +1802,42 @@ matrix_ui_event_thread_root_exact_for_room_event(const char *room_id,
   return NULL;
 }
 
-static void matrix_ui_react_fields_cb(void *user_data,
-                                      PurpleRequestFields *fields) {
+static void matrix_ui_react_custom_cb(void *user_data, const char *text) {
   MatrixUiReactCtx *ctx = (MatrixUiReactCtx *)user_data;
   PurpleAccount *account = find_matrix_account();
-  PurpleRequestField *f_choice = purple_request_fields_get_field(fields, "choice");
-  PurpleRequestField *f_custom = purple_request_fields_get_field(fields, "custom");
-  const char *key = NULL;
-  int choice = 0;
-
-  if (!account || !ctx || !f_choice || !f_custom)
-    goto cleanup;
-
-  choice = purple_request_field_choice_get_value(f_choice);
-  if (choice == 0) {
-    /* Custom */
-    key = purple_request_field_string_get_value(f_custom);
-  } else {
-    /* Map choice to emoji */
-    const char *emojis[] = {"", "👍", "❤️", "😂", "😮", "😢", "🔥", "✅", "❌"};
-    if (choice < (int)(sizeof(emojis) / sizeof(emojis[0]))) {
-      key = emojis[choice];
-    }
-  }
-
-  if (key && *key) {
+  if (account && ctx && text && *text) {
     purple_matrix_rust_send_reaction(purple_account_get_username(account),
-                                     ctx->room_id, ctx->event_id, key);
+                                     ctx->room_id, ctx->event_id, text);
   }
-
-cleanup:
   if (ctx) {
+    g_free(ctx->room_id);
+    g_free(ctx->event_id);
+    g_free(ctx);
+  }
+}
+
+static void matrix_ui_react_action_cb(void *user_data, int action) {
+  MatrixUiReactCtx *ctx = (MatrixUiReactCtx *)user_data;
+  PurpleAccount *account = find_matrix_account();
+  const char *emojis[] = {"👍", "❤️", "😂", "😮", "😢", "🔥", "✅", "❌"};
+  
+  if (!ctx || !account) return;
+
+  if (action >= 0 && action < (int)G_N_ELEMENTS(emojis)) {
+    purple_matrix_rust_send_reaction(purple_account_get_username(account),
+                                     ctx->room_id, ctx->event_id, emojis[action]);
+    g_free(ctx->room_id);
+    g_free(ctx->event_id);
+    g_free(ctx);
+  } else if (action == (int)G_N_ELEMENTS(emojis)) {
+    /* Custom button */
+    purple_request_input(my_plugin, "Custom Reaction", "Enter emoji or text",
+                         NULL, NULL, FALSE, FALSE, NULL, "_React",
+                         G_CALLBACK(matrix_ui_react_custom_cb), "_Cancel",
+                         G_CALLBACK(matrix_ui_react_custom_cb), account, NULL,
+                         NULL, ctx);
+  } else {
+    /* Cancel */
     g_free(ctx->room_id);
     g_free(ctx->event_id);
     g_free(ctx);
@@ -1841,42 +1846,16 @@ cleanup:
 
 static void matrix_ui_open_reaction_picker(const char *room_id,
                                            const char *event_id) {
-  PurpleAccount *account = find_matrix_account();
-  PurpleRequestFields *fields;
-  PurpleRequestFieldGroup *group;
-  PurpleRequestField *field;
-  MatrixUiReactCtx *ctx;
-
-  if (!account || !room_id || !event_id)
-    return;
-
-  fields = purple_request_fields_new();
-  group = purple_request_field_group_new("Select Reaction");
-  purple_request_fields_add_group(fields, group);
-
-  field = purple_request_field_choice_new("choice", "Common Reactions", 0);
-  purple_request_field_choice_add(field, "Custom (Use text box below)");
-  purple_request_field_choice_add(field, "👍 Thumbs Up");
-  purple_request_field_choice_add(field, "❤️ Heart");
-  purple_request_field_choice_add(field, "😂 Laughing");
-  purple_request_field_choice_add(field, "😮 Surprised");
-  purple_request_field_choice_add(field, "😢 Sad");
-  purple_request_field_choice_add(field, "🔥 Fire");
-  purple_request_field_choice_add(field, "✅ Check");
-  purple_request_field_choice_add(field, "❌ Cross");
-  purple_request_field_group_add_field(group, field);
-
-  field = purple_request_field_string_new("custom", "Custom Text/Emoji", NULL,
-                                          FALSE);
-  purple_request_field_group_add_field(group, field);
-
-  ctx = g_new0(MatrixUiReactCtx, 1);
+  MatrixUiReactCtx *ctx = g_new0(MatrixUiReactCtx, 1);
   ctx->room_id = g_strdup(room_id);
   ctx->event_id = g_strdup(event_id);
 
-  purple_request_fields(my_plugin, "Add Reaction", "Choose a reaction", NULL,
-                        fields, "_React", G_CALLBACK(matrix_ui_react_fields_cb),
-                        "_Cancel", NULL, account, NULL, NULL, ctx);
+  purple_request_input(
+      my_plugin, "Add Reaction", "Enter Emoji or Text",
+      "Type or paste an emoji to react to this message. (Tip: Use Super+. for system emoji picker)", NULL, FALSE, FALSE,
+      NULL, "_React", G_CALLBACK(matrix_ui_react_custom_cb), "_Cancel",
+      G_CALLBACK(matrix_ui_react_custom_cb), find_matrix_account(), NULL,
+      NULL, ctx);
 }
 
 static void matrix_ui_open_event_action_dialog(const char *room_id,

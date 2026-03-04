@@ -5,7 +5,7 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
     let raw_val: Option<serde_json::Value> = event.deserialize_as::<serde_json::Value>().ok();
     
     if let Ok(SyncRoomMessageEvent::Original(ev)) = event.deserialize() {
-        let sender = ev.sender.as_str();
+        let sender_id = ev.sender.as_str();
         let room_id = room.room_id().as_str();
         let timestamp: u64 = ev.origin_server_ts.0.into();
         let client = room.client();
@@ -18,7 +18,16 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
         };
         let local_user_id = me.clone();
 
-        // 0. Handle Edits (Replacements) - DO THIS FIRST
+        // Resolve display name for sender
+        let sender_display = if let Some(member) = room.get_member(&ev.sender).await.ok().flatten() {
+            member.display_name().map(|d| d.to_string()).unwrap_or_else(|| sender_id.to_string())
+        } else {
+            sender_id.to_string()
+        };
+        
+        let pidgin_sender = sender_display;
+
+        // 0. Handle Edits (Replacements)
         let mut is_edit = false;
         let mut target_id = String::new();
 
@@ -46,12 +55,6 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
             return;
         }
 
-        // Don't notify for our own messages (Pidgin echoes them)
-        // UNLESS it's a reply, which Pidgin doesn't know how to echo.
-        if sender == local_user_id && ev.content.relates_to.is_none() { 
-            return; 
-        }
-
         let mut thread_root_id: Option<String> = None;
         if let Some(Relation::Thread(ref thread)) = ev.content.relates_to {
             thread_root_id = Some(thread.event_id.to_string());
@@ -71,23 +74,31 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
 
         if let Some(id) = reply_to_id {
             let mut quoted = format!("<i>Replying to {}...</i>", id);
-            if let Ok(parent_ev) = room.event(id.as_str().try_into().unwrap_or(&ev.event_id), None).await {
+            if let Ok(parent_ev) = room.event(id.as_str().try_into().unwrap_or(ev.event_id.as_ref()), None).await {
                 use matrix_sdk::ruma::events::{AnySyncTimelineEvent, AnySyncMessageLikeEvent};
                 if let Ok(AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomMessage(parent_msg))) = parent_ev.raw().deserialize() {
                     if let matrix_sdk::ruma::events::room::message::SyncRoomMessageEvent::Original(p_ev) = parent_msg {
                         let mut parent_body = crate::get_display_html(&p_ev.content);
+                        
+                        // Strip formatting from quoted body to keep it clean in the reply header
+                        parent_body = parent_body.replace("<p>", "").replace("</p>", " ").replace("<br/>", " ").replace("<br>", " ").replace("<div>", "").replace("</div>", " ");
                         if parent_body.len() > 100 { parent_body = format!("{}...", &parent_body[..97]); }
-                        let parent_sender = p_ev.sender.as_str();
-                        quoted = format!("<b>{}</b>: {}", parent_sender, parent_body);
+                        
+                        let p_sender_id = p_ev.sender.as_str();
+                        let p_sender_display = if let Some(m) = room.get_member(&p_ev.sender).await.ok().flatten() {
+                            m.display_name().map(|d| d.to_string()).unwrap_or_else(|| p_sender_id.to_string())
+                        } else {
+                            p_sender_id.to_string()
+                        };
+
+                        quoted = format!("<b>{}</b>: {}", p_sender_display, parent_body);
                     }
                 }
             }
-            body = crate::html_fmt::style_reply(&quoted, &body);
+            body = crate::html_fmt::style_reply_v2(&quoted, &body);
         }
 
         let is_encrypted = room.get_state_event_static::<matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent>().await.ok().flatten().is_some();
-
-        log::info!("Received msg from {} in {}: {} (Thread: {:?}, Enc: {})", sender, room_id, body, thread_root_id, is_encrypted);
 
         let target_room_id = if let Some(ref tid) = thread_root_id {
             format!("{}|{}", room_id, tid)
@@ -95,11 +106,12 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
             room_id.to_string()
         };
         
-        let display_body = format!("{} <font color='#ffffff' size='1'>(M:{})</font>", body, ev.event_id);
+        // Final Marker format: _MXID:[event_id]
+        let display_body = format!("{} <font color='#fdfdfd' size='1'>_MXID:[{}]</font>", body, ev.event_id);
 
         let ffi_ev = crate::ffi::FfiEvent::MessageReceived {
             user_id: local_user_id,
-            sender: sender.to_string(),
+            sender: pidgin_sender,
             msg: display_body,
             room_id: Some(target_room_id),
             thread_root_id,
@@ -156,9 +168,17 @@ pub async fn handle_encrypted(event: matrix_sdk::ruma::serde::Raw<matrix_sdk::ru
              }
          };
          let local_user_id = me.clone();
-         let sender = ev.sender().as_str();
+         let sender_id = ev.sender().as_str();
          
-         if sender == local_user_id { return; }
+         if sender_id == local_user_id { return; }
+
+         let sender_display = if let Some(m) = room.get_member(ev.sender()).await.ok().flatten() {
+             m.display_name().map(|d| d.to_string()).unwrap_or_else(|| sender_id.to_string())
+         } else {
+             sender_id.to_string()
+         };
+         
+         let pidgin_sender = sender_display;
 
          let room_id = room.room_id().as_str();
          let timestamp: u64 = ev.origin_server_ts().0.into();
@@ -167,7 +187,7 @@ pub async fn handle_encrypted(event: matrix_sdk::ruma::serde::Raw<matrix_sdk::ru
          
          let ffi_ev = crate::ffi::FfiEvent::MessageReceived {
              user_id: local_user_id,
-             sender: sender.to_string(),
+             sender: pidgin_sender,
              msg: body,
              room_id: Some(room_id.to_string()),
              thread_root_id: None,
@@ -183,8 +203,26 @@ pub async fn handle_redaction(event: matrix_sdk::ruma::events::room::redaction::
     if let Some(ev) = event.as_original() {
         let user_id = room.client().user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
         let room_id = room.room_id().as_str();
-        let target_event_id = ev.redacts.as_ref().map(|id| id.as_str()).unwrap_or("");
+        let target_event_id_owned = ev.redacts.clone();
         
+        if let Some(tid) = &target_event_id_owned {
+            if let Ok(target_ev) = room.event(tid.as_ref(), None).await {
+                use matrix_sdk::ruma::events::AnySyncTimelineEvent;
+                use matrix_sdk::ruma::events::AnySyncMessageLikeEvent;
+                
+                let any_ev = target_ev.raw().deserialize();
+                if let Ok(AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::Reaction(reaction_ev))) = any_ev {
+                    if let Some(orig) = reaction_ev.as_original() {
+                        let msg_id = orig.content.relates_to.event_id.clone();
+                        log::info!("Reaction {} was redacted. Updating message {}", tid, msg_id);
+                        crate::handlers::reactions::update_reactions_for_event(&room, &msg_id).await;
+                        return;
+                    }
+                }
+            }
+        }
+
+        let target_event_id = target_event_id_owned.as_ref().map(|id| id.as_str()).unwrap_or("");
         let ffi_ev = crate::ffi::FfiEvent::MessageReceived {
             user_id,
             sender: "System".to_string(),
@@ -258,15 +296,9 @@ pub async fn render_room_message(ev: &matrix_sdk::ruma::events::room::message::O
                 }
             }
         },
-        MessageType::Video(content) => {
-            format!("🎞️ [Video: {}]", crate::escape_html(&content.body))
-        },
-        MessageType::Audio(content) => {
-            format!("🎵 [Audio: {}]", crate::escape_html(&content.body))
-        },
-        MessageType::File(content) => {
-            format!("📁 [File: {}]", crate::escape_html(&content.body))
-        },
+        MessageType::Video(_) => "[Video]".to_string(),
+        MessageType::Audio(_) => "[Audio]".to_string(),
+        MessageType::File(_) => "[File]".to_string(),
         _ => crate::get_display_html(&ev.content),
     }
 }

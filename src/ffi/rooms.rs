@@ -78,7 +78,7 @@ pub extern "C" fn purple_matrix_rust_fetch_history(user_id: *const c_char, room_
             };
 
             if let Some(rid) = actual_room_id {
-                sync_logic::fetch_room_history_logic(client, rid).await;
+                sync_logic::fetch_room_history(client, rid).await;
             }
         });
     });
@@ -97,7 +97,7 @@ pub extern "C" fn purple_matrix_rust_fetch_more_history(user_id: *const c_char, 
 
         
         RUNTIME.spawn(async move {
-            sync_logic::fetch_room_history_logic(client, room_id_str).await;
+            sync_logic::fetch_room_history(client, room_id_str).await;
         });
     });
 }
@@ -118,7 +118,7 @@ pub extern "C" fn purple_matrix_rust_resync_recent_history(user_id: *const c_cha
     with_client(&user_id_str, move |client| {
 
         RUNTIME.spawn(async move {
-            sync_logic::fetch_room_history_logic(client, room_id_str).await;
+            sync_logic::fetch_room_history(client, room_id_str).await;
         });
     });
 }

@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 
 use std::sync::Mutex;
 use matrix_sdk::Client;
@@ -86,8 +87,10 @@ pub fn sanitize_untrusted_html(input: &str) -> String {
 }
 
 pub(crate) fn sanitize_string(s: &str) -> String {
+    // We allow emojis (Plane 1 and above) but still filter out control characters if needed.
+    // For now, let's just return the string but ensure it doesn't have null bytes which break CStrings.
     let res: String = s.chars()
-        .map(|c| if (c as u32) < 0x10000 { c } else { ' ' })
+        .filter(|&c| c != '\0')
         .collect();
     if res.is_empty() {
         return " ".to_string();

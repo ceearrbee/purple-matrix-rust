@@ -171,7 +171,6 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
                                 let summary_json = serde_json::to_value(&thread_root.thread_summary).ok();
                                 let msg_count: u64 = summary_json.as_ref()
                                     .and_then(|v| {
-                                        // Handle nested "Some" if present
                                         let val = v.get("Some").unwrap_or(v);
                                         val.get("num_replies")
                                          .or_else(|| val.get("count"))
@@ -179,9 +178,14 @@ pub extern "C" fn purple_matrix_rust_list_threads(user_id: *const c_char, room_i
                                     })
                                     .unwrap_or(0);
 
-                                log::info!("Thread {} has {} replies. Summary JSON: {:?}", root_id, msg_count, summary_json);
+                                log::info!("Thread {} has {} replies.", root_id, msg_count);
                                 
-                                let ts: u64 = thread_root.timestamp().map(|t| t.0.into()).unwrap_or(0);
+                                let ts: u64 = if let Some(latest) = &thread_root.bundled_latest_thread_event {
+                                    latest.timestamp().map(|t| t.0.into()).unwrap_or_else(|| thread_root.timestamp().map(|t| t.0.into()).unwrap_or(0))
+                                } else {
+                                    thread_root.timestamp().map(|t| t.0.into()).unwrap_or(0)
+                                };
+
                                 let event = crate::ffi::FfiEvent::ThreadList {
                                     user_id: user_id_str.clone(),
                                     room_id: room_id_str.clone(),

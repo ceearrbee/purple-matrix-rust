@@ -7,11 +7,17 @@ pub async fn handle_receipt(event: SyncReceiptEvent, room: Room) {
     for (event_id, receipts) in event.content.0 {
         if let Some(read_receipts) = receipts.get(&matrix_sdk::ruma::events::receipt::ReceiptType::Read) {
             for (user_id, _receipt_info) in read_receipts {
+                 let who_display = if let Some(m) = room.get_member(user_id).await.ok().flatten() {
+                     m.display_name().map(|d| d.to_string()).unwrap_or_else(|| user_id.as_str().to_string())
+                 } else {
+                     user_id.as_str().to_string()
+                 };
+
                  let event = crate::ffi::FfiEvent::ReadMarker {
                      user_id: local_user_id.clone(),
                      room_id: room.room_id().as_str().to_string(),
                      event_id: event_id.as_str().to_string(),
-                     who: user_id.as_str().to_string(),
+                     who: who_display,
                  };
                  let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
             }

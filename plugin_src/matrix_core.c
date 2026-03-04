@@ -589,6 +589,15 @@ static void handle_room_activity_marshal(PurpleCallback cb, va_list args,
   callback(arg1, arg2, arg3, data);
 }
 
+static void handle_room_topic_marshal(PurpleCallback cb, va_list args,
+                                      void *data, void **return_val) {
+  void (*callback)(const char *, const char *, void *) =
+      (void (*)(const char *, const char *, void *))cb;
+  const char *arg1 = va_arg(args, const char *);
+  const char *arg2 = va_arg(args, const char *);
+  callback(arg1, arg2, data);
+}
+
 static gboolean poll_rust_channel_cb(gpointer user_data) {
   int ev_type = -1;
   void *data = NULL;
@@ -1040,6 +1049,15 @@ static gboolean plugin_load(PurplePlugin *plugin) {
   purple_signal_register(plugin, "matrix-ui-message-edited",
                          handle_room_activity_marshal, NULL, 3,
                          purple_value_new(PURPLE_TYPE_STRING),
+                         purple_value_new(PURPLE_TYPE_STRING),
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-read-receipt",
+                         handle_room_activity_marshal, NULL, 3,
+                         purple_value_new(PURPLE_TYPE_STRING),
+                         purple_value_new(PURPLE_TYPE_STRING),
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-room-topic",
+                         handle_room_topic_marshal, NULL, 2,
                          purple_value_new(PURPLE_TYPE_STRING),
                          purple_value_new(PURPLE_TYPE_STRING));
 

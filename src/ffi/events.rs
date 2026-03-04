@@ -119,6 +119,14 @@ pub struct CSso {
 }
 
 #[repr(C)]
+pub struct CReadReceipt {
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub receipt_user_id: *mut c_char,
+    pub event_id: *mut c_char,
+}
+
+#[repr(C)]
 pub struct CSasRequest {
     pub user_id: *mut c_char,
     pub target_user_id: *mut c_char,
@@ -187,6 +195,13 @@ pub struct CThreadList {
     pub latest_msg: *mut c_char,
     pub count: u64,
     pub ts: u64,
+}
+
+#[repr(C)]
+pub struct CUpdateBuddy {
+    pub user_id: *mut c_char,
+    pub alias: *mut c_char,
+    pub avatar_url: *mut c_char,
 }
 
 #[repr(C)]
@@ -311,11 +326,23 @@ pub enum FfiEvent {
     SsoUrl {
         url: String,
     },
+    UpdateBuddy {
+        user_id: String,
+        target_user_id: String,
+        alias: String,
+        avatar_url: String,
+    },
     MessageEdited {
         user_id: String,
         room_id: String,
         event_id: String,
         new_msg: String,
+    },
+    ReadReceipt {
+        user_id: String,
+        room_id: String,
+        receipt_user_id: String,
+        event_id: String,
     },
     SasRequest {
         user_id: String,

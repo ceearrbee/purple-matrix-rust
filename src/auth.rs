@@ -481,7 +481,7 @@ async fn finish_login_success(client: Client) {
         }
     });
 
-    sync_logic::start_sync_loop(client).await;
+    sync_logic::run_sync_loop(client).await;
 }
 
 fn report_login_failure(msg: String) {

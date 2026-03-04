@@ -9,6 +9,13 @@
 
 typedef struct {
   char *user_id;
+  char *room_id;
+  char *topic;
+  char *sender;
+} MatrixChatTopicData;
+
+typedef struct {
+  char *user_id;
   char *sender;
   char *message;
   char *room_id;
@@ -148,6 +155,13 @@ typedef struct {
   char *topic;
   char *sender;
 } MatrixTopicData;
+
+typedef struct {
+  char *user_id;
+  char *room_id;
+  char *who;
+  char *event_id;
+} MatrixReadReceiptData;
 
 typedef struct {
   char *user_id;
