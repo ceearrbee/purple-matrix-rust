@@ -25,6 +25,7 @@ pub(crate) static RUNTIME: Lazy<Runtime> = Lazy::new(|| Runtime::new().unwrap_or
 pub(crate) static CLIENTS: Lazy<DashMap<String, Client>> = Lazy::new(DashMap::new);
 pub(crate) static HISTORY_FETCHED_ROOMS: Lazy<DashSet<String>> = Lazy::new(DashSet::new);
 pub(crate) static PAGINATION_TOKENS: Lazy<DashMap<String, String>> = Lazy::new(DashMap::new);
+pub(crate) static ENCRYPTED_ROOMS: Lazy<DashSet<String>> = Lazy::new(DashSet::new);
 pub(crate) static DATA_PATH: Lazy<Mutex<Option<std::path::PathBuf>>> = Lazy::new(|| Mutex::new(None));
 
 pub(crate) fn with_client<F, R>(user_id: &str, f: F) -> Option<R>
@@ -207,7 +208,8 @@ mod tests {
         // "&lt;img src=x onerror=alert(1)&gt;&lt;script&gt;alert(2)&lt;/script&gt;<b>ok</b>"
         let output = get_display_html(&content);
         assert!(!output.contains("<script>"));
-        assert!(output.contains("&lt;script&gt;"));
+        assert!(!output.contains("alert(2)")); // ammonia strips content of script tags by default
+        assert!(!output.contains("onerror"));
         assert!(output.contains("<b>ok</b>"));
     }
 

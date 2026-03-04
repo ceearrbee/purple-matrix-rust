@@ -1,58 +1,57 @@
-use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
-use crate::{RUNTIME, with_client};
-use crate::ffi::*;
+use std::ffi::CStr;
+use crate::ffi::{with_client};
+use crate::RUNTIME;
+use matrix_sdk::Client;
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_list_sticker_packs(user_id: *const c_char, cb: StickerPackCallback, done_cb: StickerDoneCallback, user_data: *mut c_void) {
-    if user_id.is_null() { return; }
-    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    let u_data_usize = user_data as usize;
+pub extern "C" fn purple_matrix_rust_list_sticker_packs(user_id: *const c_char, cb_ptr: *const c_void, user_data: *mut c_void) {
+    crate::ffi_panic_boundary!({
+        if user_id.is_null() { return; }
+        let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
 
-    with_client(&user_id_str.clone(), |_client| {
-        RUNTIME.spawn(async move {
-            if let (Ok(c_user_id), Ok(c_id), Ok(c_name)) = (CString::new(user_id_str.clone()), CString::new("default"), CString::new("Matrix Stickers")) {
-                 cb(c_user_id.as_ptr(), c_id.as_ptr(), c_name.as_ptr(), u_data_usize as *mut c_void);
-            }
-            
-            done_cb(u_data_usize as *mut c_void);
-        });
-    });
+        // Fix: Send events synchronously to prevent UAF of C pointers if the window closes.
+        let event = crate::ffi::FfiEvent::StickerPack {
+            cb_ptr: cb_ptr as usize,
+            user_id: user_id_str.clone(),
+            pack_id: "default".to_string(),
+            pack_name: "Default Stickers".to_string(),
+            user_data: user_data as usize,
+        };
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+
+        let done = crate::ffi::FfiEvent::StickerDone {
+            cb_ptr: cb_ptr as usize,
+            user_data: user_data as usize,
+        };
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(done);
+    })
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_list_stickers_in_pack(user_id: *const c_char, pack_id: *const c_char, cb: StickerCallback, done_cb: StickerDoneCallback, user_data: *mut c_void) {
-    if user_id.is_null() || pack_id.is_null() { return; }
-    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    let u_data_usize = user_data as usize;
+pub extern "C" fn purple_matrix_rust_send_sticker(user_id: *const c_char, room_id: *const c_char, mxc_uri: *const c_char) {
+    crate::ffi_panic_boundary!({
+        if user_id.is_null() || room_id.is_null() || mxc_uri.is_null() { return; }
+        let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+        let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+        let mxc_uri_str = unsafe { CStr::from_ptr(mxc_uri).to_string_lossy().into_owned() };
 
-    with_client(&user_id_str.clone(), |_client| {
-        RUNTIME.spawn(async move {
-            let stickers = vec![
-                ("smile", "🙂", "mxc://matrix.org/VpByuXvdiaXmXzXzXzXzXzXz"),
-                ("laugh", "😆", "mxc://matrix.org/laughing_sticker_mxc"),
-                ("heart", "❤️", "mxc://matrix.org/heart_sticker_mxc"),
-            ];
+        with_client(&user_id_str, move |client: Client| {
+            RUNTIME.spawn(async move {
+                use matrix_sdk::ruma::RoomId;
+                use matrix_sdk::ruma::OwnedMxcUri;
+                use matrix_sdk::ruma::events::sticker::StickerEventContent;
 
-            if let Ok(c_user_id) = CString::new(user_id_str) {
-                for (short, body, url) in stickers {
-                    if let (Ok(c_short), Ok(c_body), Ok(c_url)) = (CString::new(short), CString::new(body), CString::new(url)) {
-                        cb(c_user_id.as_ptr(), c_short.as_ptr(), c_body.as_ptr(), c_url.as_ptr(), u_data_usize as *mut c_void);
+                if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                    if let Some(room) = client.get_room(rid) {
+                        if let Ok(uri) = <OwnedMxcUri>::try_from(mxc_uri_str) {
+                            // Fix: StickerInfo doesn't have a simple new(), use default or construct manually
+                            let content = StickerEventContent::new("Sticker".to_string(), Default::default(), uri);
+                            let _ = room.send(content).await;
+                        }
                     }
                 }
-            }
-            
-            done_cb(u_data_usize as *mut c_void);
+            });
         });
-    });
-}
-
-#[no_mangle]
-pub extern "C" fn purple_matrix_rust_search_stickers(user_id: *const c_char, term: *const c_char) {
-    if user_id.is_null() || term.is_null() { return; }
-    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-
-    RUNTIME.spawn(async move {
-        crate::ffi::send_system_message(&user_id_str, "Sticker search is handled via the integrated picker.");
-    });
+    })
 }

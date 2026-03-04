@@ -2,7 +2,7 @@ use std::ffi::CStr;
 use std::io::Write;
 use std::os::raw::c_char;
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, DirBuilderExt, PermissionsExt};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use matrix_sdk::Client;
@@ -144,29 +144,30 @@ pub extern "C" fn purple_matrix_rust_login(
     homeserver: *const c_char,
     data_dir: *const c_char,
 ) -> i32 {
-    if username.is_null() || homeserver.is_null() || data_dir.is_null() {
-        log::error!("Login failed: One or more arguments are NULL");
-        return 0;
-    }
+    crate::ffi_panic_boundary!({
+        if username.is_null() || homeserver.is_null() || data_dir.is_null() {
+            log::error!("Login failed: One or more arguments are NULL");
+            return 0;
+        }
 
-    let username = unsafe { CStr::from_ptr(username).to_string_lossy().into_owned() };
-    let password = if password.is_null() {
-        secrecy::SecretString::new("".to_string())
-    } else {
-        secrecy::SecretString::new(unsafe { CStr::from_ptr(password).to_string_lossy().into_owned() })
-    };
-    let homeserver = unsafe { CStr::from_ptr(homeserver).to_string_lossy().into_owned() };
-    let data_dir = unsafe { CStr::from_ptr(data_dir).to_string_lossy().into_owned() };
+        let username = unsafe { CStr::from_ptr(username).to_string_lossy().into_owned() };
+        let password = if password.is_null() {
+            secrecy::SecretString::new("".to_string())
+        } else {
+            secrecy::SecretString::new(unsafe { CStr::from_ptr(password).to_string_lossy().into_owned() })
+        };
+        let homeserver = unsafe { CStr::from_ptr(homeserver).to_string_lossy().into_owned() };
+        let data_dir = unsafe { CStr::from_ptr(data_dir).to_string_lossy().into_owned() };
 
-    log::info!("Attempting login for {} at {}", username, homeserver);
-    
-    RUNTIME.spawn(async move {
-        perform_login(username, password, homeserver, data_dir).await;
-    });
+        log::info!("Attempting login for {} at {}", username, homeserver);
 
-    return 2; // Pending
+        RUNTIME.spawn(async move {
+            perform_login(username, password, homeserver, data_dir).await;
+        });
+
+        return 2; // Pending
+    }, 0)
 }
-
 // Helper to build client to reduce code duplication
 async fn build_client(homeserver: &str, data_path: &PathBuf) -> Result<Client, matrix_sdk::ClientBuildError> {
     let client_builder = Client::builder();
@@ -288,7 +289,18 @@ async fn perform_login(username: String, password: secrecy::SecretString, homese
     }
 
     if !data_path.exists() {
-        let _ = std::fs::create_dir_all(&data_path);
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            builder.mode(0o700);
+        }
+        let _ = builder.create(&data_path);
+    } else {
+        #[cfg(unix)]
+        {
+            let _ = std::fs::set_permissions(&data_path, std::os::unix::fs::PermissionsExt::from_mode(0o700));
+        }
     }
 
     log::info!("Initializing Store at {:?} for {}", data_path, username);

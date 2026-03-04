@@ -169,7 +169,7 @@ static void identify_event_at_iter(PurpleConversation *conv, GtkTextIter *iter) 
   g_free(purple_conversation_get_data(conv, MATRIX_UI_SELECTED_EVENT_SENDER_KEY));
   purple_conversation_set_data(conv, MATRIX_UI_SELECTED_EVENT_SENDER_KEY, NULL);
 
-  const char *markers[] = {"[MXID:", "_MX_ID:", "_MXID:["};
+  const char *markers[] = {"_MXID:[", "_MX_ID:", "[MXID:"};
   for (int m=0; m<3; m++) {
     const char *marker_start = strstr(clean_line, markers[m]);
     if (marker_start) {
@@ -179,7 +179,6 @@ static void identify_event_at_iter(PurpleConversation *conv, GtkTextIter *iter) 
         char *end_ptr = strchr(ev_id, ']');
         if (end_ptr) *end_ptr = '\0';
         else {
-            // If no bracket, take until space or end
             char *space = strchr(ev_id, ' ');
             if (space) *space = '\0';
         }
@@ -207,7 +206,6 @@ static void identify_event_at_iter(PurpleConversation *conv, GtkTextIter *iter) 
     }
   }
 
-  /* Fallback to snippet matching if marker not found */
   for (i = 0; i < 10; i++) {
     char key_id[64], key_msg[64], key_sender[64];
     const char *ev_id, *ev_msg, *ev_sender;
@@ -308,12 +306,15 @@ static void handle_message_edited_cb(const char *room_id, const char *event_id, 
   GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gtkconv->imhtml));
   if (!buffer) return;
 
-  const char *markers[] = {"[MXID:", "_MX_ID:", "_MXID:["};
+  const char *markers[] = {"_MXID:[", "_MX_ID:", "[MXID:"};
   for (int m=0; m<3; m++) {
     char *search_str;
-    if (markers[m][0] == '[') search_str = g_strdup_printf("%s%s]", markers[m], event_id);
-    else if (g_str_has_prefix(markers[m], "_MXID:[")) search_str = g_strdup_printf("%s%s]", markers[m], event_id);
-    else search_str = g_strdup_printf("%s%s", markers[m], event_id);
+    search_str = g_strdup_printf("%s%s", markers[m], event_id);
+    if (markers[m][0] != '_') {
+        char *tmp = search_str;
+        search_str = g_strdup_printf("%s]", tmp);
+        g_free(tmp);
+    }
     
     GtkTextIter start, end;
     gtk_text_buffer_get_start_iter(buffer, &start);
@@ -344,12 +345,15 @@ static void handle_reactions_changed_cb(const char *room_id, const char *event_i
   GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gtkconv->imhtml));
   if (!buffer) return;
 
-  const char *markers[] = {"[MXID:", "_MX_ID:", "_MXID:["};
+  const char *markers[] = {"_MXID:[", "_MX_ID:", "[MXID:"};
   for (int m=0; m<3; m++) {
     char *search_str;
-    if (markers[m][0] == '[') search_str = g_strdup_printf("%s%s]", markers[m], event_id);
-    else if (g_str_has_prefix(markers[m], "_MXID:[")) search_str = g_strdup_printf("%s%s]", markers[m], event_id);
-    else search_str = g_strdup_printf("%s%s", markers[m], event_id);
+    search_str = g_strdup_printf("%s%s", markers[m], event_id);
+    if (markers[m][0] != '_') {
+        char *tmp = search_str;
+        search_str = g_strdup_printf("%s]", tmp);
+        g_free(tmp);
+    }
 
     GtkTextIter start, end;
     gtk_text_buffer_get_start_iter(buffer, &start);
@@ -358,13 +362,11 @@ static void handle_reactions_changed_cb(const char *room_id, const char *event_i
         GtkTextIter block_end = end;
         if (!gtk_text_iter_ends_line(&block_end)) gtk_text_iter_forward_to_line_end(&block_end);
         
-        /* Look for existing reactions block */
         char *full_text = gtk_text_buffer_get_text(buffer, &end, &block_end, FALSE);
         if (full_text && strstr(full_text, "[Reactions: ")) {
             GtkTextIter del_start = end;
             GtkTextIter del_end = end;
             if (gtk_text_iter_forward_search(&del_start, " [Reactions: ", 0, &del_start, &del_end, &block_end)) {
-                /* Found it, delete until the end of that block */
                 if (gtk_text_iter_forward_search(&del_end, "]", 0, &del_start, &del_end, &block_end)) {
                     gtk_text_buffer_delete(buffer, &del_start, &del_end);
                 }
@@ -377,9 +379,7 @@ static void handle_reactions_changed_cb(const char *room_id, const char *event_i
             if (g_str_has_prefix(raw_text, "[System] [Reactions] ")) raw_text += 21;
             
             char *esc_reactions = g_markup_escape_text(raw_text, -1);
-            /* Visual Polish: Mimic a bubble with background and border if Pidgin's renderer allows it */
-            /* Using a simple styled span */
-            char *markup = g_strdup_printf(" <span style='background-color:#eeeeee; border:1px solid #cccccc; color:#333333;'> [Reactions: %s] </span>", esc_reactions);
+            char *markup = g_strdup_printf(" <font color='#666666' back='#eeeeee'>&nbsp;[Reactions: %s]&nbsp;</font>", esc_reactions);
             gtk_imhtml_insert_html_at_iter(GTK_IMHTML(gtkconv->imhtml), markup, 0, &end);
             g_free(markup);
             g_free(esc_reactions);
@@ -429,7 +429,7 @@ static void handle_room_topic_cb(const char *room_id, const char *topic, gpointe
     purple_conversation_set_data(conv, "matrix_topic", g_strdup(topic));
     GtkWidget *label = purple_conversation_get_data(conv, MATRIX_UI_TOPIC_LABEL_KEY);
     if (label && GTK_IS_LABEL(label)) {
-        char *esc_topic = g_markup_escape_text(topic, -1);
+        char *esc_topic = g_markup_escape_text(topic ? topic : "", -1);
         char *txt = g_strdup_printf("<span size='smaller' color='#444'><b>Topic:</b> %s</span>", esc_topic);
         gtk_label_set_markup(GTK_LABEL(label), txt);
         g_free(txt);
@@ -437,7 +437,7 @@ static void handle_room_topic_cb(const char *room_id, const char *topic, gpointe
     }
     PurpleChat *chat = purple_blist_find_chat(account, room_id);
     if (chat) {
-        g_hash_table_replace(purple_chat_get_components(chat), g_strdup("topic"), g_strdup(topic));
+        g_hash_table_replace(purple_chat_get_components(chat), g_strdup("topic"), g_strdup(topic ? topic : ""));
         purple_blist_update_node_icon((PurpleBlistNode *)chat);
     }
   }

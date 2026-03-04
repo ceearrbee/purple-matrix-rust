@@ -55,6 +55,9 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
             return;
         }
 
+        // We no longer return early for own messages because local echo is disabled in C.
+        // This ensures own messages get Matrix IDs and can be reacted to.
+
         let mut thread_root_id: Option<String> = None;
         if let Some(Relation::Thread(ref thread)) = ev.content.relates_to {
             thread_root_id = Some(thread.event_id.to_string());
@@ -80,7 +83,7 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
                     if let matrix_sdk::ruma::events::room::message::SyncRoomMessageEvent::Original(p_ev) = parent_msg {
                         let mut parent_body = crate::get_display_html(&p_ev.content);
                         
-                        // Strip formatting from quoted body to keep it clean in the reply header
+                        // Aggressive stripping of formatting from quoted body
                         parent_body = parent_body.replace("<p>", "").replace("</p>", " ").replace("<br/>", " ").replace("<br>", " ").replace("<div>", "").replace("</div>", " ");
                         if parent_body.len() > 100 { parent_body = format!("{}...", &parent_body[..97]); }
                         
@@ -170,7 +173,7 @@ pub async fn handle_encrypted(event: matrix_sdk::ruma::serde::Raw<matrix_sdk::ru
          let local_user_id = me.clone();
          let sender_id = ev.sender().as_str();
          
-         if sender_id == local_user_id { return; }
+         // We no longer return early for own messages
 
          let sender_display = if let Some(m) = room.get_member(ev.sender()).await.ok().flatten() {
              m.display_name().map(|d| d.to_string()).unwrap_or_else(|| sender_id.to_string())
@@ -234,16 +237,6 @@ pub async fn handle_redaction(event: matrix_sdk::ruma::events::room::redaction::
             encrypted: false,
         };
         let _ = crate::ffi::EVENTS_CHANNEL.0.send(ffi_ev);
-    }
-}
-
-fn sanitize_mime_ext(mime: &str, default: &str) -> String {
-    if let Some(ext) = mime_guess::get_mime_extensions_str(mime).and_then(|exts| exts.first()) {
-        ext.to_string()
-    } else {
-        let mut fallback = mime.split('/').last().unwrap_or(default).to_string();
-        fallback.retain(|c| c.is_ascii_alphanumeric());
-        if fallback.is_empty() { default.to_string() } else { fallback }
     }
 }
 

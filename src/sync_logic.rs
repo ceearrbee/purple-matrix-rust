@@ -1,5 +1,4 @@
 use matrix_sdk::Client;
-use matrix_sdk_base::deserialized_responses::AnySyncOrStrippedState;
 
 pub async fn run_sync_loop(client: Client) {
     let client_for_sync = client.clone();
@@ -91,7 +90,11 @@ pub async fn run_sync_loop(client: Client) {
 }
 
 pub async fn fetch_room_history(client: Client, room_id: String) {
-    if let Some(room) = client.get_room(room_id.as_str().try_into().unwrap()) {
+    let Ok(rid) = room_id.as_str().try_into() else {
+        log::warn!("Invalid room_id for history fetch: {}", room_id);
+        return;
+    };
+    if let Some(room) = client.get_room(rid) {
         log::info!("Fetching history for room {}", room_id);
         
         let mut filter = matrix_sdk::room::MessagesOptions::backward();

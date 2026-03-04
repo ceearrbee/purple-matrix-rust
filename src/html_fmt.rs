@@ -9,9 +9,9 @@ pub fn style_reply(quoted_body: &str, reply_body: &str) -> String {
 }
 
 pub fn style_reply_v2(quoted_body: &str, reply_body: &str) -> String {
-    // A more compact and standard reply style
+    // A clean, compact reply style that avoids extra spacing.
     format!(
-        "<font color='#777777' size='2'><b>Reply:</b> {}</font><br/>{}",
+        "<font color='#777777'><b>[Reply]</b> {}</font><br/>&gt; {}",
         quoted_body,
         reply_body
     )
@@ -30,10 +30,24 @@ pub fn style_poll(question: &str, options: Vec<String>) -> String {
 }
 
 pub fn sanitize_matrix_html(input: &str) -> String {
-    let mut output = input.to_string();
-    // Basic script tag removal to satisfy tests and safety
-    output = output.replace("<script>", "&lt;script&gt;");
-    output = output.replace("</script>", "&lt;/script&gt;");
-    output = output.replace("<script ", "&lt;script ");
-    output
+    let mut cleaner = ammonia::Builder::default();
+    cleaner
+        .tags(
+            [
+                "b", "i", "u", "s", "strong", "em", "del", "blockquote", "p", "br", "span", "a",
+                "img", "code", "pre", "font", "hr", "ul", "ol", "li",
+            ]
+            .iter()
+            .cloned()
+            .collect(),
+        )
+        .link_rel(None)
+        .url_schemes(
+            ["http", "https", "mailto", "matrix", "mxc"]
+                .iter()
+                .cloned()
+                .collect(),
+        );
+
+    cleaner.clean(input).to_string()
 }
