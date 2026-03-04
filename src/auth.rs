@@ -2,11 +2,12 @@ use std::ffi::CStr;
 use std::io::Write;
 use std::os::raw::c_char;
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, DirBuilderExt, PermissionsExt};
+use std::os::unix::fs::{OpenOptionsExt, DirBuilderExt};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use matrix_sdk::Client;
-use crate::{RUNTIME, DATA_PATH, CLIENTS};
+use crate::{RUNTIME, DATA_PATH};
+use crate::ffi::{CLIENTS};
 use crate::sync_logic;
 
 const SSO_CALLBACK_TIMEOUT_SECS: u64 = 180;
@@ -457,7 +458,7 @@ async fn finish_login_success(client: Client) {
 
     {
          if let Some(user_id) = client.user_id() {
-             crate::CLIENTS.insert(user_id.to_string(), client.clone());
+             CLIENTS.insert(user_id.to_string(), client.clone());
          }
     }
     {
@@ -608,13 +609,18 @@ pub extern "C" fn purple_matrix_rust_finish_sso(token: *const c_char) {
         return;
     };
 
-    let pending_client = {
-        CLIENTS
-            .iter()
-            .find(|c| c.value().user_id().is_none())
-            .map(|c| c.value().clone())
-            .or_else(|| CLIENTS.iter().next().map(|c| c.value().clone()))
-    };
+    let mut pending_client = None;
+    for entry in CLIENTS.iter() {
+        if entry.value().user_id().is_none() {
+            pending_client = Some(entry.value().clone());
+            break;
+        }
+    }
+    if pending_client.is_none() {
+        if let Some(entry) = CLIENTS.iter().next() {
+            pending_client = Some(entry.value().clone());
+        }
+    }
 
     if let Some(client) = pending_client {
         RUNTIME.spawn(finish_sso_internal(client, token_str));
@@ -625,12 +631,13 @@ pub extern "C" fn purple_matrix_rust_finish_sso(token: *const c_char) {
 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_deactivate_account(erase_data: bool) {
-    let key_to_remove = CLIENTS.iter().next().map(|r| r.key().clone());
-    let client_opt = key_to_remove.and_then(|k| CLIENTS.remove(&k).map(|(_, c)| c));
+    let key_opt = CLIENTS.iter().next().map(|r| r.key().clone());
+    let client_opt = key_opt.and_then(|k| CLIENTS.remove(&k).map(|(_, c)| c));
 
     if let Some(client) = client_opt {
         RUNTIME.spawn(async move {
-            if let Err(e) = client.logout().await {
+            let res: Result<(), _> = client.logout().await;
+            if let Err(e) = res {
                 log::error!("Failed to logout during deactivation: {:?}", e);
             }
         });
@@ -654,7 +661,7 @@ pub extern "C" fn purple_matrix_rust_logout(user_id: *const c_char) {
     log::info!("Disconnecting {}...", user_id_str);
     
     // Just drop the client to stop the sync loop.
-    if let Some((_, client)) = crate::CLIENTS.remove(&user_id_str) {
+    if let Some((_, client)) = CLIENTS.remove(&user_id_str) {
          log::info!("Dropping global client instance for disconnect.");
          // Ensure client is dropped within the Tokio runtime context to prevent
          // "there is no reactor running" panics from internal components (e.g. deadpool).
@@ -679,12 +686,13 @@ pub extern "C" fn purple_matrix_rust_destroy_session(user_id: *const c_char) {
         }
     }
 
-    let client_opt = crate::CLIENTS.remove(&user_id_str).map(|(_, c)| c);
-    
+    let client_opt = CLIENTS.remove(&user_id_str).map(|(_, c)| c);
+
     RUNTIME.spawn(async move {
         // 2. Invalidate on server if client was active
         if let Some(client) = client_opt {
-            if let Err(e) = client.logout().await {
+            let res: Result<(), _> = client.logout().await;
+            if let Err(e) = res {
                 log::error!("Failed to logout from homeserver: {:?}", e);
             } else {
                 log::info!("Session invalidated on homeserver.");

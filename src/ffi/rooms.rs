@@ -647,7 +647,7 @@ pub extern "C" fn purple_matrix_rust_set_room_tag(user_id: *const c_char, room_i
         with_client(&user_id_str, move |client: Client| {
             RUNTIME.spawn(async move {
                 use matrix_sdk::ruma::RoomId;
-                use matrix_sdk::ruma::events::tag::{TagName, UserTagName};
+                use matrix_sdk::ruma::events::tag::TagName;
                 if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
                     if let Some(room) = client.get_room(rid) {
                          let tag_name = match tag_str.as_str() {
@@ -708,7 +708,7 @@ pub extern "C" fn purple_matrix_rust_get_space_hierarchy(user_id: *const c_char,
                         Ok(response) => {
                             for room in response.rooms {
                                 let r_id = room.summary.room_id.to_string();
-                                let p_id = if r_id == space_id_str { None } else { Some(space_id_str.clone()) };
+                                let _p_id = if r_id == space_id_str { None } else { Some(space_id_str.clone()) };
                                 let event = crate::ffi::FfiEvent::RoomJoined {
                                     user_id: uid_async.clone(),
                                     room_id: r_id,

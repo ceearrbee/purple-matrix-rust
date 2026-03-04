@@ -1,10 +1,9 @@
 #![recursion_limit = "256"]
 
 use std::sync::Mutex;
-use matrix_sdk::Client;
 use once_cell::sync::Lazy;
 use tokio::runtime::Runtime;
-use dashmap::{DashMap, DashSet};
+use dashmap::{DashSet};
 
 pub mod ffi;
 
@@ -21,29 +20,9 @@ pub(crate) static RUNTIME: Lazy<Runtime> = Lazy::new(|| Runtime::new().unwrap_or
     log::error!("Failed to start Tokio runtime: {}", e);
     std::process::abort();
 }));
-// user_id -> Client
-pub(crate) static CLIENTS: Lazy<DashMap<String, Client>> = Lazy::new(DashMap::new);
-pub(crate) static HISTORY_FETCHED_ROOMS: Lazy<DashSet<String>> = Lazy::new(DashSet::new);
-pub(crate) static PAGINATION_TOKENS: Lazy<DashMap<String, String>> = Lazy::new(DashMap::new);
+// Globals are now moved to crate::ffi::mod to avoid duplication.
 pub(crate) static ENCRYPTED_ROOMS: Lazy<DashSet<String>> = Lazy::new(DashSet::new);
 pub(crate) static DATA_PATH: Lazy<Mutex<Option<std::path::PathBuf>>> = Lazy::new(|| Mutex::new(None));
-
-pub(crate) fn with_client<F, R>(user_id: &str, f: F) -> Option<R>
-where
-    F: FnOnce(Client) -> R,
-{
-    let client_opt = CLIENTS.get(user_id).map(|c| c.clone());
-    if let Some(client) = client_opt {
-        Some(f(client))
-    } else {
-        let safe_user_id = sanitize_string(user_id);
-        log::warn!("No client found for user_id: '{}'", safe_user_id);
-        if !user_id.is_empty() && user_id != "System" {
-             send_system_message(user_id, "Matrix error: Account not connected or session lost.");
-        }
-        None
-    }
-}
 
 pub fn send_system_message(user_id: &str, msg: &str) {
     crate::ffi::send_system_message(user_id, msg);

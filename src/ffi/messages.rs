@@ -110,16 +110,15 @@ pub extern "C" fn purple_matrix_rust_send_reply(user_id: *const c_char, room_id:
         with_client(&user_id_str, move |client: Client| {
             RUNTIME.spawn(async move {
                 use matrix_sdk::ruma::events::room::message::{RoomMessageEventContent, ForwardThread, AddMentions};
-                use matrix_sdk::ruma::events::AnySyncTimelineEvent;
 
                 if let (Ok(rid), Ok(eid)) = (<&RoomId>::try_from(room_id_str.as_str()), <&EventId>::try_from(event_id_str.as_str())) {
                     if let Some(room) = client.get_room(rid) {
                         if let Ok(parent_ev) = room.event(eid, None).await {
-                            // Fix: Use raw event directly for reply construction if into_full_event is missing
-                            let raw_json = parent_ev.raw().json().get().to_string();
-                            if let Ok(m) = serde_json::from_str::<matrix_sdk::ruma::events::room::message::OriginalRoomMessageEvent>(&raw_json) {
+                            use matrix_sdk::ruma::events::{AnySyncTimelineEvent, AnySyncMessageLikeEvent};
+                            use matrix_sdk::ruma::events::room::message::SyncRoomMessageEvent;
+                            if let Ok(AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomMessage(SyncRoomMessageEvent::Original(m_orig)))) = parent_ev.raw().deserialize() {
                                 let content = RoomMessageEventContent::text_plain(text_str.clone());
-                                let reply_content = content.make_reply_to(&m, ForwardThread::No, AddMentions::No);
+                                let reply_content = content.make_reply_to(&m_orig.into_full_event(rid.to_owned()), ForwardThread::No, AddMentions::No);
                                 let _ = room.send(reply_content).await;
                             }
                         }
@@ -144,10 +143,11 @@ pub extern "C" fn purple_matrix_rust_send_edit(user_id: *const c_char, room_id: 
                 if let (Ok(rid), Ok(eid)) = (<&RoomId>::try_from(room_id_str.as_str()), <&EventId>::try_from(event_id_str.as_str())) {
                     if let Some(room) = client.get_room(rid) {
                         if let Ok(parent_ev) = room.event(eid, None).await {
-                            let raw_json = parent_ev.raw().json().get().to_string();
-                            if let Ok(m) = serde_json::from_str::<matrix_sdk::ruma::events::room::message::OriginalRoomMessageEvent>(&raw_json) {
+                            use matrix_sdk::ruma::events::{AnySyncTimelineEvent, AnySyncMessageLikeEvent};
+                            use matrix_sdk::ruma::events::room::message::SyncRoomMessageEvent;
+                            if let Ok(AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomMessage(SyncRoomMessageEvent::Original(m_orig)))) = parent_ev.raw().deserialize() {
                                 let new_content = crate::create_message_content(text_str);
-                                let edit_content = new_content.make_replacement(&m);
+                                let edit_content = new_content.make_replacement(&m_orig.into_full_event(rid.to_owned()));
                                 let _ = room.send(edit_content).await;
                             }
                         }

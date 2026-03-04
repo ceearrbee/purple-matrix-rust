@@ -117,6 +117,23 @@ pub extern "C" fn purple_matrix_rust_free_event(ev_type: i32, data: *mut c_void)
                     free_c_char(b.alias);
                     free_c_char(b.avatar_url);
                 },
+                21 => {
+                    let b = Box::from_raw(data as *mut CStickerPack);
+                    free_c_char(b.user_id);
+                    free_c_char(b.pack_id);
+                    free_c_char(b.pack_name);
+                },
+                22 => {
+                    let b = Box::from_raw(data as *mut CSticker);
+                    free_c_char(b.user_id);
+                    free_c_char(b.pack_id);
+                    free_c_char(b.sticker_id);
+                    free_c_char(b.uri);
+                    free_c_char(b.description);
+                },
+                23 => {
+                    let _b = Box::from_raw(data as *mut CStickerDone);
+                },
                 24 => {
                     let b = Box::from_raw(data as *mut CSso);
                     free_c_char(b.url);
