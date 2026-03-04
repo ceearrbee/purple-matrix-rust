@@ -1,112 +1,84 @@
-use matrix_sdk::ruma::events::reaction::SyncReactionEvent;
-use matrix_sdk::ruma::events::sticker::SyncStickerEvent;
 use matrix_sdk::Room;
-use std::ffi::CString;
-use crate::ffi::MSG_CALLBACK;
 
-pub async fn handle_reaction(event: SyncReactionEvent, room: Room) {
-    if let Some(original_event) = event.as_original() {
-        let sender_id = original_event.sender.as_str();
-        let mut sender_display = sender_id.to_string();
+pub async fn handle_reaction(event: matrix_sdk::ruma::events::reaction::SyncReactionEvent, room: Room) {
+    if let matrix_sdk::ruma::events::reaction::SyncReactionEvent::Original(ev) = event {
+        log::info!("Reaction received: {} to event {} from {}", ev.content.relates_to.key, ev.content.relates_to.event_id, ev.sender);
         
-        if let Ok(Some(member)) = room.get_member(&original_event.sender).await {
-            if let Some(dn) = member.display_name() {
-                 sender_display = dn.to_owned();
+        let client = room.client();
+        let Some(me) = client.user_id() else { return; };
+        let local_user_id = me.as_str().to_string();
+        
+        let target_id = ev.content.relates_to.event_id.clone();
+        
+        // Fetch the event to get its bundled reactions
+        let mut summary = String::new();
+        match room.event(&target_id, None).await {
+            Ok(timeline_ev) => {
+                if let Ok(value) = timeline_ev.raw().deserialize_as::<serde_json::Value>() {
+                    if let Some(chunks) = value.get("unsigned")
+                        .and_then(|u| u.get("m.relations"))
+                        .and_then(|r| r.get("m.annotation"))
+                        .and_then(|a| a.get("chunk"))
+                        .and_then(|c| c.as_array())
+                    {
+                        let mut first = true;
+                        for chunk in chunks {
+                            let key = chunk.get("key").and_then(|k| k.as_str()).unwrap_or("");
+                            let count = chunk.get("count").and_then(|c| c.as_u64()).unwrap_or(0);
+                            if key.is_empty() || count == 0 { continue; }
+                            
+                            if !first { summary.push_str(", "); }
+                            summary.push_str(&format!("{} {}", key, count));
+                            first = false;
+                        }
+                    }
+                }
+            },
+            Err(e) => {
+                log::warn!("Failed to fetch event {} for bundled reactions: {:?}", target_id, e);
             }
         }
-        
-        let room_id = room.room_id().as_str();
-        let emoji = &original_event.content.relates_to.key;
-        let target_event_id = original_event.content.relates_to.event_id.as_str();
-        
-        // Update global reaction map
-        {
-            let mut guard = crate::REACTIONS.lock().unwrap();
-            let event_reactions = guard.entry(target_event_id.to_string()).or_default();
-            let count = event_reactions.entry(emoji.clone()).or_insert(0);
-            *count += 1;
-            
-            let mut summary: Vec<String> = event_reactions.iter().map(|(e, c)| format!("{} {}", e, c)).collect();
-            summary.sort();
-            let summary_str = summary.join(", ");
-            
-            log::info!("Reaction update for {}: {}", target_event_id, summary_str);
-            
-            // Notify UI via a notice indicating reaction summary
-            let update_msg = format!("<span style=\"color: #888; font-size: 85%; font-style: italic;\">Reactions: {}</span>", summary_str);
-            crate::ffi::send_system_message_to_room(room.client().user_id().map(|u| u.as_str()).unwrap_or(""), room_id, &update_msg);
-        }
 
-        // Use italics and grey color for reactions to make them less intrusive
-        let body = format!("<span style=\"color: #888; font-style: italic;\">* {} reacted with {}</span>", crate::escape_html(&sender_display), emoji);
-        log::info!("Reaction in {}: {} -> {}", room_id, sender_display, emoji);
-
-        let c_sender = CString::new(original_event.sender.as_str()).unwrap_or_default();
-        let c_body = CString::new(body).unwrap_or_default();
-        let c_room_id = CString::new(room_id).unwrap_or_default();
-        
-        let timestamp: u64 = original_event.origin_server_ts.0.into();
-        
-        let guard = MSG_CALLBACK.lock().unwrap();
-        if let Some(cb) = *guard {
-            cb(c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), timestamp);
+        // Fallback: if summary is empty (bundling not available), just show the single reaction we just got
+        if summary.is_empty() {
+            summary = format!("{} 1", ev.content.relates_to.key);
         }
+        
+        log::info!("Dispatching ReactionsChanged for {}: {}", target_id, summary);
+        let event = crate::ffi::FfiEvent::ReactionsChanged {
+            user_id: local_user_id,
+            room_id: room.room_id().to_string(),
+            event_id: target_id.to_string(),
+            reactions_text: format!("[System] [Reactions] {}", summary),
+        };
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
     }
 }
 
-pub async fn handle_sticker(event: SyncStickerEvent, room: Room) {
-    if let Some(original_event) = event.as_original() {
-        let sender = original_event.sender.as_str();
+pub async fn handle_sticker(event: matrix_sdk::ruma::events::sticker::SyncStickerEvent, room: Room) {
+    if let matrix_sdk::ruma::events::sticker::SyncStickerEvent::Original(ev) = event {
+        let client = room.client();
+        let Some(me) = client.user_id() else { return; };
+        let local_user_id = me.as_str().to_string();
+        let sender = ev.sender.as_str();
+        
+        if sender == local_user_id { return; }
+
         let room_id = room.room_id().as_str();
-        let content = &original_event.content;
+        let timestamp: u64 = ev.origin_server_ts.0.into();
+        let body = format!("[Sticker] {}", ev.content.body);
+        let is_encrypted = room.get_state_event_static::<matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent>().await.ok().flatten().is_some();
         
-        log::info!("Sticker in {}: {}", room_id, content.body);
-        
-        use matrix_sdk::media::{MediaFormat, MediaRequestParameters};
-
-        
-        let request = MediaRequestParameters { source: content.source.clone().into(), format: MediaFormat::File };
-        
-        // Generate a safe filename for the sticker
-        let sticker_id = original_event.event_id.as_str().replace(":", "_").replace("$", ""); // Event ID is unique
-        let mut path_buf = crate::media_helper::get_media_dir();
-        path_buf.push(format!("sticker_{}.png", sticker_id));
-        let path = path_buf.as_path();
-        
-        let mut sticker_uri = String::new();
-        let mut downloaded = false;
-        
-        if path.exists() {
-             sticker_uri = format!("file://{}", path.to_string_lossy());
-             downloaded = true;
-        } else {
-             // Directory guaranteed by get_media_dir
-             if let Ok(bytes) = room.client().media().get_media_content(&request, true).await {
-                  if let Ok(mut file) = std::fs::File::create(&path) {
-                       use std::io::Write;
-                       if file.write_all(&bytes).is_ok() {
-                           sticker_uri = format!("file://{}", path.to_string_lossy());
-                           downloaded = true;
-                       }
-                  }
-             }
-        }
-
-        let body = if downloaded {
-             format!("<img src=\"{}\" alt=\"[Sticker: {}]\">", sticker_uri, content.body)
-        } else {
-             format!("[Sticker: {}]", content.body)
+        let event = crate::ffi::FfiEvent::MessageReceived {
+            user_id: local_user_id,
+            sender: sender.to_string(),
+            msg: body,
+            room_id: Some(room_id.to_string()),
+            thread_root_id: None,
+            event_id: ev.event_id.to_string(),
+            timestamp,
+            encrypted: is_encrypted,
         };
-
-        let c_sender = CString::new(sender).unwrap_or_default();
-        let c_body = CString::new(body).unwrap_or_default();
-        let c_room_id = CString::new(room_id).unwrap_or_default();
-        let c_event_id = CString::new(original_event.event_id.as_str()).unwrap_or_default();
-        
-        let timestamp: u64 = original_event.origin_server_ts.0.into();
-        let guard = MSG_CALLBACK.lock().unwrap();
-        if let Some(cb) = *guard {
-            cb(c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), c_event_id.as_ptr(), timestamp);
-        }
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
     }
 }

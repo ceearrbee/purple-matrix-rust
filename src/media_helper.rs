@@ -5,8 +5,14 @@ use std::path::PathBuf;
 
 
 pub fn get_media_dir() -> PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push("purple_matrix_rust_media");
+    let base_path = if let Some(path) = crate::DATA_PATH.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        path
+    } else {
+        std::env::temp_dir()
+    };
+    
+    let mut path = base_path;
+    path.push("media");
     if !path.exists() {
         let _ = std::fs::create_dir_all(&path);
     }

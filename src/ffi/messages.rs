@@ -104,7 +104,16 @@ pub extern "C" fn purple_matrix_rust_send_message(user_id: *const c_char, room_i
                          }
                      }
                     
-                    let mut content = crate::create_message_content(final_text);
+                    let mut content = if final_text.starts_with("/me ") {
+                        let emote_body = final_text.strip_prefix("/me ").unwrap_or(&final_text).to_string();
+                        matrix_sdk::ruma::events::room::message::RoomMessageEventContent::new(
+                            matrix_sdk::ruma::events::room::message::MessageType::Emote(
+                                matrix_sdk::ruma::events::room::message::EmoteMessageEventContent::plain(emote_body)
+                            )
+                        )
+                    } else {
+                        crate::create_message_content(final_text)
+                    };
                     
                     // Attach Thread Relation if present
                     if let Some(thread_id_str) = thread_root_id_opt {
@@ -273,6 +282,12 @@ pub extern "C" fn purple_matrix_rust_send_typing(user_id: *const c_char, room_id
     });
 }
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+
+static STICKER_MXC_CACHE: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_send_sticker(user_id: *const c_char, room_id: *const c_char, url: *const c_char) {
     if user_id.is_null() || room_id.is_null() || url.is_null() { return; }
@@ -288,9 +303,15 @@ pub extern "C" fn purple_matrix_rust_send_sticker(user_id: *const c_char, room_i
             
             if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
                 if let Some(room) = client.get_room(rid) {
-                    log::info!("Sending sticker to {}: {}", room_id_str, url_str);
                     
-                    let mxc_uri = if url_str.starts_with("mxc://") {
+                    let cached_mxc = {
+                        let cache = STICKER_MXC_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+                        cache.get(&url_str).cloned()
+                    };
+
+                    let mxc_uri = if let Some(mxc) = cached_mxc {
+                        mxc
+                    } else if url_str.starts_with("mxc://") {
                         url_str.clone()
                     } else {
                         use std::path::Path;
@@ -300,7 +321,10 @@ pub extern "C" fn purple_matrix_rust_send_sticker(user_id: *const c_char, room_i
                              if let Ok(bytes) = std::fs::read(path) {
                                  let mime = mime_guess::from_path(path).first_or_octet_stream();
                                  if let Ok(response) = client.media().upload(&mime, bytes, None).await {
-                                     response.content_uri.to_string()
+                                     let mxc = response.content_uri.to_string();
+                                     let mut cache = STICKER_MXC_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+                                     cache.insert(url_str.clone(), mxc.clone());
+                                     mxc
                                  } else {
                                      log::error!("Failed to upload sticker file");
                                      return;
@@ -313,6 +337,8 @@ pub extern "C" fn purple_matrix_rust_send_sticker(user_id: *const c_char, room_i
                              url_str.clone()
                         }
                     };
+                    
+                    log::info!("Sending sticker to {}: {}", room_id_str, mxc_uri);
 
                     let uri = match <OwnedMxcUri>::try_from(mxc_uri.as_str()) {
                         Ok(u) => u,
@@ -346,7 +372,6 @@ pub extern "C" fn purple_matrix_rust_send_file(user_id: *const c_char, id: *cons
         RUNTIME.spawn(async move {
              use matrix_sdk::ruma::{RoomId, UserId};
              use std::path::Path;
-             use mime_guess::mime;
              
              let room_opt = if let Ok(room_id) = <&RoomId>::try_from(id_str.as_str()) {
                  client.get_room(room_id)
@@ -375,40 +400,26 @@ pub extern "C" fn purple_matrix_rust_send_file(user_id: *const c_char, id: *cons
                  
                  if let Ok(bytes) = std::fs::read(path) {
                      let mime = mime_guess::from_path(path).first_or_octet_stream();
-                     log::info!("Uploading file {} ({} bytes, mime: {})", filename_str, bytes.len(), mime);
+                     let file_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                     log::info!("Sending attachment {} ({} bytes, mime: {})", file_name, bytes.len(), mime);
                      
-                     if let Ok(response) = client.media().upload(&mime, bytes, None).await {
-                         let uri = response.content_uri;
-                         let file_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-                         
-                         // Construct appropriate message content
-                         use matrix_sdk::ruma::events::room::message::{RoomMessageEventContent, MessageType, ImageMessageEventContent, VideoMessageEventContent, AudioMessageEventContent, FileMessageEventContent};
-                         
-                         let msg_type = if mime.type_() == mime::IMAGE {
-                             MessageType::Image(ImageMessageEventContent::plain(file_name.clone(), uri))
-                         } else if mime.type_() == mime::VIDEO {
-                             MessageType::Video(VideoMessageEventContent::plain(file_name.clone(), uri))
-                         } else if mime.type_() == mime::AUDIO {
-                             MessageType::Audio(AudioMessageEventContent::plain(file_name.clone(), uri))
-                         } else {
-                             MessageType::File(FileMessageEventContent::plain(file_name.clone(), uri))
-                         };
-                         
-                         let content = RoomMessageEventContent::new(msg_type);
-                         
-                         if let Err(e) = room.send(content).await {
-                             log::error!("Failed to send file event: {:?}", e);
-                         } else {
-                             log::info!("File sent successfully");
-                             
+                     use matrix_sdk::attachment::AttachmentConfig;
+                     let config = AttachmentConfig::new();
+                     
+                     match room.send_attachment(&file_name, &mime, bytes, config).await {
+                         Ok(response) => {
+                             log::info!("Attachment sent successfully: {:?}", response.event_id);
                              // Delete temporary pasted images
                              if file_name.starts_with("matrix_pasted_") {
                                  log::info!("Cleaning up temporary pasted file: {}", filename_str);
                                  let _ = std::fs::remove_file(path);
                              }
+                         },
+                         Err(e) => {
+                             log::error!("Failed to send attachment {}: {:?}", file_name, e);
+                             let msg = format!("Failed to send attachment: {:?}", e);
+                             crate::ffi::send_system_message(&user_id_str, &msg);
                          }
-                     } else {
-                         log::error!("Failed to upload file");
                      }
                  }
              } else {
@@ -435,9 +446,8 @@ pub extern "C" fn purple_matrix_rust_send_reply(user_id: *const c_char, room_id:
             
             if let (Ok(room_id), Ok(event_id)) = (<&RoomId>::try_from(room_id_str.as_str()), <&EventId>::try_from(event_id_str.as_str())) {
                 if let Some(room) = client.get_room(room_id) {
-                    let mut content = crate::create_message_content(text_str);
                     
-                    // Construct reply relation (basic)
+                    let mut content = crate::create_message_content(text_str);
                     content.relates_to = Some(Relation::Reply { in_reply_to: InReplyTo::new(event_id.to_owned()) });
                     
                     if let Err(e) = room.send(content).await {
@@ -568,13 +578,79 @@ pub extern "C" fn purple_matrix_rust_send_location(user_id: *const c_char, room_
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_bulk_redact(user_id: *const c_char, room_id: *const c_char, target_user: *const c_char) {
-    if user_id.is_null() || room_id.is_null() || target_user.is_null() { return; }
+pub extern "C" fn purple_matrix_rust_search_room_messages(user_id: *const c_char, room_id: *const c_char, term: *const c_char) {
+    if user_id.is_null() || room_id.is_null() || term.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
     let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
-    let target_user_str = unsafe { CStr::from_ptr(target_user).to_string_lossy().into_owned() };
+    let term_str = unsafe { CStr::from_ptr(term).to_string_lossy().into_owned() };
+
+    with_client(&user_id_str.clone(), |client| {
+        let client_clone = client.clone();
+        RUNTIME.spawn(async move {
+            use matrix_sdk::ruma::RoomId;
+            use matrix_sdk::ruma::api::client::search::search_events::v3::{
+                Request as SearchRequest,
+                Categories,
+                Criteria,
+            };
+            use matrix_sdk::ruma::api::client::filter::RoomEventFilter;
+            use matrix_sdk::ruma::events::{AnyTimelineEvent, AnyMessageLikeEvent, room::message::RoomMessageEvent};
+            
+            if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                log::info!("Searching messages in {} for '{}'", room_id_str, term_str);
+                
+                let mut criteria = Criteria::new(term_str.clone());
+                let mut filter = RoomEventFilter::default();
+                filter.rooms = Some(vec![rid.to_owned()]);
+                criteria.filter = filter;
+                
+                let mut categories = Categories::new();
+                categories.room_events = Some(criteria);
+                let request = SearchRequest::new(categories);
+                
+                match client_clone.send(request).await {
+                    Ok(response) => {
+                        let mut msg = format!("<b>Search results for '{}' in {}</b>:<br/>", term_str, room_id_str);
+                        let results = &response.search_categories.room_events.results;
+                        if results.is_empty() {
+                            msg.push_str("No results found.");
+                        } else {
+                            for res in results {
+                                if let Some(raw) = &res.result {
+                                    let raw_ev: Result<AnyTimelineEvent, _> = raw.deserialize();
+                                    if let Ok(ev) = raw_ev {
+                                        if let AnyTimelineEvent::MessageLike(msg_ev) = ev {
+                                            let sender = msg_ev.sender().to_string();
+                                            let body = if let AnyMessageLikeEvent::RoomMessage(RoomMessageEvent::Original(ref o)) = msg_ev {
+                                                o.content.body().to_string()
+                                            } else { "Non-text message".to_string() };
+                                            msg.push_str(&format!("- <b>{}</b>: {}<br/>", sender, body));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        crate::ffi::send_system_message_to_room(&user_id_str, &room_id_str, &msg);
+                    },
+                    Err(e) => log::error!("Search failed: {:?}", e),
+                }
+            }
+        });
+    });
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_bulk_redact(user_id: *const c_char, room_id: *const c_char, count: i32, target_user: *const c_char) {
+    if user_id.is_null() || room_id.is_null() { return; }
+    let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+    let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+    let target_user_str = if target_user.is_null() {
+        None
+    } else {
+        Some(unsafe { CStr::from_ptr(target_user).to_string_lossy().into_owned() })
+    };
     
-    log::info!("Bulk redacting messages from {} in {}", target_user_str, room_id_str);
+    log::info!("Bulk redacting messages in {} (count: {})", room_id_str, count);
 
     with_client(&user_id_str.clone(), |client| {
         RUNTIME.spawn(async move {
@@ -584,17 +660,26 @@ pub extern "C" fn purple_matrix_rust_bulk_redact(user_id: *const c_char, room_id
              if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
                  if let Some(room) = client.get_room(rid) {
                      let mut options = MessagesOptions::backward();
-                     options.limit = 100u16.into();
+                     options.limit = (count.clamp(1, 100) as u16).into();
                      
                      if let Ok(messages) = room.messages(options).await {
                          for ev in messages.chunk {
                              if let Some(event_id) = ev.event_id() {
-                                 if let Ok(raw) = ev.raw().deserialize() {
-                                      if let matrix_sdk::ruma::events::AnySyncTimelineEvent::MessageLike(msg_ev) = raw {
-                                           if msg_ev.sender().as_str() == target_user_str {
-                                               let _ = room.redact(&event_id, Some("Bulk Redaction"), None).await;
+                                 let mut should_redact = true;
+                                 if let Some(target) = &target_user_str {
+                                      if let Ok(raw) = ev.raw().deserialize() {
+                                           if let matrix_sdk::ruma::events::AnySyncTimelineEvent::MessageLike(msg_ev) = raw {
+                                                if msg_ev.sender().as_str() != target {
+                                                    should_redact = false;
+                                                }
+                                           } else {
+                                               should_redact = false;
                                            }
                                       }
+                                 }
+                                 
+                                 if should_redact {
+                                     let _ = room.redact(&event_id, Some("Bulk Redaction"), None).await;
                                  }
                              }
                          }

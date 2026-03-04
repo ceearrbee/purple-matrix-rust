@@ -51,6 +51,7 @@ pub async fn handle_slash_command(client: &Client, room_id: &RoomId, text: &str)
                       return Err(anyhow::anyhow!("Invalid room ID or alias"));
                  }
             }
+            crate::send_system_message(client.user_id().map(|u| u.as_str()).unwrap_or(""), &format!("Successfully joined room: {}", args));
             Ok(CommandResult::Handled)
         },
         "invite" => {
@@ -58,6 +59,7 @@ pub async fn handle_slash_command(client: &Client, room_id: &RoomId, text: &str)
             if let Some(room) = client.get_room(room_id) {
                 if let Ok(user_id) = <&UserId>::try_from(args) {
                      room.invite_user_by_id(user_id).await?;
+                     crate::send_system_message(client.user_id().map(|u| u.as_str()).unwrap_or(""), &format!("Invited {} to the room.", args));
                 } else {
                      return Err(anyhow::anyhow!("Invalid User ID"));
                 }

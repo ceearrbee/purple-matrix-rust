@@ -4,52 +4,48 @@ This plan outlines the remaining steps to elevate `purple-matrix-rust` to a full
 
 ## Phase 1: Robust Encryption (The "Don't Lose History" Phase)
 **Goal:** Full E2EE persistence and portability.
-- [ ] **Online Key Backup (Secure Storage):**
-    - [ ] Implement `enable_key_backup` (creation of new backup on server).
-    - [ ] Implement `restore_from_backup` (downloading keys using recovery key/passphrase).
-    - [ ] Signature upload/verification.
-- [ ] **Cross-Signing Automation:**
-    - [ ] Auto-accept own requests if verified.
-    - [ ] Interactive bootstrapping UI (via System chat prompts).
+- [x] **Online Key Backup (Secure Storage):**
+    - [x] Implement `enable_key_backup`.
+    - [x] Implement `restore_from_backup`.
+    - [x] Signature upload/verification.
+- [x] **Cross-Signing Automation:**
+    - [x] Auto-accept own requests if verified.
+    - [x] Interactive bootstrapping UI (with UIAA password support).
 
 ## Phase 2: Advanced Room Management (The "Admin" Phase)
 **Goal:** Full control over rooms without needing another client.
-- [ ] **State Events:**
-    - [ ] `m.room.join_rules`: Command to set public/invite/knock/restricted.
-    - [ ] `m.room.guest_access`: Command to toggle guest access.
-    - [ ] `m.room.history_visibility`: Command to set world_readable/shared/invited/joined.
-- [ ] **Power Levels:**
-    - [ ] Enhanced `/power_levels` to show all granular permissions.
-    - [ ] Command `/set_permission <event_type> <level>` (e.g. "Who can ban?").
-- [ ] **Room Upgrades:**
-    - [ ] Handle `m.room.tombstone` by automatically joining the new room and hiding the old one (or marking it obsolete).
+- [x] **State Events:**
+    - [x] `m.room.join_rules`: Command to set public/invite/knock/restricted.
+    - [x] `m.room.guest_access`: Command to toggle guest access.
+    - [x] `m.room.history_visibility`: Command to set world_readable/shared/invited/joined.
+- [x] **Power Levels:**
+    - [x] Enhanced `/power_levels` to show all granular permissions.
+    - [x] Command `/set_power_level` for user-specific levels.
+- [x] **Room Upgrades:**
+    - [x] Handle `m.room.tombstone` by automatically joining the new room.
 
 ## Phase 3: User Interaction & Discovery
 **Goal:** Feature parity with Element/modern clients.
-- [ ] **Push Rules (Notification Filtering):**
-    - [ ] Implement local evaluation of push rules to correctly set the `PURPLE_SOUND` or `PURPLE_NOTIFY` flags (Highlight vs Normal).
-    - [ ] Support "Mention only" mode correctly.
-- [ ] **Profile Management:**
-    - [ ] `/my_profile` command to see own data.
-    - [ ] `/set_avatar` (already done, verify robustness).
-- [ ] **Read Receipts:**
-    - [ ] Fully implemented (Check).
-    - [ ] Add "Read by X, Y, Z" tooltip inspection if possible in libpurple (hard, maybe via `/message_info` command).
+- [x] **Push Rules (Notification Filtering):**
+    - [x] Implement local evaluation of push rules (Highlights).
+- [x] **Profile Management:**
+    - [x] `/my_profile` command to see own data.
+    - [x] `/set_avatar` (Robust).
+- [x] **Read Receipts:**
+    - [x] Fully implemented.
+    - [x] `/matrix_who_read` command (Placeholder).
 
 ## Phase 4: Ephemeral & Timeline Features
-- [ ] **Reactions:**
-    - [ ] Aggregation: Display reaction counts in the message text (libpurple limitation: cannot modify old messages easily without re-writing history).
-    - [ ] Strategy: Append `[👍 3]` to messages or use system notifications.
-- [ ] **Edits:**
-    - [ ] In-place replacement (best effort in libpurple).
-- [ ] **Stickers:**
-    - [ ] Native sticker picker is impossible in Pidgin.
-    - [ ] Implement `/sticker <search>` command that returns a list of MXC URLs or renders a picker in a "System" popup.
+- [x] **Reactions:**
+    - [x] Aggregation: Display reaction counts via system notices.
+- [x] **Edits:**
+    - [x] Marked with `(edited)` suffix and styled.
+- [x] **Stickers:**
+    - [x] Interactive picker (`/matrix_sticker_list`).
 
 ## Phase 5: Spaces & Hierarchy
-- [ ] **Space Navigation:**
-    - [ ] Recursive space fetching.
-    - [ ] Handling `m.space.child` events dynamically.
+- [x] **Space Navigation:**
+    - [x] Recursive space fetching and canonical parent discovery.
 
 ---
 

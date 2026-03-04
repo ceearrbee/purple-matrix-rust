@@ -33,7 +33,7 @@ $(RUST_LIB):
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(TARGET): $(OBJECTS) $(RUST_LIB)
-	$(CC) $(LDFLAGS) -o $@ $(OBJECTS) $(RUST_LIB) $(PURPLE_LIBS) $(GLIB_LIBS) $(SQLITE_LIBS) $(OPENSSL_LIBS) -lpthread -ldl -lm
+	$(CC) $(LDFLAGS) -o $@ $(OBJECTS) -Wl,--whole-archive $(RUST_LIB) -Wl,--no-whole-archive $(PURPLE_LIBS) $(GLIB_LIBS) $(SQLITE_LIBS) $(OPENSSL_LIBS) -lpthread -ldl -lm
 
 clean:
 	rm -f plugin_src/*.o *.so
@@ -42,5 +42,11 @@ clean:
 install: $(TARGET)
 	mkdir -p $(DESTDIR)$(PLUGIN_DIR)
 	install -m 0755 $(TARGET) $(DESTDIR)$(PLUGIN_DIR)
+	mkdir -p $(DESTDIR)/usr/share/pixmaps/pidgin/protocols/16
+	mkdir -p $(DESTDIR)/usr/share/pixmaps/pidgin/protocols/22
+	mkdir -p $(DESTDIR)/usr/share/pixmaps/pidgin/protocols/48
+	install -m 0644 icons/16/matrix.png $(DESTDIR)/usr/share/pixmaps/pidgin/protocols/16/matrix.png
+	install -m 0644 icons/22/matrix.png $(DESTDIR)/usr/share/pixmaps/pidgin/protocols/22/matrix.png
+	install -m 0644 icons/48/matrix.png $(DESTDIR)/usr/share/pixmaps/pidgin/protocols/48/matrix.png
 
 .PHONY: all clean install

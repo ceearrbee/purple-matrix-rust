@@ -1,32 +1,15 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::io::Write;
 use std::os::raw::c_char;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use matrix_sdk::Client;
-use crate::ffi::{CONNECTED_CALLBACK, LOGIN_FAILED_CALLBACK, SSO_CALLBACK};
 use crate::{RUNTIME, DATA_PATH, CLIENTS};
 use crate::sync_logic;
 
-static SSO_IN_PROGRESS: Mutex<bool> = Mutex::new(false);
 const SSO_CALLBACK_TIMEOUT_SECS: u64 = 180;
-
-fn set_sso_in_progress(value: bool) {
-    let mut guard = SSO_IN_PROGRESS.lock().unwrap();
-    *guard = value;
-}
-
-fn try_begin_sso() -> bool {
-    let mut guard = SSO_IN_PROGRESS.lock().unwrap();
-    if *guard {
-        return false;
-    }
-    *guard = true;
-    true
-}
 
 fn extract_login_token(input: &str) -> Option<String> {
     let trimmed = input.trim();
@@ -68,32 +51,50 @@ fn generate_sso_state() -> String {
 }
 
 #[no_mangle]
+static FINISHING_SSO: std::sync::OnceLock<dashmap::DashSet<String>> = std::sync::OnceLock::new();
+
+fn get_finishing_sso() -> &'static dashmap::DashSet<String> {
+    FINISHING_SSO.get_or_init(dashmap::DashSet::new)
+}
+
 async fn finish_sso_internal(client: Client, token: String) {
+    // 1. Check session
+    if client.session().is_some() {
+        log::info!("Client already has a session, ignoring SSO completion.");
+        return;
+    }
+    
+    let pending_id = client.user_id().map(|u| u.to_string()).unwrap_or_else(|| "unknown".to_string());
+    if !get_finishing_sso().insert(pending_id.clone()) {
+        log::warn!("SSO finalization already in progress, ignoring duplicate call.");
+        return;
+    }
+
     log::info!("Finishing SSO login with token...");
     match client.matrix_auth().login_token(&token).initial_device_display_name("Pidgin (Rust)").await {
         Ok(_) => {
             log::info!("SSO Login Successful! Persisting session...");
-            set_sso_in_progress(false);
+            get_finishing_sso().remove(&pending_id);
             finish_login_success(client).await;
         },
         Err(e) => {
+            get_finishing_sso().remove(&pending_id);
             let err_msg = format!("SSO Login Failed: {:?}", e);
             log::error!("{}", err_msg);
             
-            if err_msg.contains("Mismatched") || err_msg.contains("Session") {
-                log::warn!("SSO mismatch detected. Wiping data and restarting SSO flow...");
+            if (err_msg.contains("Mismatched") || err_msg.contains("Session")) && !err_msg.contains("Invalid login token") {
+                log::warn!("SSO mismatch detected. Wiping data and retrying SSO flow immediately...");
                 
                 // 1. Preserve config
                 let hs_url = client.homeserver().to_string();
                 
                 // 2. Drop Client - Implicitly dropped as we overwrite `client` or just ensure we don't use it.
                 // We need to drop the client instance to release DB lock if it holds it.
-                // `client` logic in `perform_login` retry handled this.
                 drop(client); 
                 
                 // 3. Wipe Data
                 let path_opt = {
-                        let guard = DATA_PATH.lock().unwrap();
+                        let guard = DATA_PATH.lock().unwrap_or_else(|e| e.into_inner());
                         guard.clone()
                 };
                 
@@ -105,32 +106,37 @@ async fn finish_sso_internal(client: Client, token: String) {
                     // 4. Rebuild Client
                     match build_client(&hs_url, &path).await {
                         Ok(new_client) => {
-                            // Login tokens are one-time; after a mismatched-account
-                            // attempt, retrying with the same token can fail with
-                            // "Invalid login token". Start a fresh SSO round.
-                            log::info!("Client rebuilt. Requesting a fresh SSO token...");
-                            set_sso_in_progress(false);
-                            start_sso_flow(new_client);
+                            log::info!("Client rebuilt. Retrying login_token...");
+                            match new_client.matrix_auth().login_token(&token).initial_device_display_name("Pidgin (Rust)").await {
+                                Ok(_) => {
+                                    log::info!("SSO Login Successful on retry! Persisting session...");
+                                    finish_login_success(new_client).await;
+                                },
+                                Err(retry_e) => {
+                                    let retry_err_msg = format!("SSO Login Failed on retry: {:?}", retry_e);
+                                    log::error!("{}", retry_err_msg);
+                                    report_login_failure("Mismatched account session detected, and recovery failed. Please restart the SSO login process from the UI.".to_string());
+                                }
+                            }
                         },
                         Err(e_build) => {
-                            set_sso_in_progress(false);
                             log::error!("Failed to rebuild client for retry: {:?}", e_build);
                             report_login_failure(format!("Failed to rebuild client during SSO recovery: {:?}", e_build));
                         }
                     }
                 }
             } else {
-                set_sso_in_progress(false);
                 // Notify user of non-mismatch error
-                let guard = LOGIN_FAILED_CALLBACK.lock().unwrap();
-                if let Some(cb) = *guard {
-                    let c_err = CString::new(err_msg).unwrap_or_default();
-                    cb(c_err.as_ptr());
-                }
+                let event = crate::ffi::FfiEvent::LoginFailed {
+                    user_id: pending_id,
+                    message: err_msg,
+                };
+                let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
             }
         }
     }
 }
+
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_login(
     username: *const c_char,
@@ -145,17 +151,15 @@ pub extern "C" fn purple_matrix_rust_login(
 
     let username = unsafe { CStr::from_ptr(username).to_string_lossy().into_owned() };
     let password = if password.is_null() {
-        String::new()
+        secrecy::SecretString::new("".to_string())
     } else {
-        unsafe { CStr::from_ptr(password).to_string_lossy().into_owned() }
+        secrecy::SecretString::new(unsafe { CStr::from_ptr(password).to_string_lossy().into_owned() })
     };
     let homeserver = unsafe { CStr::from_ptr(homeserver).to_string_lossy().into_owned() };
     let data_dir = unsafe { CStr::from_ptr(data_dir).to_string_lossy().into_owned() };
 
     log::info!("Attempting login for {} at {}", username, homeserver);
     
-    // Spawn the login process on the runtime to avoid blocking the UI
-    // We return '2' (Pending) immediately.
     RUNTIME.spawn(async move {
         perform_login(username, password, homeserver, data_dir).await;
     });
@@ -204,17 +208,23 @@ async fn build_client(homeserver: &str, data_path: &PathBuf) -> Result<Client, m
     builder.sqlite_store(data_path, None).build().await
 }
 
-fn get_keyring_entry(username: &str) -> keyring::Entry {
-    keyring::Entry::new("purple-matrix-rust", username).unwrap()
+fn get_keyring_entry(username: &str) -> Result<keyring::Entry, keyring::Error> {
+    keyring::Entry::new("purple-matrix-rust", username)
 }
 
 fn write_session_json_secure(path: &std::path::Path, json: &str, username: &str) -> std::io::Result<()> {
     // 1. Save to keyring
-    let entry = get_keyring_entry(username);
-    if let Err(e) = entry.set_password(json) {
-        log::warn!("Failed to save session to keyring: {:?}", e);
-    } else {
-        log::info!("Session saved securely to keyring.");
+    match get_keyring_entry(username) {
+        Ok(entry) => {
+            if let Err(e) = entry.set_password(json) {
+                log::warn!("Failed to save session to keyring: {:?}", e);
+            } else {
+                log::info!("Session saved securely to keyring.");
+            }
+        },
+        Err(e) => {
+            log::warn!("Failed to initialize keyring entry: {:?}", e);
+        }
     }
 
     // 2. Save a dummy/metadata file to the data dir so we know a session exists
@@ -230,10 +240,11 @@ fn write_session_json_secure(path: &std::path::Path, json: &str, username: &str)
 
 fn load_session_json_secure(path: &std::path::Path, username: &str) -> Option<String> {
     // 1. Try to load from keyring
-    let entry = get_keyring_entry(username);
-    if let Ok(json) = entry.get_password() {
-        log::info!("Session loaded from keyring.");
-        return Some(json);
+    if let Ok(entry) = get_keyring_entry(username) {
+        if let Ok(json) = entry.get_password() {
+            log::info!("Session loaded from keyring.");
+            return Some(json);
+        }
     }
 
     // 2. Fallback to file (for migration or if keyring failed)
@@ -248,23 +259,31 @@ fn load_session_json_secure(path: &std::path::Path, username: &str) -> Option<St
 }
 
 fn safe_wipe_data_dir(path: &std::path::Path) {
-    let path_str = path.to_string_lossy();
-    // Safety check: Ensure we are only wiping directories that look like our expected data path.
-    // It must contain 'matrix_rust_data' and must not be a top-level system directory.
-    if path_str.contains("matrix_rust_data") && path.components().count() > 3 {
-        log::warn!("Safety wipe: Deleting directory {:?}", path);
-        let _ = std::fs::remove_dir_all(path);
-    } else {
-        log::error!("Safety wipe BLOCKED: Path {:?} looks suspicious or too high-level.", path);
+    // 1. Resolve to absolute path, resolving symlinks
+    match std::fs::canonicalize(path) {
+        Ok(canon_path) => {
+            let components: Vec<_> = canon_path.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
+            // 2. Strict validation: Must END with the specific folder name, and have adequate depth
+            if components.last() == Some(&"matrix_rust_data".to_string()) && components.len() > 3 {
+                log::warn!("Safety wipe: Deleting directory {:?}", canon_path);
+                let _ = std::fs::remove_dir_all(&canon_path);
+            } else {
+                log::error!("Safety wipe BLOCKED: Canonical path {:?} does not appear to end with matrix_rust_data.", canon_path);
+            }
+        },
+        Err(e) => {
+            // If the path doesn't exist, canonicalize fails, which is fine since there's nothing to wipe
+            log::debug!("Safety wipe skipped or blocked: {:?}", e);
+        }
     }
 }
 
-async fn perform_login(username: String, password: String, homeserver: String, data_dir: String) {
+async fn perform_login(username: String, password: secrecy::SecretString, homeserver: String, data_dir: String) {
     let data_path = PathBuf::from(&data_dir);
     
     // update global data path
     {
-        let mut guard = DATA_PATH.lock().unwrap();
+        let mut guard = DATA_PATH.lock().unwrap_or_else(|e| e.into_inner());
         *guard = Some(data_path.clone());
     }
 
@@ -272,7 +291,7 @@ async fn perform_login(username: String, password: String, homeserver: String, d
         let _ = std::fs::create_dir_all(&data_path);
     }
 
-    log::info!("Initializing Store at {:?}", data_path);
+    log::info!("Initializing Store at {:?} for {}", data_path, username);
 
     // 1. Build Client
     let client = match build_client(&homeserver, &data_path).await {
@@ -293,13 +312,23 @@ async fn perform_login(username: String, password: String, homeserver: String, d
 
     log::info!("Client built successfully. Homeserver: {}", client.homeserver());
 
-    // 2. Check existing session
-    // Attempt to load from secure storage
+    // 2. Priority Logic:
+    // Case A: User provided a password -> ALWAYS try fresh login.
+    if !secrecy::ExposeSecret::expose_secret(&password).is_empty() {
+        log::info!("Password provided for {}, attempting fresh login...", username);
+        proceed_with_login(client, username, password).await;
+        return;
+    }
+
+    // Case B: No password provided -> Try restoring saved session.
+    log::info!("No password provided, checking for saved session for {}...", username);
     {
          let session_path = data_path.join("session.json");
          if let Some(json) = load_session_json_secure(&session_path, &username) {
-              if let Ok(saved) = serde_json::from_str::<SavedSession>(&json) {
-                       log::info!("Found saved session for {}, restoring...", saved.user_id);
+              log::info!("Found potential session data for {}", username);
+              match serde_json::from_str::<SavedSession>(&json) {
+                  Ok(saved) => {
+                       log::info!("Parsed saved session for {}, restoring...", saved.user_id);
                        
                        use matrix_sdk::authentication::matrix::MatrixSession;
                        use matrix_sdk::authentication::SessionTokens; 
@@ -321,60 +350,49 @@ async fn perform_login(username: String, password: String, homeserver: String, d
                                let load_settings = matrix_sdk::store::RoomLoadSettings::default(); 
                                
                                if let Err(e) = client.matrix_auth().restore_session(session, load_settings).await {
-                                   log::error!("Failed to restore session: {:?}", e);
-                                   // Don't delete metadata yet, maybe it was a transient error.
+                                   log::error!("Failed to restore session for {}: {:?}. Falling back to SSO.", username, e);
+                                   // Fall through to Case C
                                } else {
-                                   log::info!("Session successfully restored!");
+                                   log::info!("Session successfully restored for {}!", username);
                                    finish_login_success(client).await;
                                    return;
                                }
                            }
+                       } else {
+                           log::error!("Stored User ID is invalid: {}. Falling back to SSO.", saved.user_id);
                        }
+                  },
+                  Err(e) => {
+                      log::error!("Failed to deserialize saved session for {}: {:?}. Falling back to SSO.", username, e);
+                  }
               }
+         } else {
+             log::info!("No saved session found in keyring or file for {}", username);
          }
     }
 
+    // Case C: No password and no/broken saved session -> Try SSO.
     if let Some(user) = client.user_id() {
-         log::info!("Restored existing session for {}", user);
+         log::info!("Client report user_id is already present: {}. Proceeding to success...", user);
          finish_login_success(client).await;
          return;
     }
 
-    log::warn!("No existing session found (user_id is None). Wiping potentially stale data to prevent MismatchedAccount errors...");
-    if data_path.exists() {
-         safe_wipe_data_dir(&data_path);
-         let _ = std::fs::create_dir_all(&data_path);
-         
-         // Re-build client after wipe to ensure fresh state
-         let client = match build_client(&homeserver, &data_path).await {
-             Ok(c) => c,
-             Err(e) => {
-                 report_login_failure(format!("Failed to rebuild client after safety wipe: {:?}", e));
-                 return;
-             }
-         };
-         
-         {
-              let mut clients = crate::CLIENTS.lock().unwrap();
-              clients.insert(username.clone(), client.clone());
-         }
-         
-         proceed_with_login(client, username, password).await;
-    } else {
-         proceed_with_login(client, username, password).await;
-    }
+    log::warn!("No valid password or saved session found for {}. Transitioning to SSO...", username);
+    start_sso_flow(client);
 }
 
-async fn proceed_with_login(client: Client, username: String, password: String) {
-    if !password.is_empty() {
+async fn proceed_with_login(client: Client, username: String, password: secrecy::SecretString) {
+    if !secrecy::ExposeSecret::expose_secret(&password).is_empty() {
         log::info!("Attempting Password Login...");
-        match client.matrix_auth().login_username(&username, &password).initial_device_display_name("Pidgin (Rust)").await {
+        match client.matrix_auth().login_username(&username, secrecy::ExposeSecret::expose_secret(&password)).initial_device_display_name("Pidgin (Rust)").await {
             Ok(_) => {
                 log::info!("Login Succeeded!");
                 finish_login_success(client).await;
             },
             Err(e) => {
-                report_login_failure(format!("Login failed: {:?}", e));
+                log::warn!("Password login failed: {:?}. Falling back to SSO as a last resort.", e);
+                start_sso_flow(client);
             }
         }
     } else {
@@ -409,7 +427,7 @@ async fn finish_login_success(client: Client) {
          };
          
          let path_opt = {
-              let guard = DATA_PATH.lock().unwrap();
+              let guard = DATA_PATH.lock().unwrap_or_else(|e| e.into_inner());
               guard.clone()
          };
          
@@ -426,35 +444,56 @@ async fn finish_login_success(client: Client) {
     }
 
     {
-         let mut clients = crate::CLIENTS.lock().unwrap();
          if let Some(user_id) = client.user_id() {
-             clients.insert(user_id.to_string(), client.clone());
+             crate::CLIENTS.insert(user_id.to_string(), client.clone());
          }
     }
     {
-         let guard = CONNECTED_CALLBACK.lock().unwrap();
-         if let Some(cb) = *guard {
-              cb();
-         }
+         let event = crate::ffi::FfiEvent::Connected {
+             user_id: username.clone(),
+         };
+         let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
     }
+
+    // 2. Bootstrap Crypto
+    let client_for_crypto = client.clone();
+    RUNTIME.spawn(async move {
+        if let Some(uid) = client_for_crypto.user_id() {
+            log::info!("Bootstrapping crypto state for {}...", uid);
+        } else {
+            log::info!("Bootstrapping crypto state...");
+        }
+        
+        let encryption = client_for_crypto.encryption();
+        
+        // Use bootstrap_cross_signing_if_needed if it exists, otherwise bootstrap_cross_signing(None)
+        // Based on grep, it exists.
+        if let Err(e) = encryption.bootstrap_cross_signing_if_needed(None).await {
+            log::warn!("Crypto bootstrap skipped or failed: {:?}. This is normal if device is not yet verified.", e);
+        }
+
+        if let Ok(Some(device)) = encryption.get_own_device().await {
+            log::info!("Device ID: {} (Verified: {})", device.device_id(), device.is_verified());
+        }
+        
+        if let Some(status) = encryption.cross_signing_status().await {
+            log::info!("Cross-signing identity: {:?}", status);
+        }
+    });
+
     sync_logic::start_sync_loop(client).await;
 }
 
 fn report_login_failure(msg: String) {
     log::error!("{}", msg);
-    let guard = LOGIN_FAILED_CALLBACK.lock().unwrap();
-    if let Some(cb) = *guard {
-        let c_err = CString::new(msg).unwrap_or_default();
-        cb(c_err.as_ptr());
-    }
+    let event = crate::ffi::FfiEvent::LoginFailed {
+        user_id: "".to_string(), // we don't always have user ID here, fallback to empty
+        message: msg,
+    };
+    let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
 }
 
 fn start_sso_flow(client: Client) {
-    if !try_begin_sso() {
-        log::warn!("SSO flow requested while one is already in progress; ignoring duplicate request.");
-        return;
-    }
-
     let rt = tokio::runtime::Handle::current();
         
     rt.spawn_blocking(move || {
@@ -462,7 +501,6 @@ fn start_sso_flow(client: Client) {
             let listener = match tiny_http::Server::http("127.0.0.1:0") {
                 Ok(l) => l,
                 Err(e) => {
-                    set_sso_in_progress(false);
                     log::error!("Failed to start local HTTP server: {}", e);
                     report_login_failure(format!("Failed to start local SSO callback server: {}", e));
                     return;
@@ -472,7 +510,6 @@ fn start_sso_flow(client: Client) {
             let port = match listener.server_addr().to_ip() {
                 Some(addr) => addr.port(),
                 None => {
-                    set_sso_in_progress(false);
                     report_login_failure("Failed to bind local SSO callback listener to an IP address.".to_string());
                     return;
                 }
@@ -485,7 +522,6 @@ fn start_sso_flow(client: Client) {
             let sso_url = match RUNTIME.block_on(client.matrix_auth().get_sso_login_url(&redirect_url, None)) {
                 Ok(u) => u,
                 Err(e) => {
-                    set_sso_in_progress(false);
                     log::error!("Failed to generate SSO URL: {:?}", e);
                     report_login_failure(format!("Failed to start SSO login: {:?}", e));
                     return;
@@ -496,11 +532,10 @@ fn start_sso_flow(client: Client) {
             
             // Emit Callback
             {
-                let guard = SSO_CALLBACK.lock().unwrap();
-                if let Some(cb) = *guard {
-                    let c_url = CString::new(sso_url.replace('\0', "")).unwrap_or_default();
-                    cb(c_url.as_ptr());
-                }
+                let event = crate::ffi::FfiEvent::SsoUrl {
+                    url: sso_url,
+                };
+                let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
             }
             
             let deadline = Instant::now() + Duration::from_secs(SSO_CALLBACK_TIMEOUT_SECS);
@@ -508,7 +543,6 @@ fn start_sso_flow(client: Client) {
             // Wait for callback requests until we get loginToken.
             loop {
                 if Instant::now() >= deadline {
-                    set_sso_in_progress(false);
                     report_login_failure(format!(
                         "SSO timed out after {} seconds. Please try login again.",
                         SSO_CALLBACK_TIMEOUT_SECS
@@ -543,7 +577,6 @@ fn start_sso_flow(client: Client) {
                         continue;
                     }
                     Err(e) => {
-                        set_sso_in_progress(false);
                         report_login_failure(format!("SSO callback server failed: {}", e));
                         break;
                     }
@@ -564,12 +597,11 @@ pub extern "C" fn purple_matrix_rust_finish_sso(token: *const c_char) {
     };
 
     let pending_client = {
-        let clients = CLIENTS.lock().unwrap();
-        clients
-            .values()
-            .find(|c| c.user_id().is_none())
-            .cloned()
-            .or_else(|| clients.values().next().cloned())
+        CLIENTS
+            .iter()
+            .find(|c| c.value().user_id().is_none())
+            .map(|c| c.value().clone())
+            .or_else(|| CLIENTS.iter().next().map(|c| c.value().clone()))
     };
 
     if let Some(client) = pending_client {
@@ -581,15 +613,8 @@ pub extern "C" fn purple_matrix_rust_finish_sso(token: *const c_char) {
 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_deactivate_account(erase_data: bool) {
-    let client_opt = {
-        let mut clients = CLIENTS.lock().unwrap();
-        if let Some((key, _)) = clients.iter().next() {
-            let key_owned = key.clone();
-            clients.remove(&key_owned)
-        } else {
-            None
-        }
-    };
+    let key_to_remove = CLIENTS.iter().next().map(|r| r.key().clone());
+    let client_opt = key_to_remove.and_then(|k| CLIENTS.remove(&k).map(|(_, c)| c));
 
     if let Some(client) = client_opt {
         RUNTIME.spawn(async move {
@@ -601,7 +626,7 @@ pub extern "C" fn purple_matrix_rust_deactivate_account(erase_data: bool) {
 
     if erase_data {
         let path_opt = {
-            let guard = DATA_PATH.lock().unwrap();
+            let guard = DATA_PATH.lock().unwrap_or_else(|e| e.into_inner());
             guard.clone()
         };
         if let Some(path) = path_opt {
@@ -615,14 +640,13 @@ pub extern "C" fn purple_matrix_rust_logout(user_id: *const c_char) {
     if user_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
     log::info!("Disconnecting {}...", user_id_str);
-    let mut clients = crate::CLIENTS.lock().unwrap();
     
     // Just drop the client to stop the sync loop.
-    if let Some(client) = clients.remove(&user_id_str) {
+    if let Some((_, client)) = crate::CLIENTS.remove(&user_id_str) {
          log::info!("Dropping global client instance for disconnect.");
          // Ensure client is dropped within the Tokio runtime context to prevent
          // "there is no reactor running" panics from internal components (e.g. deadpool).
-         RUNTIME.block_on(async move {
+         RUNTIME.spawn(async move {
              drop(client);
          });
     }
@@ -632,31 +656,37 @@ pub extern "C" fn purple_matrix_rust_logout(user_id: *const c_char) {
 pub extern "C" fn purple_matrix_rust_destroy_session(user_id: *const c_char) {
     if user_id.is_null() { return; }
     let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
-    log::info!("Explicit Logout Requested for {}. Invalidating session...", user_id_str);
-    let mut clients = crate::CLIENTS.lock().unwrap();
+    log::info!("Explicit Session Destruction Requested for {}.", user_id_str);
     
-    if let Some(client) = clients.remove(&user_id_str) {
-        RUNTIME.spawn(async move {
-            // 1. Invalidate on server
+    // 1. Remove from keyring immediately (sync)
+    if let Ok(entry) = get_keyring_entry(&user_id_str) {
+        if let Err(e) = entry.delete_password() {
+            log::warn!("Failed to delete session from keyring (might not exist): {:?}", e);
+        } else {
+            log::info!("Session removed from keyring.");
+        }
+    }
+
+    let client_opt = crate::CLIENTS.remove(&user_id_str).map(|(_, c)| c);
+    
+    RUNTIME.spawn(async move {
+        // 2. Invalidate on server if client was active
+        if let Some(client) = client_opt {
             if let Err(e) = client.logout().await {
                 log::error!("Failed to logout from homeserver: {:?}", e);
             } else {
                 log::info!("Session invalidated on homeserver.");
             }
-            
-            // 2. Remove Session File
-            let path_opt = {
-                 let guard = DATA_PATH.lock().unwrap();
-                 guard.clone()
-            };
-            if let Some(mut path) = path_opt {
-                 path.push("session.json");
-                 if path.exists() {
-                     let _ = std::fs::remove_file(path);
-                     log::info!("session.json deleted.");
-                 }
-            }
-        });
-    }
+        }
+        
+        // 3. Remove Local Session File and Data Dir
+        let path_opt = {
+             let guard = DATA_PATH.lock().unwrap_or_else(|e| e.into_inner());
+             guard.clone()
+        };
+        if let Some(path) = path_opt {
+             log::info!("Wiping data directory: {:?}", path);
+             safe_wipe_data_dir(&path);
+        }
+    });
 }
-// End of file anchor

@@ -1,7 +1,7 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::os::raw::c_char;
 use crate::{RUNTIME, with_client};
-use crate::ffi::*;
+
 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_set_status(user_id: *const c_char, status: i32, msg: *const c_char) {
@@ -26,7 +26,6 @@ pub extern "C" fn purple_matrix_rust_set_status(user_id: *const c_char, status: 
                  _ => matrix_sdk::ruma::presence::PresenceState::Online,
              };
              
-             // Presence
              use matrix_sdk::ruma::api::client::presence::set_presence::v3::Request as PresenceRequest;
              use matrix_sdk::ruma::UserId;
 
@@ -82,7 +81,6 @@ pub extern "C" fn purple_matrix_rust_set_avatar(user_id: *const c_char, path: *c
             }
 
             let mime = mime_guess::from_path(&path_buf).first_or_octet_stream();
-            // Read file content
             let data = match std::fs::read(&path_buf) {
                 Ok(d) => d,
                 Err(e) => {
@@ -91,7 +89,6 @@ pub extern "C" fn purple_matrix_rust_set_avatar(user_id: *const c_char, path: *c
                 }
             };
 
-            // Upload to media repo first
             let response = match client.media().upload(&mime, data, None).await {
                  Ok(r) => r,
                  Err(e) => {
@@ -100,7 +97,6 @@ pub extern "C" fn purple_matrix_rust_set_avatar(user_id: *const c_char, path: *c
                  }
             };
 
-            // Set the avatar URL
             if let Err(e) = client.account().set_avatar_url(Some(&response.content_uri)).await {
                 log::error!("Failed to set avatar URL: {:?}", e);
             } else {
@@ -215,32 +211,39 @@ pub extern "C" fn purple_matrix_rust_get_user_info(account_user_id: *const c_cha
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string())
                             .unwrap_or_else(|| user_id_str.clone());
-                        let avatar_url = profile.get("avatar_url")
+                        let mxc_url_str = profile.get("avatar_url")
                             .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
                             .unwrap_or_default();
+                        
+                        let mut avatar_url = mxc_url_str.to_string();
+                        if !mxc_url_str.is_empty() {
+                            let mxc_uri = <&matrix_sdk::ruma::MxcUri>::from(mxc_url_str);
+                            if let Some(path) = crate::media_helper::download_avatar(&client, &mxc_uri.to_owned(), &user_id_str).await {
+                                avatar_url = path.to_string();
+                            }
+                        }
                         
                         let is_online = false; 
 
-                        let c_user_id = CString::new(user_id_str).unwrap_or_default();
-                        let c_display_name = CString::new(display_name).unwrap_or_default();
-                        let c_avatar_url = CString::new(avatar_url).unwrap_or_default();
-                        
-                        let guard = SHOW_USER_INFO_CALLBACK.lock().unwrap();
-                        if let Some(cb) = *guard {
-                            cb(c_user_id.as_ptr(), c_display_name.as_ptr(), c_avatar_url.as_ptr(), is_online);
-                        }
+                        let event = crate::ffi::FfiEvent::ShowUserInfo {
+                            user_id: account_user_id_str,
+                            target_user_id: user_id_str,
+                            display_name: Some(display_name),
+                            avatar_url: Some(avatar_url),
+                            is_online,
+                        };
+                        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
                     },
                     Err(e) => {
                         log::error!("Failed to fetch profile for {}: {:?}", user_id_str, e);
-                        // Fallback
-                        let c_user_id = CString::new(user_id_str.clone()).unwrap_or_default();
-                        let c_display_name = CString::new(user_id_str).unwrap_or_default();
-                        let c_avatar_url = CString::new("").unwrap_or_default();
-                        let guard = SHOW_USER_INFO_CALLBACK.lock().unwrap();
-                        if let Some(cb) = *guard {
-                            cb(c_user_id.as_ptr(), c_display_name.as_ptr(), c_avatar_url.as_ptr(), false);
-                        }
+                        let event = crate::ffi::FfiEvent::ShowUserInfo {
+                            user_id: account_user_id_str,
+                            target_user_id: user_id_str.clone(),
+                            display_name: Some(user_id_str),
+                            avatar_url: Some("".to_string()),
+                            is_online: false,
+                        };
+                        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
                     }
                 }
             }
@@ -258,7 +261,9 @@ pub extern "C" fn purple_matrix_rust_get_my_profile(user_id: *const c_char) {
             if let Ok(profile) = client.account().fetch_user_profile().await {
                  let display_name = profile.get("displayname").and_then(|v| v.as_str()).unwrap_or("N/A");
                  let avatar_url = profile.get("avatar_url").and_then(|v| v.as_str()).unwrap_or("N/A");
-                 let msg = format!("<b>My Profile</b>:<br/>Display Name: {}<br/>Avatar URL: {}<br/>User ID: {}", display_name, avatar_url, user_id_str);
+                 let status = profile.get("m.status").and_then(|v| v.as_str()).unwrap_or("None");
+                 
+                 let msg = format!("<b>My Profile</b>:<br/>Display Name: {}<br/>Avatar URL: {}<br/>Status: {}<br/>User ID: {}", display_name, avatar_url, status, user_id_str);
                  crate::ffi::send_system_message(&user_id_str, &msg);
             }
         });
@@ -315,9 +320,13 @@ pub extern "C" fn purple_matrix_rust_set_avatar_bytes(user_id: *const c_char, da
     with_client(&user_id_str.clone(), |client| {
         
         RUNTIME.spawn(async move {
-            // Assume PNG/JPEG/OctetStream. Mime guess from bytes is harder without magic library
-            // Default to application/octet-stream or image/png
-            let mime = "image/png".parse().unwrap(); 
+            let mime = match "image/png".parse() {
+                Ok(m) => m,
+                Err(_) => {
+                    log::error!("Failed to parse image/png MIME type.");
+                    return;
+                }
+            };
             
             match client.media().upload(&mime, bytes, None).await {
                 Ok(response) => {

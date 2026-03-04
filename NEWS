@@ -1,0 +1,22 @@
+# Matrix (Rust) Plugin NEWS
+
+## Version 0.1.0 (2026-02-17)
+
+### Stability & Safety Improvements
+- **Radical Thread Isolation:** All C callbacks from Rust worker threads are now "zero-touch," deferring all libpurple and GTK work to the main thread via `g_idle_add`.
+- **Icon Safety & Deployment:** Added missing protocol icon installation to system paths and implemented file existence checks before setting buddy icons to prevent GdkPixbuf and GObject assertion failures.
+- **Atomic Character Sanitization:** Implemented rigorous UTF-8 validation and BMP-only character filtering for all metadata (names, topics, groups) and message history to prevent Pango/GTK layout and font-scaling crashes.
+- **Race Condition Resolution:** Refactored joining logic to defer history fetching until conversations are fully established in libpurple, preventing recursive initialization segfaults.
+- **Connection Guarding:** Added robust account connection checks to all asynchronous processing to prevent operations on inactive accounts.
+- **Icon Safety:** Added file existence checks before setting buddy icons to prevent GdkPixbuf and GObject assertion failures.
+
+### Feature Enhancements
+- **Command Discoverability:** Registered all Matrix-specific slash commands (/join, /invite, /poll, /sticker, /shrug, /reply, /thread) in the C plugin for tab-completion and /help visibility.
+- **Global Account Actions:** Implemented global "Join Room", "Invite User", and "Manual SSO Token" actions available directly from the Account menu.
+- **Sticker Optimization:** Added an in-memory cache for sticker MXC URIs to eliminate redundant file uploads.
+- **Dashboard Fix:** Corrected the "Invite user" action in the Room Dashboard to use the appropriate invitation dialog.
+
+### User Experience
+- **Startup Throttling:** Implemented a calibrated delay during initial room population to ensure UI responsiveness.
+- **Success Feedback:** Added user-visible confirmation messages for background tasks like room joining and invitations.
+- **Security Warning:** Added a prominent warning dialog during login if insecure TLS mode is enabled.

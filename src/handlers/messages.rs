@@ -1,355 +1,272 @@
-use matrix_sdk::ruma::events::room::message::{SyncRoomMessageEvent, OriginalSyncRoomMessageEvent, MessageType};
-use matrix_sdk::ruma::events::room::message::Relation;
-use matrix_sdk::{Room, media::{MediaFormat, MediaRequestParameters}};
-use std::ffi::CString;
-use crate::ffi::MSG_CALLBACK;
-
-fn sanitize_filename_component(input: &str, fallback: &str) -> String {
-    let mut out: String = input
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    out = out.trim_matches('_').to_string();
-    if out.is_empty() {
-        fallback.to_string()
-    } else if out.len() > 80 {
-        out[..80].to_string()
-    } else {
-        out
-    }
-}
-
-fn build_safe_media_path(event_id: &str, kind: &str, original_name: &str) -> String {
-    let safe_event = sanitize_filename_component(event_id, "event");
-    let safe_kind = sanitize_filename_component(kind, "media");
-    let safe_name = sanitize_filename_component(original_name, "file");
-    
-    let mut path = crate::media_helper::get_media_dir();
-    path.push(format!("matrix_{}_{}_{}", safe_event, safe_kind, safe_name));
-    path.to_string_lossy().to_string()
-}
-
-fn short_event_id(id: &str) -> String {
-    let trimmed = id.trim_start_matches('$');
-    let short = trimmed.chars().take(10).collect::<String>();
-    if short.is_empty() {
-        "message".to_string()
-    } else {
-        short
-    }
-}
+use matrix_sdk::ruma::events::room::message::{SyncRoomMessageEvent, Relation};
+use matrix_sdk::Room;
 
 pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMessageEvent>, room: Room) {
+    let raw_val: Option<serde_json::Value> = event.deserialize_as::<serde_json::Value>().ok();
+    
     if let Ok(SyncRoomMessageEvent::Original(ev)) = event.deserialize() {
-        let mut sender_display = ev.sender.to_string();
-        if let Ok(Some(member)) = room.get_member(&ev.sender).await {
-            if let Some(dn) = member.display_name() {
-                 sender_display = dn.to_owned();
-            }
-        }
-        
-        let sender = sender_display.as_str();
+        let sender = ev.sender.as_str();
         let room_id = room.room_id().as_str();
         let timestamp: u64 = ev.origin_server_ts.0.into();
-        
-        // Suppress own messages (Local Echo Handles Display)
-        if let Some(me) = room.client().user_id() {
-             if ev.sender == me {
-                 // Only suppress if it looks like a local echo (has transaction ID)
-                 // Messages from other sessions usually won't have a transaction ID in the sync response.
-                 if ev.unsigned.transaction_id.is_some() {
-                     log::debug!("Ignoring own message (local echo) event: {}", ev.event_id);
-                     return;
-                 }
-                 log::info!("Processing own message from another session: {}", ev.event_id);
-             }
+        let client = room.client();
+        let me = match client.user_id() {
+            Some(u) => u.as_str().to_string(),
+            None => {
+                log::warn!("Ignored message: Client user_id is missing");
+                return;
+            }
+        };
+        let local_user_id = me.clone();
+
+        // 0. Handle Edits (Replacements) - DO THIS FIRST
+        let mut is_edit = false;
+        let mut target_id = String::new();
+
+        if let Some(Relation::Replacement(ref repl)) = &ev.content.relates_to {
+            is_edit = true;
+            target_id = repl.event_id.to_string();
+        } else if let Some(rel) = raw_val.as_ref().and_then(|v| v.get("content")).and_then(|c| c.get("m.relates_to")) {
+            if rel.get("rel_type").and_then(|t| t.as_str()) == Some("m.replace") {
+                is_edit = true;
+                target_id = rel.get("event_id").and_then(|id| id.as_str()).unwrap_or("").to_string();
+            }
+        }
+
+        if is_edit && !target_id.is_empty() {
+            log::info!("Message replacement detected for {}", target_id);
+            let body = render_room_message(&ev, &room).await;
+            let edited_body = crate::html_fmt::style_edit(&body);
+            let ffi_ev = crate::ffi::FfiEvent::MessageEdited {
+                user_id: local_user_id,
+                room_id: room.room_id().to_string(),
+                event_id: target_id,
+                new_msg: edited_body,
+            };
+            let _ = crate::ffi::EVENTS_CHANNEL.0.send(ffi_ev);
+            return;
+        }
+
+        // Don't notify for our own messages (Pidgin echoes them)
+        // UNLESS it's a reply, which Pidgin doesn't know how to echo.
+        if sender == local_user_id && ev.content.relates_to.is_none() { 
+            return; 
         }
 
         let mut thread_root_id: Option<String> = None;
-        
-        let body = render_room_message(&ev, &room).await;
-
-        // Check for Thread Relation
-        if let Some(Relation::Thread(thread)) = ev.content.relates_to.clone() {
+        if let Some(Relation::Thread(ref thread)) = ev.content.relates_to {
             thread_root_id = Some(thread.event_id.to_string());
         }
 
-        let mut final_body = body;
+        let mut body = render_room_message(&ev, &room).await;
 
-        // Handle reply rendering without leaking full event IDs into chat text.
-        if let Some(Relation::Reply { in_reply_to }) = &ev.content.relates_to {
-             let reply_ref = short_event_id(in_reply_to.event_id.as_str());
-             // We use a placeholder for the quoted text since we don't fetch it here yet.
-             // Ideally we would fetch the original message content.
-             // For now, consistent with previous behavior, we just show "Reply to X..."
-             let quoted_placeholder = format!("Reply to {}...", crate::escape_html(&reply_ref));
-             final_body = crate::html_fmt::style_reply(&quoted_placeholder, &final_body);
-        }
-
-        // Apply Thread Styling
-        if let Some(Relation::Thread(_)) = ev.content.relates_to.clone() {
-            final_body = crate::html_fmt::style_thread_prefix(&final_body);
-        } else if let Some(Relation::Replacement(_)) = ev.content.relates_to {
-             // Move (edited) to the end and make it small
-            final_body = crate::html_fmt::style_edit(&final_body);
-        }
-        
-        // Evaluate Push Rules for Highlight status
-        let mut is_highlight = false;
-        if let Some(me) = room.client().user_id() {
-            if ev.sender != me {
-                if let Ok(Some(push_actions)) = room.event_push_actions(&event).await {
-                    is_highlight = push_actions.iter().any(|a| {
-                        matches!(a, matrix_sdk::ruma::push::Action::SetTweak(matrix_sdk::ruma::push::Tweak::Highlight(true)))
-                    });
-                }
-                
-                // Fallback to simple mention if ruleset check failed or didn't catch it
-                if !is_highlight && final_body.contains(me.as_str()) {
-                    is_highlight = true;
-                }
+        // 1. Handle Replies
+        let mut reply_to_id: Option<String> = None;
+        if let Some(Relation::Reply { ref in_reply_to }) = &ev.content.relates_to {
+            reply_to_id = Some(in_reply_to.event_id.to_string());
+        } else if let Some(rel) = raw_val.as_ref().and_then(|v| v.get("content")).and_then(|c| c.get("m.relates_to")) {
+            if let Some(id) = rel.get("m.in_reply_to").and_then(|r| r.get("event_id")).and_then(|id| id.as_str()) {
+                reply_to_id = Some(id.to_string());
             }
         }
 
-        log::info!("Received msg from {} in {}: {} (Highlight: {})", sender, room_id, final_body, is_highlight);
-
-        let c_sender = CString::new(sender).unwrap_or_default();
-        let c_body = CString::new(final_body).unwrap_or_default();
-        let c_room_id = CString::new(room_id).unwrap_or_default();
-        let c_event_id = CString::new(ev.event_id.as_str()).unwrap_or_default();
-        
-        let c_thread_id = if let Some(tid) = thread_root_id {
-            CString::new(tid).unwrap_or_default()
-        } else {
-            CString::default() 
-        };
-
-        let guard = MSG_CALLBACK.lock().unwrap();
-        if let Some(cb) = *guard {
-            let thread_ptr = if c_thread_id.as_bytes().is_empty() {
-                std::ptr::null()
-            } else {
-                c_thread_id.as_ptr()
-            };
-            // Note: C side doesn't have a highlight flag in callback yet. 
-            // We should ideally expand the callback or use a special sender prefix?
-            // For now, let's keep it as is, but we could add a "[Highlight]" prefix if needed.
-            cb(c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), thread_ptr, c_event_id.as_ptr(), timestamp);
+        if let Some(id) = reply_to_id {
+            let mut quoted = format!("<i>Replying to {}...</i>", id);
+            if let Ok(parent_ev) = room.event(id.as_str().try_into().unwrap_or(&ev.event_id), None).await {
+                use matrix_sdk::ruma::events::{AnySyncTimelineEvent, AnySyncMessageLikeEvent};
+                if let Ok(AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomMessage(parent_msg))) = parent_ev.raw().deserialize() {
+                    if let matrix_sdk::ruma::events::room::message::SyncRoomMessageEvent::Original(p_ev) = parent_msg {
+                        let mut parent_body = crate::get_display_html(&p_ev.content);
+                        if parent_body.len() > 100 { parent_body = format!("{}...", &parent_body[..97]); }
+                        let parent_sender = p_ev.sender.as_str();
+                        quoted = format!("<b>{}</b>: {}", parent_sender, parent_body);
+                    }
+                }
+            }
+            body = crate::html_fmt::style_reply(&quoted, &body);
         }
+
+        let is_encrypted = room.get_state_event_static::<matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent>().await.ok().flatten().is_some();
+
+        log::info!("Received msg from {} in {}: {} (Thread: {:?}, Enc: {})", sender, room_id, body, thread_root_id, is_encrypted);
+
+        let target_room_id = if let Some(ref tid) = thread_root_id {
+            format!("{}|{}", room_id, tid)
+        } else {
+            room_id.to_string()
+        };
+        
+        let display_body = format!("{} <font color='#ffffff' size='1'>(M:{})</font>", body, ev.event_id);
+
+        let ffi_ev = crate::ffi::FfiEvent::MessageReceived {
+            user_id: local_user_id,
+            sender: sender.to_string(),
+            msg: display_body,
+            room_id: Some(target_room_id),
+            thread_root_id,
+            event_id: ev.event_id.to_string(),
+            timestamp,
+            encrypted: is_encrypted,
+        };
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(ffi_ev);
     }
 }
 
 pub async fn handle_encrypted(event: matrix_sdk::ruma::serde::Raw<matrix_sdk::ruma::events::room::encrypted::SyncRoomEncryptedEvent>, room: Room) {
-     use matrix_sdk::ruma::events::room::encrypted::SyncRoomEncryptedEvent;
+     use matrix_sdk::ruma::events::AnySyncTimelineEvent;
+     use matrix_sdk::ruma::events::AnySyncMessageLikeEvent;
      
-     if let Ok(SyncRoomEncryptedEvent::Original(ev)) = event.deserialize() {
-         let sender = ev.sender.as_str();
-         let room_id = room.room_id().as_str();
-         let timestamp: u64 = ev.origin_server_ts.0.into();
-         
-         log::info!("Received Encrypted Event in {} from {}. Scheme: {:?}", room_id, sender, ev.content.scheme);
-
-         // If we are here, it means the SDK could not decrypt it automatically.
-         let body = "[Encrypted Message: Waiting for keys...] ".to_string();
-         
-         let c_sender = CString::new(sender).unwrap_or_default();
-         let c_body = CString::new(body).unwrap_or_default();
-         let c_room_id = CString::new(room_id).unwrap_or_default();
-         let c_event_id = CString::new(ev.event_id.as_str()).unwrap_or_default();
-
-         let guard = MSG_CALLBACK.lock().unwrap();
-         if let Some(cb) = *guard {
-             cb(c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), c_event_id.as_ptr(), timestamp);
+     if let Ok(raw_original) = matrix_sdk::ruma::serde::Raw::<matrix_sdk::ruma::events::room::encrypted::OriginalSyncRoomEncryptedEvent>::from_json_string(event.json().get().to_string()) {
+         match room.decrypt_event(&raw_original, None).await {
+             Ok(decrypted) => {
+                 if let Ok(any_event) = decrypted.raw().deserialize() {
+                     if let AnySyncTimelineEvent::MessageLike(msg_like) = any_event {
+                         match msg_like {
+                             AnySyncMessageLikeEvent::RoomMessage(_) => {
+                                 if let Ok(raw_msg) = matrix_sdk::ruma::serde::Raw::<matrix_sdk::ruma::events::room::message::SyncRoomMessageEvent>::from_json_string(decrypted.raw().json().get().to_string()) {
+                                     handle_room_message(raw_msg, room).await;
+                                 }
+                                 return;
+                             },
+                         AnySyncMessageLikeEvent::Sticker(sticker_ev) => {
+                             crate::handlers::reactions::handle_sticker(sticker_ev, room).await;
+                             return;
+                         },
+                         AnySyncMessageLikeEvent::Reaction(reaction_ev) => {
+                             crate::handlers::reactions::handle_reaction(reaction_ev, room).await;
+                             return;
+                         },
+                         _ => {}
+                     }
+                 }
+             }
+         },
+         Err(e) => {
+             log::warn!("Failed to decrypt live event: {:?}", e);
          }
      }
-}
+     }
 
-pub async fn handle_redaction(event: matrix_sdk::ruma::serde::Raw<matrix_sdk::ruma::events::room::redaction::SyncRoomRedactionEvent>, room: Room) {
      if let Ok(ev) = event.deserialize() {
+         let client = room.client();
+         let me = match client.user_id() {
+             Some(u) => u.as_str().to_string(),
+             None => {
+                 log::warn!("Ignored encrypted message: Client user_id is missing");
+                 return;
+             }
+         };
+         let local_user_id = me.clone();
          let sender = ev.sender().as_str();
+         
+         if sender == local_user_id { return; }
+
          let room_id = room.room_id().as_str();
          let timestamp: u64 = ev.origin_server_ts().0.into();
-         let body = format!(
-             "<span style=\"color: #999; font-style: italic;\">[Redacted] {} removed a message.</span>",
-             crate::escape_html(sender)
-         );
          
-         let c_sender = CString::new(sender).unwrap_or_default();
-         let c_body = CString::new(body).unwrap_or_default();
-         let c_room_id = CString::new(room_id).unwrap_or_default();
+         let body = "[Encrypted]".to_string();
          
-         let guard = MSG_CALLBACK.lock().unwrap();
-         if let Some(cb) = *guard {
-             cb(c_sender.as_ptr(), c_body.as_ptr(), c_room_id.as_ptr(), std::ptr::null(), std::ptr::null(), timestamp);
-         }
+         let ffi_ev = crate::ffi::FfiEvent::MessageReceived {
+             user_id: local_user_id,
+             sender: sender.to_string(),
+             msg: body,
+             room_id: Some(room_id.to_string()),
+             thread_root_id: None,
+             event_id: ev.event_id().to_string(),
+             timestamp,
+             encrypted: true,
+         };
+         let _ = crate::ffi::EVENTS_CHANNEL.0.send(ffi_ev);
      }
 }
 
-pub async fn render_room_message(ev: &OriginalSyncRoomMessageEvent, room: &Room) -> String {
-    let mut body = String::new();
-    let mut media_path: Option<String> = None;
+pub async fn handle_redaction(event: matrix_sdk::ruma::events::room::redaction::SyncRoomRedactionEvent, room: Room) {
+    if let Some(ev) = event.as_original() {
+        let user_id = room.client().user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
+        let room_id = room.room_id().as_str();
+        let target_event_id = ev.redacts.as_ref().map(|id| id.as_str()).unwrap_or("");
+        
+        let ffi_ev = crate::ffi::FfiEvent::MessageReceived {
+            user_id,
+            sender: "System".to_string(),
+            msg: format!("[System] [Redaction] Message {} was removed.", target_event_id),
+            room_id: Some(room_id.to_string()),
+            thread_root_id: None,
+            event_id: ev.event_id.to_string(),
+            timestamp: ev.origin_server_ts.0.into(),
+            encrypted: false,
+        };
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(ffi_ev);
+    }
+}
 
-    match &ev.content.msgtype {
+fn sanitize_mime_ext(mime: &str, default: &str) -> String {
+    if let Some(ext) = mime_guess::get_mime_extensions_str(mime).and_then(|exts| exts.first()) {
+        ext.to_string()
+    } else {
+        let mut fallback = mime.split('/').last().unwrap_or(default).to_string();
+        fallback.retain(|c| c.is_ascii_alphanumeric());
+        if fallback.is_empty() { default.to_string() } else { fallback }
+    }
+}
+
+pub async fn render_room_message(ev: &matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent, room: &Room) -> String {
+    use matrix_sdk::ruma::events::room::message::MessageType;
+    use matrix_sdk::media::{MediaFormat, MediaRequestParameters};
+
+    let msg_type = if let Some(Relation::Replacement(ref repl)) = &ev.content.relates_to {
+        &repl.new_content.msgtype
+    } else {
+        &ev.content.msgtype
+    };
+
+    match msg_type {
         MessageType::Image(content) => {
-            log::info!("Downloading image for display: {}", content.body);
-            let request = MediaRequestParameters { source: content.source.clone(), format: MediaFormat::File };
-            if let Ok(bytes) = room.client().media().get_media_content(&request, true).await {
-                let filename = build_safe_media_path(ev.event_id.as_str(), "image", &content.body);
-                
-                // Use tokio::fs for non-blocking I/O
-                use tokio::io::AsyncWriteExt;
-                if let Ok(mut file) = tokio::fs::File::create(&filename).await {
-                     if file.write_all(&bytes).await.is_ok() {
-                         media_path = Some(filename.clone());
-                         // Wrap in <a> so it's clickable (as a hyperlink) AND shows inline.
-                         body = format!(
-                             "<a href=\"file://{}\"><img src=\"file://{}\" alt=\"{}\" style=\"max-width: 100%;\"></a>",
-                             filename,
-                             filename,
-                             crate::escape_html(&content.body)
-                         );
-                     }
+            log::debug!("Attempting to render image: {}", content.body);
+            let request = if let Some(info) = &content.info {
+                if let Some(thumbnail_source) = &info.thumbnail_source {
+                    use matrix_sdk::media::MediaThumbnailSettings;
+                    use matrix_sdk::ruma::uint;
+                    let settings = MediaThumbnailSettings::new(uint!(300), uint!(300));
+                    MediaRequestParameters {
+                        source: thumbnail_source.clone(),
+                        format: MediaFormat::Thumbnail(settings),
+                    }
+                } else {
+                    MediaRequestParameters { source: content.source.clone(), format: MediaFormat::File }
                 }
-            }
-            if media_path.is_none() { 
-                body = format!("[Image: {}] (Download failed)", crate::escape_html(&content.body)); 
+            } else {
+                MediaRequestParameters { source: content.source.clone(), format: MediaFormat::File }
+            };
+            
+            match room.client().media().get_media_content(&request, true).await {
+                Ok(bytes) => {
+                    let cb_opt = {
+                        let guard = crate::ffi::IMGSTORE_ADD_CALLBACK.lock().unwrap_or_else(|e| e.into_inner());
+                        *guard
+                    };
+                    if let Some(cb) = cb_opt {
+                        let id = cb(bytes.as_ptr() as *const u8, bytes.len());
+                        if id > 0 { format!("<img id=\"{}\" alt=\"{}\">", id, crate::escape_html(&content.body)) }
+                        else { format!("🖼️ [Image: {}]", crate::escape_html(&content.body)) }
+                    } else {
+                        format!("🖼️ [Image: {}]", crate::escape_html(&content.body))
+                    }
+                },
+                Err(e) => {
+                    log::warn!("Failed to get media content for {}: {:?}", content.body, e);
+                    format!("🖼️ [Image: {}]", crate::escape_html(&content.body))
+                }
             }
         },
         MessageType::Video(content) => {
-            log::info!("Downloading video: {}", content.body);
-            let request = MediaRequestParameters { source: content.source.clone(), format: MediaFormat::File };
-            if let Ok(bytes) = room.client().media().get_media_content(&request, true).await {
-                let filename = build_safe_media_path(ev.event_id.as_str(), "video", &content.body);
-                use tokio::io::AsyncWriteExt;
-                if let Ok(mut file) = tokio::fs::File::create(&filename).await {
-                    if file.write_all(&bytes).await.is_ok() {
-                        media_path = Some(filename);
-                        body = format!(
-                            "<a href=\"file://{}\">[Video: {}]</a>",
-                            media_path.as_ref().unwrap(),
-                            crate::escape_html(&content.body)
-                        );
-                    }
-                }
-            }
-            if media_path.is_none() { body = format!("[Video: {}] (Download failed)", crate::escape_html(&content.body)); }
-        },
-        MessageType::File(content) => {
-            log::info!("Downloading file: {}", content.body);
-            let request = MediaRequestParameters { source: content.source.clone(), format: MediaFormat::File };
-            if let Ok(bytes) = room.client().media().get_media_content(&request, true).await {
-                let filename = build_safe_media_path(ev.event_id.as_str(), "file", &content.body);
-                use tokio::io::AsyncWriteExt;
-                if let Ok(mut file) = tokio::fs::File::create(&filename).await {
-                    if file.write_all(&bytes).await.is_ok() {
-                        media_path = Some(filename.clone());
-                        
-                        // Check if it's an image
-                        let is_image = content.info.as_ref().and_then(|i| i.mimetype.as_ref()).map(|m| m.starts_with("image/")).unwrap_or(false)
-                            || content.body.to_lowercase().ends_with(".png")
-                            || content.body.to_lowercase().ends_with(".jpg")
-                            || content.body.to_lowercase().ends_with(".jpeg")
-                            || content.body.to_lowercase().ends_with(".gif")
-                            || content.body.to_lowercase().ends_with(".webp");
-
-                        if is_image {
-                            body = format!(
-                                "<a href=\"file://{}\"><img src=\"file://{}\" alt=\"{}\" style=\"max-width: 100%;\"></a>",
-                                filename,
-                                filename,
-                                crate::escape_html(&content.body)
-                            );
-                        } else {
-                            body = format!(
-                                "<a href=\"file://{}\">[File: {}]</a>",
-                                filename,
-                                crate::escape_html(&content.body)
-                            );
-                        }
-                    }
-                }
-            }
-            if media_path.is_none() { body = format!("[File: {}] (Download failed)", crate::escape_html(&content.body)); }
+            format!("🎞️ [Video: {}]", crate::escape_html(&content.body))
         },
         MessageType::Audio(content) => {
-            log::info!("Downloading audio: {}", content.body);
-            let request = MediaRequestParameters { source: content.source.clone(), format: MediaFormat::File };
-            if let Ok(bytes) = room.client().media().get_media_content(&request, true).await {
-                
-                let is_voice = content.voice.is_some(); // MSC3245
-                let duration = content.info.as_ref().and_then(|i| i.duration).map(|d| d.as_secs()).unwrap_or(0);
-                
-                let filename_prefix = if is_voice { "voice_message" } else { "audio" };
-                let filename = build_safe_media_path(ev.event_id.as_str(), filename_prefix, &content.body);
-                
-                use tokio::io::AsyncWriteExt;
-                if let Ok(mut file) = tokio::fs::File::create(&filename).await {
-                    if file.write_all(&bytes).await.is_ok() {
-                        media_path = Some(filename);
-                        
-                        let label = if is_voice {
-                             let mins = duration / 60;
-                             let secs = duration % 60;
-                             format!("[Voice Message - {}:{:02}]", mins, secs)
-                        } else {
-                             format!("[Audio: {}]", crate::escape_html(&content.body))
-                        };
-                        
-                        body = format!("<a href=\"file://{}\">{}</a>", media_path.as_ref().unwrap(), label);
-                    }
-                }
-            }
-            if media_path.is_none() { 
-                let label = if content.voice.is_some() { "[Voice Message]" } else { "[Audio]" };
-                body = format!("{} {} (Download failed)", label, crate::escape_html(&content.body)); 
-            }
+            format!("🎵 [Audio: {}]", crate::escape_html(&content.body))
         },
-        MessageType::Location(content) => {
-            let geo = &content.geo_uri;
-            // geo:52.5186,13.3761;u=35
-            let parts: Vec<&str> = geo.trim_start_matches("geo:").split(';').next().unwrap_or("").split(',').collect();
-            if parts.len() >= 2 {
-                let lat = parts[0];
-                let lon = parts[1];
-                body = format!("[Location: {}] <a href=\"https://www.openstreetmap.org/?mlat={}&mlon={}#map=16/{}/{}\">(View on Map)</a>", 
-                    crate::escape_html(&content.body), crate::escape_html(lat), crate::escape_html(lon), crate::escape_html(lat), crate::escape_html(lon));
-            } else {
-                body = format!("[Location: {}] ({})", crate::escape_html(&content.body), crate::escape_html(geo));
-            }
+        MessageType::File(content) => {
+            format!("📁 [File: {}]", crate::escape_html(&content.body))
         },
-        MessageType::Notice(content) => {
-             body = crate::html_fmt::style_notice(&crate::escape_html(&content.body));
-        },
-        _ => {
-            body = crate::get_display_html(&ev.content);
-        }
-    }
-    body
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{build_safe_media_path, sanitize_filename_component};
-
-    #[test]
-    fn test_sanitize_filename_component_blocks_path_chars() {
-        let s = sanitize_filename_component("../etc/passwd", "fallback");
-        assert!(!s.contains('/'));
-        assert!(!s.contains('\\'));
-        assert_ne!(s, "..");
-    }
-
-    #[test]
-    fn test_build_safe_media_path_stays_in_tmp() {
-        let p = build_safe_media_path("$event:server", "image", "../../evil.png");
-        // Check if it contains the safe name and is inside a temp-like path
-        assert!(p.contains("matrix_"));
-        assert!(!p.contains(".."));
+        _ => crate::get_display_html(&ev.content),
     }
 }

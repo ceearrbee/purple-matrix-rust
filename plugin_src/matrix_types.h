@@ -2,46 +2,70 @@
 #define MATRIX_TYPES_H
 
 #include <glib.h>
+#include <libpurple/account.h>
 #include <stdbool.h>
 
 // Structs to marshal data to main thread
 
 typedef struct {
+  char *user_id;
   char *sender;
   char *message;
   char *room_id;
   char *thread_root_id;
   char *event_id;
   guint64 timestamp;
+  gboolean encrypted;
 } MatrixMsgData;
 
 typedef struct {
-  char *room_id;
   char *user_id;
-  gboolean is_typing;
+  char *room_id;
+  char *event_id;
+  char *reactions_text;
+} MatrixReactionsData;
+
+typedef struct {
+  char *user_id;
+  char *room_id;
+  char *event_id;
+  char *new_msg;
+} MatrixEditData;
+
+typedef struct {
+  char *user_id;
+  char *room_id;
+  char *who;
+  bool is_typing;
 } MatrixTypingData;
 
 typedef struct {
+  char *user_id;
   char *room_id;
   char *name;
   char *group_name;
   char *avatar_url;
   char *topic;
   gboolean encrypted;
+  guint64 member_count;
 } MatrixRoomData;
 
 typedef struct {
-  char *user_id;
+  char *user_id;        /* The local account ID */
+  char *target_user_id; /* The profile being viewed */
   char *display_name;
   char *avatar_url;
   gboolean is_online;
 } MatrixUserInfoData;
 
 typedef struct {
+  char *user_id;
   char *name;
   char *id;
   char *topic;
   guint64 count;
+  gboolean is_space;
+  char *parent_id;
 } RoomListData;
 
 typedef struct {
@@ -88,14 +112,22 @@ typedef struct {
 } MatrixEmojiData;
 
 typedef struct {
+  char *user_id;
+  char *flow_id;
+  char *method;
+} MatrixFlowData;
+
+typedef struct {
+  char *user_id;
   char *room_id;
   char *inviter;
 } MatrixInviteData;
 
 typedef struct {
+  char *user_id;
   char *room_id;
   char *event_id;
-  char *user_id;
+  char *who;
 } MatrixReadMarkerData;
 
 typedef struct {
@@ -106,18 +138,21 @@ typedef struct {
 
 typedef struct {
   char *user_id;
+  char *target_user_id;
   bool is_online;
 } MatrixPresenceData;
 
 typedef struct {
+  char *user_id;
   char *room_id;
   char *topic;
   char *sender;
 } MatrixTopicData;
 
 typedef struct {
-  char *room_id;
   char *user_id;
+  char *room_id;
+  char *member_id;
   bool add;
   char *alias;
   char *avatar_path;
@@ -134,6 +169,7 @@ typedef struct {
 } PreviewRoomContext;
 
 typedef struct {
+  char *user_id;
   char *room_id_or_alias;
   char *html_body;
 } MatrixRoomPreviewData;
