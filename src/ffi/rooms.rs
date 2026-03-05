@@ -339,6 +339,72 @@ pub extern "C" fn purple_matrix_rust_get_space_hierarchy(user_id: *const c_char,
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_get_room_dashboard_info(user_id: *const c_char, room_id: *const c_char) {
+    crate::ffi_panic_boundary!({
+        if user_id.is_null() || room_id.is_null() { return; }
+        let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+        let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+
+        let uid_async = user_id_str.clone();
+        with_client(&user_id_str, move |client: Client| {
+            RUNTIME.spawn(async move {
+                if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                    if let Some(room) = client.get_room(rid) {
+                        let name = room.display_name().await.map(|d| d.to_string()).unwrap_or_else(|_| room_id_str.clone());
+                        
+                        use matrix_sdk::ruma::events::room::topic::RoomTopicEventContent;
+                        use matrix_sdk::ruma::events::{SyncStateEvent};
+                        use matrix_sdk_base::deserialized_responses::SyncOrStrippedState;
+                        
+                        let topic = room.get_state_event_static::<RoomTopicEventContent>().await.ok().flatten()
+                            .map(|e| e.deserialize().ok()).flatten()
+                            .map(|s| match s {
+                                SyncOrStrippedState::Sync(SyncStateEvent::Original(ev)) => ev.content.topic.clone(),
+                                SyncOrStrippedState::Stripped(ev) => ev.content.topic.clone().unwrap_or_default(),
+                                _ => "".to_string(),
+                            }).unwrap_or_default();
+
+                        let member_count = room.joined_members_count();
+                        let encrypted = room.get_state_event_static::<matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent>().await.ok().flatten().is_some();
+                        
+                        let my_id = client.user_id().expect("Client has user id");
+                        let power_level = room.get_member(my_id).await.ok().flatten()
+                            .map(|m| {
+                                use matrix_sdk::ruma::events::room::power_levels::UserPowerLevel;
+                                match m.power_level() {
+                                    UserPowerLevel::Int(i) => i.into(),
+                                    UserPowerLevel::Infinite => i64::MAX,
+                                    _ => 0,
+                                }
+                            }).unwrap_or(0);
+
+                        use matrix_sdk::ruma::events::room::canonical_alias::RoomCanonicalAliasEventContent;
+                        let alias = room.get_state_event_static::<RoomCanonicalAliasEventContent>().await.ok().flatten()
+                            .map(|e| e.deserialize().ok()).flatten()
+                            .and_then(|s| match s {
+                                SyncOrStrippedState::Sync(SyncStateEvent::Original(ev)) => ev.content.alias.as_ref().map(|a| a.to_string()),
+                                SyncOrStrippedState::Stripped(ev) => ev.content.alias.as_ref().map(|a| a.to_string()),
+                                _ => None,
+                            });
+
+                        send_event(FfiEvent::RoomDashboardInfo {
+                            user_id: uid_async,
+                            room_id: room_id_str,
+                            name,
+                            topic,
+                            member_count,
+                            encrypted,
+                            power_level,
+                            alias,
+                        });
+                    }
+                }
+            });
+        });
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_get_server_versions(user_id: *const c_char) {
     crate::ffi_panic_boundary!({
         if user_id.is_null() { return; }

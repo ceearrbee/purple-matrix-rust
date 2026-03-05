@@ -37,6 +37,7 @@ typedef enum {
     FFI_EVENT_POWER_LEVEL_UPDATE = 28,
     FFI_EVENT_MESSAGE_REDACTED = 29,
     FFI_EVENT_MEDIA_DOWNLOADED = 30,
+    FFI_EVENT_ROOM_DASHBOARD_INFO = 31,
 } FfiEventType;
 
 // Structs matching src/ffi/events.rs exactly for FFI safety
@@ -228,5 +229,16 @@ typedef struct {
     size_t media_size;
     char *content_type;
 } MediaDownloadedEventData;
+
+typedef struct {
+    char *user_id;
+    char *room_id;
+    char *name;
+    char *topic;
+    uint64_t member_count;
+    bool encrypted;
+    int64_t power_level;
+    char *alias;
+} RoomDashboardInfoEventData;
 
 #endif // MATRIX_TYPES_H

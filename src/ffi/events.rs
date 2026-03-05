@@ -31,6 +31,7 @@ pub enum FfiEventType {
     PowerLevelUpdate = 28,
     MessageRedacted = 29,
     MediaDownloaded = 30,
+    RoomDashboardInfo = 31,
 }
 
 impl TryFrom<i32> for FfiEventType {
@@ -67,6 +68,7 @@ impl TryFrom<i32> for FfiEventType {
             28 => Ok(FfiEventType::PowerLevelUpdate),
             29 => Ok(FfiEventType::MessageRedacted),
             30 => Ok(FfiEventType::MediaDownloaded),
+            31 => Ok(FfiEventType::RoomDashboardInfo),
             _ => Err(()),
         }
     }
@@ -288,6 +290,18 @@ pub struct MediaDownloadedEventData {
     pub content_type: *mut i8,
 }
 
+#[repr(C)]
+pub struct RoomDashboardInfoEventData {
+    pub user_id: *mut i8,
+    pub room_id: *mut i8,
+    pub name: *mut i8,
+    pub topic: *mut i8,
+    pub member_count: u64,
+    pub encrypted: bool,
+    pub power_level: i64,
+    pub alias: *mut i8,
+}
+
 // Internal Rust enum for the channel
 #[derive(Debug, Clone)]
 pub enum FfiEvent {
@@ -451,6 +465,16 @@ pub enum FfiEvent {
         event_id: String,
         data: Vec<u8>,
         content_type: String,
+    },
+    RoomDashboardInfo {
+        user_id: String,
+        room_id: String,
+        name: String,
+        topic: String,
+        member_count: u64,
+        encrypted: bool,
+        power_level: i64,
+        alias: Option<String>,
     },
     // Required by stickers.rs
     StickerPack {

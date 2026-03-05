@@ -2,6 +2,7 @@
 #define MATRIX_ACCOUNT_H
 
 #include <glib.h>
+#include <stdint.h>
 #include <libpurple/account.h>
 #include <libpurple/plugin.h>
 #include <libpurple/request.h>
@@ -42,6 +43,10 @@ void room_list_add_callback(const char *user_id, const char *room_id, const char
                             const char *topic, const char *parent_id);
 void room_preview_cb(const char *user_id, const char *room_id_or_alias,
                      const char *html_body);
+void room_dashboard_info_callback(const char *user_id, const char *room_id,
+                                  const char *name, const char *topic,
+                                  uint64_t member_count, bool encrypted,
+                                  int64_t power_level, const char *alias);
 
 // PRPL Ops
 GList *matrix_status_types(PurpleAccount *account);

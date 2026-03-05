@@ -188,6 +188,11 @@ static gboolean poll_rust_channel_cb(gpointer user_data) {
       room_preview_cb(s->user_id, s->room_id_or_alias, s->html_body);
       break;
     }
+    case FFI_EVENT_ROOM_DASHBOARD_INFO: {
+      RoomDashboardInfoEventData *s = (RoomDashboardInfoEventData *)data;
+      room_dashboard_info_callback(s->user_id, s->room_id, s->name, s->topic, s->member_count, s->encrypted, s->power_level, s->alias);
+      break;
+    }
     case 33: { // PollCreationRequested
       PollCreationRequestedEventData *s = (PollCreationRequestedEventData *)data;
       poll_creation_callback(s->user_id, s->room_id);

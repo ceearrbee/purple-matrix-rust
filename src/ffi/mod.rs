@@ -388,6 +388,20 @@ pub extern "C" fn purple_matrix_rust_poll_event(out_type: *mut i32, out_data: *m
                     });
                     *out_data = Box::into_raw(event_data) as *mut c_void;
                 },
+                FfiEvent::RoomDashboardInfo { user_id, room_id, name, topic, member_count, encrypted, power_level, alias } => {
+                    *out_type = FfiEventType::RoomDashboardInfo as i32;
+                    let data = Box::new(RoomDashboardInfoEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id: into_c_ptr!(&room_id),
+                        name: into_c_ptr!(&name),
+                        topic: into_c_ptr!(&topic),
+                        member_count,
+                        encrypted,
+                        power_level,
+                        alias: into_c_ptr!(opt alias),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
                 _ => return false,
             }
             true
@@ -578,6 +592,14 @@ pub extern "C" fn purple_matrix_rust_free_event(event_type: i32, data: *mut c_vo
                     if !d.media_data.is_null() {
                         libc::free(d.media_data as *mut libc::c_void);
                     }
+                },
+                FfiEventType::RoomDashboardInfo => { // RoomDashboardInfo
+                    let d = Box::from_raw(data as *mut RoomDashboardInfoEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                    let _ = CString::from_raw(d.name as *mut c_char);
+                    let _ = CString::from_raw(d.topic as *mut c_char);
+                    if !d.alias.is_null() { let _ = CString::from_raw(d.alias as *mut c_char); }
                 },
                 _ => {} // RoomMuteUpdate, RoomTagUpdate, etc. handled by generic ignore or unused
             }

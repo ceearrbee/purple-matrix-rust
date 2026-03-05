@@ -54,7 +54,7 @@ void register_matrix_commands(PurplePlugin *plugin) {
 
 void open_room_dashboard(PurpleAccount *account, const char *room_id) {
   if (!room_id) return;
-  purple_notify_info(my_plugin, "Room Dashboard", room_id, "Dashboard UI is not yet implemented in this build.");
+  purple_matrix_rust_get_room_dashboard_info(purple_account_get_username(account), room_id);
 }
 
 void menu_action_room_settings_cb(PurpleBlistNode *node, gpointer data) {

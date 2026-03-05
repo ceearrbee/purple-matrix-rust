@@ -57,6 +57,7 @@ extern void purple_matrix_rust_accept_sas(const char *user_id, const char *targe
 extern bool purple_matrix_rust_is_room_encrypted(const char *user_id, const char *room_id);
 extern void purple_matrix_rust_debug_crypto_status(const char *user_id);
 extern void purple_matrix_rust_recover_keys_prompt(const char *user_id);
+extern void purple_matrix_rust_get_room_dashboard_info(const char *user_id, const char *room_id);
 extern void purple_matrix_rust_list_own_devices(const char *user_id);
 extern void purple_matrix_rust_bootstrap_cross_signing(const char *user_id);
 extern void purple_matrix_rust_bootstrap_cross_signing_with_password(const char *user_id, const char *password);

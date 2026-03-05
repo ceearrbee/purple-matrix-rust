@@ -68,6 +68,17 @@ typedef struct {
   char *html_data;
 } MatrixQrData;
 
+typedef struct {
+  char *user_id;
+  char *room_id;
+  char *name;
+  char *topic;
+  uint64_t member_count;
+  bool encrypted;
+  int64_t power_level;
+  char *alias;
+} MatrixDashboardData;
+
 void matrix_login(PurpleAccount *account) {
   PurpleConnection *gc = purple_account_get_connection(account);
   const char *username = purple_account_get_username(account);
@@ -600,3 +611,48 @@ void room_list_add_callback(const char *user_id, const char *room_id, const char
                             const char *topic, const char *parent_id) {
     // Implement room list discovery UI
 }
+
+static gboolean process_room_dashboard_cb(gpointer data) {
+  MatrixDashboardData *d = (MatrixDashboardData *)data;
+  PurpleAccount *account = find_matrix_account_by_id(d->user_id);
+  if (account && purple_account_get_connection(account) != NULL) {
+      GString *s = g_string_new("");
+      g_string_append_printf(s, "<b>Room ID:</b> %s<br>", d->room_id);
+      if (d->alias) g_string_append_printf(s, "<b>Canonical Alias:</b> %s<br>", d->alias);
+      g_string_append_printf(s, "<b>Members:</b> %" G_GUINT64_FORMAT "<br>", d->member_count);
+      g_string_append_printf(s, "<b>Encryption:</b> %s<br>", d->encrypted ? "Enabled 🔒" : "Disabled");
+      g_string_append_printf(s, "<b>Your Power Level:</b> %" G_GINT64_FORMAT "<br>", d->power_level);
+      if (d->topic && strlen(d->topic) > 0) {
+          char *esc_topic = g_markup_escape_text(d->topic, -1);
+          g_string_append_printf(s, "<br><b>Topic:</b><br>%s", esc_topic);
+          g_free(esc_topic);
+      }
+
+      purple_notify_formatted(purple_account_get_connection(account), "Room Dashboard", d->name, NULL, s->str, NULL, NULL);
+      g_string_free(s, TRUE);
+  }
+  g_free(d->user_id);
+  g_free(d->room_id);
+  g_free(d->name);
+  g_free(d->topic);
+  g_free(d->alias);
+  g_free(d);
+  return FALSE;
+}
+
+void room_dashboard_info_callback(const char *user_id, const char *room_id,
+                                  const char *name, const char *topic,
+                                  uint64_t member_count, bool encrypted,
+                                  int64_t power_level, const char *alias) {
+  MatrixDashboardData *d = g_new0(MatrixDashboardData, 1);
+  d->user_id = g_strdup(user_id);
+  d->room_id = g_strdup(room_id);
+  d->name = g_strdup(name);
+  d->topic = g_strdup(topic);
+  d->member_count = member_count;
+  d->encrypted = encrypted;
+  d->power_level = power_level;
+  d->alias = g_strdup(alias);
+  g_idle_add(process_room_dashboard_cb, d);
+}
+
