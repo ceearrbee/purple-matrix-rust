@@ -51,7 +51,9 @@ static void on_menu_reply_latest(gpointer d);
 static void on_menu_start_thread(gpointer d);
 static void on_menu_threads(gpointer d);
 static void on_menu_poll(gpointer d);
-static void on_menu_list_polls(gpointer d);
+static void on_menu_dash(gpointer d);
+static void handle_room_typing_cb(const char *room_id, const char *who, gboolean is_typing, gpointer data);
+
 static void on_menu_react_pick_event(gpointer d);
 static void on_menu_edit_pick_event(gpointer d);
 static void on_menu_redact_pick_event(gpointer d);
@@ -118,6 +120,18 @@ static void on_menu_react_pick_event(gpointer d) { emit_matrix_signal((PurpleCon
 static void on_menu_edit_pick_event(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-edit-pick-event"); }
 static void on_menu_redact_pick_event(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-redact-pick-event"); }
 static void on_menu_show_last_event_details(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-show-last-event-details"); }
+static void on_menu_bootstrap_crypto(gpointer d) {
+  PurpleConversation *conv = (PurpleConversation *)d;
+  PurpleAccount *account = purple_conversation_get_account(conv);
+  purple_matrix_rust_bootstrap_cross_signing(purple_account_get_username(account));
+}
+
+static void on_menu_crypto_status(gpointer d) {
+  PurpleConversation *conv = (PurpleConversation *)d;
+  PurpleAccount *account = purple_conversation_get_account(conv);
+  purple_matrix_rust_debug_crypto_status(purple_account_get_username(account));
+}
+
 static void on_menu_dash(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-show-dashboard"); }
 static void on_menu_moderate(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-moderate"); }
 static void on_menu_room_settings(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-room-settings"); }
@@ -279,6 +293,16 @@ static void imhtml_populate_popup_cb(GtkWidget *imhtml, GtkMenu *menu, gpointer 
   
   item = gtk_menu_item_new_with_label("Room Dashboard");
   g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_dash), conv);
+  gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
+  gtk_widget_show(item);
+
+  item = gtk_menu_item_new_with_label("Bootstrap Cross-Signing");
+  g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_bootstrap_crypto), conv);
+  gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
+  gtk_widget_show(item);
+
+  item = gtk_menu_item_new_with_label("E2EE Status");
+  g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_crypto_status), conv);
   gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
   gtk_widget_show(item);
 
@@ -504,21 +528,87 @@ static void handle_room_topic_cb(const char *room_id, const char *topic, gpointe
   }
 }
 
+static GHashTable *typing_users_map = NULL;
+
+typedef struct {
+    char *room_id;
+    char *who;
+} TypingTimeoutCtx;
+
+static gboolean typing_remove_timeout_cb(gpointer data) {
+    TypingTimeoutCtx *ctx = (TypingTimeoutCtx *)data;
+    handle_room_typing_cb(ctx->room_id, ctx->who, FALSE, NULL);
+    g_free(ctx->room_id);
+    g_free(ctx->who);
+    g_free(ctx);
+    return FALSE;
+}
+
 static void handle_room_typing_cb(const char *room_id, const char *who, gboolean is_typing, gpointer data) {
   PurpleAccount *account = local_find_matrix_account();
   if (!account) return;
   PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
   if (!conv) return;
+
+  if (!typing_users_map) {
+      typing_users_map = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_hash_table_destroy);
+  }
+
+  GHashTable *room_typing = g_hash_table_lookup(typing_users_map, room_id);
+  if (!room_typing) {
+      room_typing = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+      g_hash_table_insert(typing_users_map, g_strdup(room_id), room_typing);
+  }
+
+  if (is_typing) {
+      /* If there was a pending removal, cancel it */
+      guint timeout_id = GPOINTER_TO_UINT(g_hash_table_lookup(room_typing, who));
+      if (timeout_id > 1) {
+          g_source_remove(timeout_id);
+      }
+      g_hash_table_insert(room_typing, g_strdup(who), GUINT_TO_POINTER(1));
+  } else {
+      /* Debounce removal by 1 second */
+      if (data == NULL) { /* NULL data means this IS the timeout callback calling us */
+          g_hash_table_remove(room_typing, who);
+      } else {
+          TypingTimeoutCtx *ctx = g_new0(TypingTimeoutCtx, 1);
+          ctx->room_id = g_strdup(room_id);
+          ctx->who = g_strdup(who);
+          guint id = g_timeout_add(1000, typing_remove_timeout_cb, ctx);
+          g_hash_table_insert(room_typing, g_strdup(who), GUINT_TO_POINTER(id));
+          return; /* Don't update UI yet */
+      }
+  }
+
   GtkWidget *label = purple_conversation_get_data(conv, MATRIX_UI_TYPING_LABEL_KEY);
   if (label && GTK_IS_LABEL(label)) {
-    if (is_typing) {
-      char *esc_who = g_markup_escape_text(who, -1);
-      char *txt = g_strdup_printf("<span size='smaller' color='#666'><i>%s is typing...</i></span>", esc_who);
-      gtk_label_set_markup(GTK_LABEL(label), txt);
-      g_free(txt); g_free(esc_who);
-    } else {
-      gtk_label_set_text(GTK_LABEL(label), "");
-    }
+      guint size = g_hash_table_size(room_typing);
+      if (size == 0) {
+          gtk_label_set_text(GTK_LABEL(label), "");
+      } else if (size == 1) {
+          GList *keys = g_hash_table_get_keys(room_typing);
+          char *esc_who = g_markup_escape_text((const char *)keys->data, -1);
+          char *txt = g_strdup_printf("<span size='smaller' color='#666'><i>%s is typing...</i></span>", esc_who);
+          gtk_label_set_markup(GTK_LABEL(label), txt);
+          g_free(txt); g_free(esc_who);
+          g_list_free(keys);
+      } else if (size < 4) {
+          GString *s = g_string_new("<span size='smaller' color='#666'><i>");
+          GList *keys = g_hash_table_get_keys(room_typing);
+          for (GList *it = keys; it != NULL; it = it->next) {
+              char *esc = g_markup_escape_text((const char *)it->data, -1);
+              g_string_append(s, esc);
+              g_free(esc);
+              if (it->next) g_string_append(s, ", ");
+          }
+          g_string_append(s, " are typing...</i></span>");
+          gtk_label_set_markup(GTK_LABEL(label), s->str);
+          g_string_free(s, TRUE);
+          g_list_free(keys);
+      } else {
+          gtk_label_set_markup(GTK_LABEL(label), "<span size='smaller' color='#666'><i>Several people are typing...</i></span>");
+      }
   }
 }
 
