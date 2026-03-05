@@ -179,6 +179,24 @@ pub extern "C" fn purple_matrix_rust_list_own_devices(user_id: *const c_char) {
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_recover_keys_prompt(user_id: *const c_char) {
+    crate::ffi_panic_boundary!({
+        if user_id.is_null() { return; }
+        let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+
+        let uid_async = user_id_str.clone();
+        with_client(&user_id_str, move |client: Client| {
+            RUNTIME.spawn(async move {
+                // In a real implementation, we would check if a backup exists
+                // and then prompt for the recovery key via a system message or UI dialog.
+                let info = "To restore your encrypted message history, please enter your Recovery Security Key/Phrase in the account settings, or verify this session from another active device.";
+                crate::ffi::send_system_message(&uid_async, info);
+            });
+        });
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_debug_crypto_status(user_id: *const c_char) {
     crate::ffi_panic_boundary!({
         if user_id.is_null() { return; }

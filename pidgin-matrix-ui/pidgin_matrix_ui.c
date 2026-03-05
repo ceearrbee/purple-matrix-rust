@@ -65,6 +65,45 @@ static void on_menu_mark_unread(gpointer d);
 static void on_menu_mark_read(gpointer d);
 static void on_menu_send_location(gpointer d);
 
+static void on_menu_jump_to_parent(gpointer d) {
+  PurpleConversation *conv = (PurpleConversation *)d;
+  const char *name = purple_conversation_get_name(conv);
+  char *pipe = strchr(name, '|');
+  if (!pipe) return;
+
+  char *parent_id = g_strndup(name, pipe - name);
+  const char *thread_id = pipe + 1;
+  PurpleAccount *account = purple_conversation_get_account(conv);
+
+  PurpleConversation *pconv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, parent_id, account);
+  if (!pconv) {
+      PurpleConnection *gc = purple_account_get_connection(account);
+      if (gc) {
+          GHashTable *comps = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+          g_hash_table_insert(comps, g_strdup("room_id"), g_strdup(parent_id));
+          serv_join_chat(gc, comps);
+          g_hash_table_destroy(comps);
+          pconv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, parent_id, account);
+      }
+  }
+
+  if (pconv) {
+      purple_conversation_present(pconv);
+      PidginConversation *gtkconv = PIDGIN_CONVERSATION(pconv);
+      if (gtkconv && gtkconv->imhtml) {
+          GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gtkconv->imhtml));
+          char *mark_name = g_strdup_printf("mxid_%s", thread_id);
+          GtkTextMark *mark = gtk_text_buffer_get_mark(buffer, mark_name);
+          if (mark) {
+              gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(gtkconv->imhtml), mark, 0.0, TRUE, 0.5, 0.0);
+              /* Also flash the line if possible, but scrolling is most important */
+          }
+          g_free(mark_name);
+      }
+  }
+  g_free(parent_id);
+}
+
 static void on_menu_reply(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-reply"); }
 static void on_menu_reply_latest(gpointer d) {
   PurpleConversation *conv = (PurpleConversation *)d;
@@ -242,6 +281,13 @@ static void imhtml_populate_popup_cb(GtkWidget *imhtml, GtkMenu *menu, gpointer 
   g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_dash), conv);
   gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
   gtk_widget_show(item);
+
+  if (strchr(purple_conversation_get_name(conv), '|')) {
+    item = gtk_menu_item_new_with_label("Jump to Parent Message");
+    g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_jump_to_parent), conv);
+    gtk_menu_shell_append(GTK_MENU_SHELL(matrix_menu), item);
+    gtk_widget_show(item);
+  }
 }
 
 static void handle_message_edited_cb(const char *room_id, const char *event_id, const char *new_msg, gpointer data) {

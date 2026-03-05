@@ -1,6 +1,37 @@
-use matrix_sdk::encryption::verification::SasVerification;
+use matrix_sdk::encryption::verification::{SasVerification, VerificationRequest};
 use matrix_sdk::Client;
 use crate::ffi::{send_event, events::FfiEvent};
+
+pub async fn handle_verification_request_with_state(request: VerificationRequest, client: Client) {
+    let user_id = client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
+    let target_user_id = request.other_user_id().to_string();
+    let flow_id = request.flow_id().to_string();
+
+    log::info!("Verification request from {} (flow: {})", target_user_id, flow_id);
+
+    let event = FfiEvent::SasRequest {
+        user_id: user_id.clone(),
+        target_user_id: target_user_id.clone(),
+        flow_id: flow_id.clone(),
+    };
+    send_event(event);
+
+    // Monitor for transition to SAS
+    use futures_util::StreamExt;
+    use matrix_sdk::encryption::verification::VerificationRequestState;
+    let mut state_stream = request.changes();
+    while let Some(state) = state_stream.next().await {
+        if let VerificationRequestState::Transitioned { verification } = state {
+            if let Some(sas) = verification.sas() {
+                handle_sas_request(sas, client.clone()).await;
+                break;
+            }
+        }
+        if request.is_cancelled() || request.is_done() {
+            break;
+        }
+    }
+}
 
 pub async fn handle_sas_request(sas: SasVerification, client: Client) {
     let user_id = client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default();

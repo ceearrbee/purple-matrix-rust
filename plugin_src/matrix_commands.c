@@ -402,7 +402,9 @@ void matrix_ui_action_server_info(const char *room_id) {
   purple_matrix_rust_get_server_versions(purple_account_get_username(find_matrix_account()));
 }
 void matrix_ui_action_search_stickers(const char *room_id) {}
-void matrix_ui_action_recover_keys_prompt(const char *room_id) {}
+void matrix_ui_action_recover_keys_prompt(const char *room_id) {
+  purple_matrix_rust_recover_keys_prompt(purple_account_get_username(find_matrix_account()));
+}
 void matrix_ui_action_export_keys_prompt(const char *room_id) {}
 void matrix_ui_action_set_avatar_prompt(const char *room_id) {}
 void matrix_ui_action_room_tag_prompt(const char *room_id) {}

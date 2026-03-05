@@ -1,5 +1,6 @@
 use matrix_sdk::Client;
 use crate::ffi::{send_event, events::FfiEvent};
+use crate::verification_logic::handle_verification_request_with_state;
 
 pub async fn run_sync_loop(client: Client) {
     let client_for_sync = client.clone();
@@ -117,7 +118,27 @@ pub async fn run_sync_loop(client: Client) {
     client_for_sync.add_event_handler(crate::handlers::polls::handle_poll_start);
     client_for_sync.add_event_handler(crate::handlers::polls::handle_poll_response);
 
-    // 3. Start Sync
+    // 3. Handle Verifications
+    client_for_sync.add_event_handler(|ev: matrix_sdk::ruma::events::key::verification::request::ToDeviceKeyVerificationRequestEvent, client: Client| async move {
+        let flow_id = ev.content.transaction_id.to_string();
+        let sender = ev.sender.clone();
+        if let Some(request) = client.encryption().get_verification_request(&sender, &flow_id).await {
+             handle_verification_request_with_state(request, client).await;
+        }
+    });
+
+    client_for_sync.add_event_handler(|ev: matrix_sdk::ruma::events::room::message::SyncRoomMessageEvent, room: matrix_sdk::Room| async move {
+        if let matrix_sdk::ruma::events::room::message::SyncRoomMessageEvent::Original(orig) = ev {
+            if let matrix_sdk::ruma::events::room::message::MessageType::VerificationRequest(_) = &orig.content.msgtype {
+                let client = room.client();
+                if let Some(request) = client.encryption().get_verification_request(&orig.sender, &orig.event_id).await {
+                    handle_verification_request_with_state(request, client.clone()).await;
+                }
+            }
+        }
+    });
+
+    // 4. Start Sync
     log::info!("Starting Matrix sync loop...");
     let sync_settings = matrix_sdk::config::SyncSettings::default();
     if let Err(e) = client_for_sync.sync(sync_settings).await {
