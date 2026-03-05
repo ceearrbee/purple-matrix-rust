@@ -506,7 +506,7 @@ fn report_login_failure(msg: String) {
     let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
 }
 
-fn start_sso_flow(client: Client) {
+pub(crate) fn start_sso_flow(client: Client) {
     let rt = tokio::runtime::Handle::current();
         
     rt.spawn_blocking(move || {

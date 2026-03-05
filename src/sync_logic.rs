@@ -7,68 +7,81 @@ pub async fn run_sync_loop(client: Client) {
     let rooms = client.joined_rooms();
     for room in rooms {
         let room_id = room.room_id().to_string();
-        log::info!("Sync Loop: Recovery for room {}", room_id);
+        let client_clone = client.clone();
+        let local_user_id = client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
 
-        // Warm member cache and get display names/avatars
-        use matrix_sdk_base::RoomMemberships;
-        match room.members(RoomMemberships::JOIN).await {
-            Ok(members) => {
+        // Load members in background to avoid blocking sync start
+        let room_for_members = room.clone();
+        let client_for_members = client.clone();
+        let local_user_id_for_members = local_user_id.clone();
+        crate::RUNTIME.spawn(async move {
+            use matrix_sdk_base::RoomMemberships;
+            if let Ok(members) = room_for_members.members(RoomMemberships::JOIN).await {
                 for member in members {
                     let user_id = member.user_id().to_string();
                     let display_name = member.display_name().map(|d| d.to_string()).unwrap_or_else(|| user_id.clone());
                     
-                    // Download avatar if available
                     let mut local_avatar = String::new();
                     if let Some(mxc) = member.avatar_url() {
-                        if let Some(path) = crate::media_helper::download_avatar(&client, &mxc.to_owned(), &user_id).await {
+                        if let Some(path) = crate::media_helper::download_avatar(&client_for_members, &mxc.to_owned(), &user_id).await {
                             local_avatar = path;
                         }
                     }
 
-                    // Dispatch UpdateBuddy
-                    let ffi_ev = crate::ffi::FfiEvent::UpdateBuddy {
-                        user_id: client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default(),
+                    let _ = crate::ffi::EVENTS_CHANNEL.0.send(crate::ffi::FfiEvent::UpdateBuddy {
+                        user_id: local_user_id_for_members.clone(),
                         target_user_id: user_id.clone(),
                         alias: display_name.clone(),
                         avatar_url: local_avatar.clone(),
-                    };
-                    let _ = crate::ffi::EVENTS_CHANNEL.0.send(ffi_ev);
+                    });
 
-                    // Update Chat User
-                    let chat_user_ev = crate::ffi::FfiEvent::ChatUser {
-                        user_id: client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default(),
+                    let _ = crate::ffi::EVENTS_CHANNEL.0.send(crate::ffi::FfiEvent::ChatUser {
+                        user_id: local_user_id_for_members.clone(),
                         room_id: room_id.clone(),
                         member_id: user_id,
                         add: true,
                         alias: Some(display_name),
                         avatar_path: if local_avatar.is_empty() { None } else { Some(local_avatar) },
-                    };
-                    let _ = crate::ffi::EVENTS_CHANNEL.0.send(chat_user_ev);
+                    });
                 }
             }
-            Err(e) => log::warn!("Failed to fetch members for {}: {:?}", room_id, e),
-        }
+        });
 
-        // Fetch Topic
-        if let Some(topic_ev) = room.get_state_event_static::<matrix_sdk::ruma::events::room::topic::RoomTopicEventContent>().await.ok().flatten() {
-            if let Ok(content) = topic_ev.deserialize() {
-                use matrix_sdk::deserialized_responses::SyncOrStrippedState;
-                let topic_str = match content {
-                    SyncOrStrippedState::Sync(s) => s.as_original().map(|o| o.content.topic.clone()),
-                    SyncOrStrippedState::Stripped(s) => s.content.topic.clone(),
-                };
-                
-                if let Some(t) = topic_str {
-                    let ffi_ev = crate::ffi::FfiEvent::ChatTopic {
-                        user_id: client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default(),
-                        room_id: room_id.clone(),
-                        topic: t,
-                        sender: "System".to_string(),
+        // Fetch Topic (can also be backgrounded if needed, but it's usually 1 event)
+        let room_id_for_topic = room.room_id().to_string();
+        let room_for_topic = room.clone();
+        let local_user_id_for_topic = local_user_id.clone();
+        crate::RUNTIME.spawn(async move {
+            if let Some(topic_ev) = room_for_topic.get_state_event_static::<matrix_sdk::ruma::events::room::topic::RoomTopicEventContent>().await.ok().flatten() {
+                if let Ok(content) = topic_ev.deserialize() {
+                    use matrix_sdk::deserialized_responses::SyncOrStrippedState;
+                    let topic_str = match content {
+                        SyncOrStrippedState::Sync(s) => s.as_original().map(|o| o.content.topic.clone()),
+                        SyncOrStrippedState::Stripped(s) => s.content.topic.clone(),
                     };
-                    let _ = crate::ffi::EVENTS_CHANNEL.0.send(ffi_ev);
+                    
+                    if let Some(t) = topic_str {
+                        let _ = crate::ffi::EVENTS_CHANNEL.0.send(crate::ffi::FfiEvent::ChatTopic {
+                            user_id: local_user_id_for_topic,
+                            room_id: room_id_for_topic,
+                            topic: t,
+                            sender: "System".to_string(),
+                        });
+                    }
                 }
             }
-        }
+        });
+    }
+
+    // Handle Invites from initial state
+    for room in client.invited_rooms() {
+        let room_id = room.room_id().to_string();
+        let me = client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(crate::ffi::FfiEvent::Invite {
+            user_id: me,
+            room_id,
+            inviter: "Unknown".to_string(),
+        });
     }
 
     // 2. Register Event Handlers
@@ -80,6 +93,8 @@ pub async fn run_sync_loop(client: Client) {
     client_for_sync.add_event_handler(crate::handlers::typing::handle_typing);
     client_for_sync.add_event_handler(crate::handlers::reactions::handle_reaction);
     client_for_sync.add_event_handler(crate::handlers::receipts::handle_receipt);
+    client_for_sync.add_event_handler(crate::handlers::polls::handle_poll_start);
+    client_for_sync.add_event_handler(crate::handlers::polls::handle_poll_response);
 
     // 3. Start Sync
     log::info!("Starting Matrix sync loop...");
@@ -175,7 +190,7 @@ async fn process_sync_event_for_history(client: &Client, room: &matrix_sdk::Room
         }
 
         if !body.is_empty() {
-            let display_body = format!("{} <font color='#fdfdfd' size='1'>_MXID:[{}]</font>", body, event_id);
+            let display_body = format!("{} <font color='#fdfdfd' size='1'>_MXID:[{}]</font>", body, crate::escape_html(&event_id));
             
             let ffi_ev = crate::ffi::FfiEvent::MessageReceived {
                 user_id: me,
@@ -186,6 +201,7 @@ async fn process_sync_event_for_history(client: &Client, room: &matrix_sdk::Room
                 event_id,
                 timestamp,
                 encrypted: is_encrypted,
+                is_system: false,
             };
             let _ = crate::ffi::EVENTS_CHANNEL.0.send(ffi_ev);
         }

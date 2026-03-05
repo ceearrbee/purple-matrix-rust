@@ -132,7 +132,7 @@ pub extern "C" fn purple_matrix_rust_list_active_polls(user_id: *const c_char, r
                                         let event = crate::ffi::FfiEvent::PollList {
                                             user_id: user_id_str_clone.clone(),
                                             room_id: room_id_str.clone(),
-                                            event_id: Some(event.event_id().unwrap().to_string()),
+                                            event_id: event.event_id().map(|id| id.to_string()),
                                             question: Some(question.to_string()),
                                             sender: Some(o.sender.to_string()),
                                             options_str: Some(options_str),

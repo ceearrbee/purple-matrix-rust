@@ -25,7 +25,7 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
             sender_id.to_string()
         };
         
-        let pidgin_sender = sender_display;
+        let pidgin_sender = crate::escape_html(&sender_display);
 
         // 0. Handle Edits (Replacements)
         let mut is_edit = false;
@@ -94,7 +94,7 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
                             p_sender_id.to_string()
                         };
 
-                        quoted = format!("<b>{}</b>: {}", p_sender_display, parent_body);
+                        quoted = format!("<b>{}</b>: {}", crate::escape_html(&p_sender_display), crate::sanitize_untrusted_html(&parent_body));
                     }
                 }
             }
@@ -110,7 +110,7 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
         };
         
         // Final Marker format: _MXID:[event_id]
-        let display_body = format!("{} <font color='#fdfdfd' size='1'>_MXID:[{}]</font>", body, ev.event_id);
+        let display_body = format!("{} <font color='#fdfdfd' size='1'>_MXID:[{}]</font>", body, crate::escape_html(ev.event_id.as_str()));
 
         let ffi_ev = crate::ffi::FfiEvent::MessageReceived {
             user_id: local_user_id,
@@ -121,6 +121,7 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
             event_id: ev.event_id.to_string(),
             timestamp,
             encrypted: is_encrypted,
+            is_system: false,
         };
         let _ = crate::ffi::EVENTS_CHANNEL.0.send(ffi_ev);
     }
@@ -181,7 +182,7 @@ pub async fn handle_encrypted(event: matrix_sdk::ruma::serde::Raw<matrix_sdk::ru
              sender_id.to_string()
          };
          
-         let pidgin_sender = sender_display;
+         let pidgin_sender = crate::escape_html(&sender_display);
 
          let room_id = room.room_id().as_str();
          let timestamp: u64 = ev.origin_server_ts().0.into();
@@ -197,6 +198,7 @@ pub async fn handle_encrypted(event: matrix_sdk::ruma::serde::Raw<matrix_sdk::ru
              event_id: ev.event_id().to_string(),
              timestamp,
              encrypted: true,
+             is_system: true,
          };
          let _ = crate::ffi::EVENTS_CHANNEL.0.send(ffi_ev);
      }
@@ -235,6 +237,7 @@ pub async fn handle_redaction(event: matrix_sdk::ruma::events::room::redaction::
             event_id: ev.event_id.to_string(),
             timestamp: ev.origin_server_ts.0.into(),
             encrypted: false,
+            is_system: true,
         };
         let _ = crate::ffi::EVENTS_CHANNEL.0.send(ffi_ev);
     }

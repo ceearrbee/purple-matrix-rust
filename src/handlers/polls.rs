@@ -7,8 +7,6 @@ pub async fn handle_poll_start(event: matrix_sdk::ruma::events::poll::start::Syn
         let local_user_id = me.as_str().to_string();
         let sender = ev.sender.as_str();
         
-        if sender == local_user_id { return; }
-
         let room_id = room.room_id().as_str();
         let timestamp: u64 = ev.origin_server_ts.0.into();
         
@@ -25,7 +23,16 @@ pub async fn handle_poll_start(event: matrix_sdk::ruma::events::poll::start::Syn
             event_id: ev.event_id.to_string(),
             timestamp,
             encrypted: false,
+            is_system: false,
         };
         let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+    }
+}
+
+pub async fn handle_poll_response(event: matrix_sdk::ruma::events::poll::response::SyncPollResponseEvent, room: Room) {
+    if let matrix_sdk::ruma::events::poll::response::SyncPollResponseEvent::Original(ev) = event {
+        let sender = ev.sender.as_str();
+        let poll_id = ev.content.relates_to.event_id.as_str();
+        log::info!("User {} voted in poll {}", sender, poll_id);
     }
 }

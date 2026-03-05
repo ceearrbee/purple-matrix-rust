@@ -32,22 +32,7 @@ pub fn send_system_message(user_id: &str, msg: &str) {
 #[repr(C)]
 pub struct MatrixClientHandle;
 
-#[no_mangle]
-pub extern "C" fn purple_matrix_rust_init() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("info,matrix_sdk=debug,reqwest=debug,matrix_sdk_crypto=debug")
-        .with_writer(std::io::stderr)
-        .try_init();
-    
-    log::info!("Rust backend initialized (tracing_subscriber configured)");
-    
-    RUNTIME.spawn(async {
-        media_helper::cleanup_media_files().await;
-    });
-}
-
-pub fn escape_html(input: &str) -> String {
-    let mut escaped = String::with_capacity(input.len());
+pub fn escape_html(input: &str) -> String {    let mut escaped = String::with_capacity(input.len());
     for c in input.chars() {
         match c {
             '&' => escaped.push_str("&amp;"),
@@ -67,15 +52,16 @@ pub fn sanitize_untrusted_html(input: &str) -> String {
 }
 
 pub(crate) fn sanitize_string(s: &str) -> String {
-    // We allow emojis (Plane 1 and above) but still filter out control characters if needed.
-    // For now, let's just return the string but ensure it doesn't have null bytes which break CStrings.
-    let res: String = s.chars()
+    let filtered: String = s.chars()
         .filter(|&c| c != '\0')
         .collect();
-    if res.is_empty() {
+    
+    if filtered.is_empty() {
         return " ".to_string();
     }
-    res
+
+    // Prevent marker spoofing by breaking the specific marker format
+    filtered.replace("_MXID:[", "_MX_ID:[")
 }
 
 
@@ -224,34 +210,33 @@ mod tests {
         let c1 = matrix_sdk::Client::builder().homeserver_url("https://example.com").build().await.expect("Failed to build client 1");
         let c2 = matrix_sdk::Client::builder().homeserver_url("https://example.com").build().await.expect("Failed to build client 2");
         
-        crate::CLIENTS.insert("user1".to_string(), c1);
-        crate::CLIENTS.insert("user2".to_string(), c2);
-        
+        crate::ffi::CLIENTS.insert("user1".to_string(), c1);
+        crate::ffi::CLIENTS.insert("user2".to_string(), c2);
+
         let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut handles = vec![];
-        
+
         for _ in 0..100 {
             let counter_clone = counter.clone();
             handles.push(tokio::spawn(async move {
-                crate::with_client("user1", |client| {
+                crate::ffi::with_client("user1", |client: matrix_sdk::Client| {
                     assert_eq!(client.homeserver().as_str(), "https://example.com/");
                     counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 });
             }));
             let counter_clone = counter.clone();
             handles.push(tokio::spawn(async move {
-                crate::with_client("user2", |client| {
+                crate::ffi::with_client("user2", |client: matrix_sdk::Client| {
                     assert_eq!(client.homeserver().as_str(), "https://example.com/");
                     counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 });
             }));
             handles.push(tokio::spawn(async move {
-                crate::with_client("user_missing", |_| {
+                crate::ffi::with_client("user_missing", |_client: matrix_sdk::Client| {
                     panic!("Should not be called");
                 });
             }));
-        }
-        
+        }        
         for h in handles {
             let _ = h.await;
         }

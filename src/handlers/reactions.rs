@@ -81,6 +81,7 @@ pub async fn handle_sticker(event: matrix_sdk::ruma::events::sticker::SyncSticke
             event_id: ev.event_id.to_string(),
             timestamp,
             encrypted: is_encrypted,
+            is_system: false,
         };
         let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
     }

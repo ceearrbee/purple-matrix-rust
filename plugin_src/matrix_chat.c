@@ -235,8 +235,11 @@ static gboolean process_msg_cb(gpointer data) {
     target_id = virtual_id;
   }
 
-  if (g_str_has_prefix(d->message, "[System] ")) {
-    const char *sys_msg = d->message + 9;
+  if (d->is_system) {
+    const char *sys_msg = d->message;
+    if (g_str_has_prefix(d->message, "[System] ")) {
+        sys_msg += 9;
+    }
     PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, target_id, account);
     if (conv) {
       purple_conversation_write(conv, "", sys_msg, PURPLE_MESSAGE_SYSTEM, d->timestamp / 1000);
@@ -281,7 +284,7 @@ cleanup:
 
 void msg_callback(const char *user_id, const char *sender, const char *msg,
                   const char *room_id, const char *thread_root_id,
-                  const char *event_id, guint64 timestamp, bool encrypted) {
+                  const char *event_id, guint64 timestamp, bool encrypted, bool is_system) {
   purple_debug_info("matrix", "msg_callback: sender=%s msg=%s\n", sender, msg);
   MatrixMsgData *d = g_new0(MatrixMsgData, 1);
   d->user_id = g_strdup(user_id);
@@ -294,6 +297,7 @@ void msg_callback(const char *user_id, const char *sender, const char *msg,
     d->event_id = g_strdup(event_id);
   d->timestamp = timestamp;
   d->encrypted = encrypted;
+  d->is_system = is_system;
   g_idle_add(process_msg_cb, d);
 }
 
@@ -303,8 +307,11 @@ static gboolean process_typing_cb(gpointer data) {
   if (account && purple_account_get_connection(account) != NULL) {
     PurpleConnection *gc = purple_account_get_connection(account);
     if (gc) {
-      serv_got_typing(gc, d->who, 0,
-                      d->is_typing ? PURPLE_TYPING : PURPLE_NOT_TYPING);
+      PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, d->room_id, account);
+      if (conv && purple_conversation_get_type(conv) == PURPLE_CONV_TYPE_IM) {
+        serv_got_typing(gc, d->room_id, 0,
+                        d->is_typing ? PURPLE_TYPING : PURPLE_NOT_TYPING);
+      }
       purple_signal_emit(my_plugin, "matrix-ui-room-typing", d->room_id, d->who,
                          d->is_typing);
     }
@@ -409,4 +416,93 @@ void read_receipt_callback(const char *user_id, const char *room_id,
   d->who = g_strdup(who);
   d->event_id = g_strdup(event_id);
   g_idle_add(process_read_receipt_cb, d);
+}
+
+void matrix_join_chat(PurpleConnection *gc, GHashTable *data) {
+  const char *room_id = g_hash_table_lookup(data, "room_id");
+  if (!room_id) room_id = g_hash_table_lookup(data, "room");
+  if (room_id) {
+    purple_matrix_rust_join_room(purple_account_get_username(purple_connection_get_account(gc)), room_id);
+  }
+}
+
+void matrix_reject_chat(PurpleConnection *gc, GHashTable *data) {
+  const char *room_id = g_hash_table_lookup(data, "room_id");
+  if (!room_id) room_id = g_hash_table_lookup(data, "room");
+  if (room_id) {
+    purple_matrix_rust_leave_room(purple_account_get_username(purple_connection_get_account(gc)), room_id);
+  }
+}
+
+void matrix_chat_invite(PurpleConnection *gc, int id, const char *message, const char *name) {
+  PurpleConversation *conv = purple_find_chat(gc, id);
+  if (conv) {
+    purple_matrix_rust_invite_user(purple_account_get_username(purple_connection_get_account(gc)), purple_conversation_get_name(conv), name);
+  }
+}
+
+void matrix_chat_leave(PurpleConnection *gc, int id) {
+  PurpleConversation *conv = purple_find_chat(gc, id);
+  if (conv) {
+    purple_matrix_rust_leave_room(purple_account_get_username(purple_connection_get_account(gc)), purple_conversation_get_name(conv));
+  }
+}
+
+void matrix_chat_whisper(PurpleConnection *gc, int id, const char *who, const char *message) {
+  // Not supported by matrix
+}
+
+void matrix_set_chat_topic(PurpleConnection *gc, int id, const char *topic) {
+  PurpleConversation *conv = purple_find_chat(gc, id);
+  if (conv) {
+    purple_matrix_rust_set_room_topic(purple_account_get_username(purple_connection_get_account(gc)), purple_conversation_get_name(conv), topic);
+  }
+}
+
+void matrix_send_file(PurpleConnection *gc, const char *who, const char *filename) {
+  purple_matrix_rust_send_file(purple_account_get_username(purple_connection_get_account(gc)), who, filename);
+}
+
+GList *matrix_chat_info(PurpleConnection *gc) {
+  GList *m = NULL;
+  struct proto_chat_entry *pce = g_new0(struct proto_chat_entry, 1);
+  pce->label = "_Room ID or Alias:";
+  pce->identifier = "room_id";
+  pce->required = TRUE;
+  m = g_list_append(m, pce);
+  return m;
+}
+
+GHashTable *matrix_chat_info_defaults(PurpleConnection *gc, const char *chat_name) {
+  GHashTable *defaults = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, g_free);
+  if (chat_name) {
+    g_hash_table_insert(defaults, "room_id", g_strdup(chat_name));
+  }
+  return defaults;
+}
+
+static void matrix_create_poll_cb(void *user_data, PurpleRequestFields *fields) {
+  char *room_id = (char *)user_data;
+  PurpleAccount *account = find_matrix_account();
+  const char *question = purple_request_fields_get_string(fields, "question");
+  const char *opt1 = purple_request_fields_get_string(fields, "opt1");
+  const char *opt2 = purple_request_fields_get_string(fields, "opt2");
+  
+  if (question && *question && opt1 && *opt1 && opt2 && *opt2) {
+    const char *options[2] = {opt1, opt2};
+    purple_matrix_rust_create_poll(purple_account_get_username(account), room_id, question, options, 2);
+  }
+  g_free(room_id);
+}
+
+void poll_creation_callback(const char *user_id, const char *room_id) {
+  PurpleRequestFields *fields = purple_request_fields_new();
+  PurpleRequestFieldGroup *group = purple_request_field_group_new(NULL);
+  purple_request_fields_add_group(fields, group);
+
+  purple_request_field_group_add_field(group, purple_request_field_string_new("question", "_Question", NULL, FALSE));
+  purple_request_field_group_add_field(group, purple_request_field_string_new("opt1", "_Option 1", NULL, FALSE));
+  purple_request_field_group_add_field(group, purple_request_field_string_new("opt2", "_Option 2", NULL, FALSE));
+
+  purple_request_fields(my_plugin, "Create Poll", NULL, "Enter poll details", fields, "_Create", G_CALLBACK(matrix_create_poll_cb), "_Cancel", G_CALLBACK(g_free), find_matrix_account(), NULL, NULL, g_strdup(room_id));
 }

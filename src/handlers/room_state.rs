@@ -13,7 +13,7 @@ pub async fn handle_room_topic(event: SyncRoomTopicEvent, room: Room) {
         let Some(me) = client.user_id() else { return; };
         let local_user_id = me.as_str().to_string();
 
-        let body = format!("[System] {} set the topic to: {}", sender, topic);
+        let body = format!("[System] {} set the topic to: {}", crate::escape_html(sender), crate::escape_html(topic));
 
         // 1. Dispatch Message
         let msg_event = crate::ffi::FfiEvent::MessageReceived {
@@ -25,6 +25,7 @@ pub async fn handle_room_topic(event: SyncRoomTopicEvent, room: Room) {
             event_id: "".to_string(),
             timestamp,
             encrypted: false,
+            is_system: true,
         };
         let _ = crate::ffi::EVENTS_CHANNEL.0.send(msg_event);
 
@@ -51,16 +52,17 @@ pub async fn handle_room_member(event: SyncRoomMemberEvent, room: Room) {
         let local_user_id = me.as_str().to_string();
 
         let body = match ev.content.membership {
-            MembershipState::Join => format!("[System] {} joined the room.", target),
-            MembershipState::Leave => format!("[System] {} left the room.", target),
-            MembershipState::Invite => format!("[System] {} invited {} to the room.", sender, target),
-            MembershipState::Ban => format!("[System] {} was banned by {}.", target, sender),
-            _ => format!("[System] Membership change for {}: {:?}", target, ev.content.membership),
+            MembershipState::Join => format!("[System] {} joined the room.", crate::escape_html(target)),
+            MembershipState::Leave => format!("[System] {} left the room.", crate::escape_html(target)),
+            MembershipState::Invite => format!("[System] {} invited {} to the room.", crate::escape_html(sender), crate::escape_html(target)),
+            MembershipState::Ban => format!("[System] {} was banned by {}.", crate::escape_html(target), crate::escape_html(sender)),
+            _ => format!("[System] Membership change for {}: {:?}", crate::escape_html(target), ev.content.membership),
         };
 
         // Update buddy info (display name and avatar)
         if ev.content.membership == MembershipState::Join {
-            let display_name = ev.content.displayname.clone().unwrap_or_else(|| target.to_string());
+            let display_name_raw = ev.content.displayname.clone().unwrap_or_else(|| target.to_string());
+            let display_name = crate::escape_html(&display_name_raw);
             
             // Handle Avatar Download
             let avatar_path = if let Some(mxc_url) = &ev.content.avatar_url {
@@ -120,13 +122,13 @@ pub async fn handle_room_member(event: SyncRoomMemberEvent, room: Room) {
             event_id: "".to_string(),
             timestamp,
             encrypted: false,
+            is_system: true,
         };
         let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
     }
 }
 
 pub async fn handle_stripped_member(_event: matrix_sdk::ruma::events::room::member::StrippedRoomMemberEvent, _room: Room) {
-    // Handling for invited state
 }
 
 pub async fn handle_tombstone(event: SyncRoomTombstoneEvent, room: Room) {
@@ -138,7 +140,7 @@ pub async fn handle_tombstone(event: SyncRoomTombstoneEvent, room: Room) {
         let Some(me) = client.user_id() else { return; };
         let local_user_id = me.as_str().to_string();
 
-        let body = format!("[System] This room has been upgraded. New room ID: {}", new_room);
+        let body = format!("[System] This room has been upgraded. New room ID: {}", crate::escape_html(new_room));
 
         let event = crate::ffi::FfiEvent::MessageReceived {
             user_id: local_user_id,
@@ -149,6 +151,7 @@ pub async fn handle_tombstone(event: SyncRoomTombstoneEvent, room: Room) {
             event_id: "".to_string(),
             timestamp,
             encrypted: false,
+            is_system: true,
         };
         let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
     }

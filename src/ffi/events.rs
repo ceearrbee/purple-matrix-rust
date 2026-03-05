@@ -34,6 +34,7 @@ pub struct CMessageReceived {
     pub event_id: *mut c_char,
     pub timestamp: u64,
     pub encrypted: bool,
+    pub is_system: bool,
 }
 
 #[repr(C)]
@@ -255,6 +256,12 @@ pub struct CReactionsChanged {
     pub reactions_text: *mut c_char,
 }
 
+#[repr(C)]
+pub struct CPollCreationRequested {
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+}
+
 pub enum FfiEvent {
     MessageReceived {
         user_id: String,
@@ -265,6 +272,7 @@ pub enum FfiEvent {
         event_id: String,
         timestamp: u64,
         encrypted: bool,
+        is_system: bool,
     },
     Typing {
         user_id: String,
@@ -431,5 +439,9 @@ pub enum FfiEvent {
         room_id: String,
         event_id: String,
         reactions_text: String,
+    },
+    PollCreationRequested {
+        user_id: String,
+        room_id: String,
     }
 }

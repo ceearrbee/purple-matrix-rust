@@ -171,7 +171,7 @@ static void identify_event_at_iter(PurpleConversation *conv, GtkTextIter *iter) 
 
   const char *markers[] = {"_MXID:[", "_MX_ID:", "[MXID:"};
   for (int m=0; m<3; m++) {
-    const char *marker_start = strstr(clean_line, markers[m]);
+    const char *marker_start = g_strrstr(clean_line, markers[m]);
     if (marker_start) {
         const char *id_start = marker_start + strlen(markers[m]);
         char *ev_id = g_strdup(id_start);
@@ -324,6 +324,15 @@ static void handle_message_edited_cb(const char *room_id, const char *event_id, 
         gtk_text_iter_set_line_offset(&line_start, 0);
         if (!gtk_text_iter_ends_line(&line_end)) gtk_text_iter_forward_to_line_end(&line_end);
         
+        /* Find colon after sender to preserve prefix (timestamp/sender) */
+        GtkTextIter body_start = line_start;
+        GtkTextIter paren_end;
+        if (gtk_text_iter_forward_search(&body_start, ") ", 0, &paren_end, &body_start, &start)) {
+            if (gtk_text_iter_forward_search(&body_start, ": ", 0, &body_start, &body_start, &start)) {
+                line_start = body_start;
+            }
+        }
+
         char *replacement_html = g_strdup_printf("%s <font color='#fdfdfd' size='1'>%s</font>", new_msg, search_str);
         gtk_text_buffer_delete(buffer, &line_start, &line_end);
         gtk_imhtml_insert_html_at_iter(GTK_IMHTML(gtkconv->imhtml), replacement_html, 0, &line_start);

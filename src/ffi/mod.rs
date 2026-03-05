@@ -60,6 +60,9 @@ pub extern "C" fn purple_matrix_rust_init() {
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
             .try_init();
         log::info!("Matrix Rust FFI initialized");
+        crate::RUNTIME.spawn(async {
+            crate::media_helper::cleanup_media_files().await;
+        });
     })
 }
 
@@ -80,7 +83,7 @@ pub extern "C" fn purple_matrix_rust_poll_event(
     ffi_panic_boundary!({
         if let Ok(event) = EVENTS_CHANNEL.1.try_recv() {
             let (ev_type, ptr) = match event {
-                FfiEvent::MessageReceived { user_id, sender, msg, room_id, thread_root_id, event_id, timestamp, encrypted } => (
+                FfiEvent::MessageReceived { user_id, sender, msg, room_id, thread_root_id, event_id, timestamp, encrypted, is_system } => (
                     1,
                     Box::into_raw(Box::new(CMessageReceived {
                         user_id: to_c_char(&user_id),
@@ -91,6 +94,7 @@ pub extern "C" fn purple_matrix_rust_poll_event(
                         event_id: to_c_char(&event_id),
                         timestamp,
                         encrypted,
+                        is_system,
                     })) as *mut c_void
                 ),
                 FfiEvent::ReactionsChanged { user_id, room_id, event_id, reactions_text } => (
@@ -100,6 +104,13 @@ pub extern "C" fn purple_matrix_rust_poll_event(
                         room_id: to_c_char(&room_id),
                         event_id: to_c_char(&event_id),
                         reactions_text: to_c_char(&reactions_text),
+                    })) as *mut c_void
+                ),
+                FfiEvent::PollCreationRequested { user_id, room_id } => (
+                    33,
+                    Box::into_raw(Box::new(CPollCreationRequested {
+                        user_id: to_c_char(&user_id),
+                        room_id: to_c_char(&room_id),
                     })) as *mut c_void
                 ),
                 FfiEvent::Typing { user_id, room_id, who, is_typing } => (
@@ -362,6 +373,7 @@ pub fn send_system_message(user_id: &str, msg: &str) {
             event_id: "".to_string(),
             timestamp: 0,
             encrypted: false,
+            is_system: true,
         };
         let _ = EVENTS_CHANNEL.0.send(event);
     })
@@ -378,6 +390,7 @@ pub fn send_system_message_to_room(user_id: &str, room_id: &str, msg: &str) {
             event_id: "".to_string(),
             timestamp: 0,
             encrypted: false,
+            is_system: true,
         };
         let _ = EVENTS_CHANNEL.0.send(event);
     })

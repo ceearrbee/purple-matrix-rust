@@ -9,13 +9,15 @@ int matrix_send_chat(PurpleConnection *gc, int id, const char *message, PurpleMe
 unsigned int matrix_send_typing(PurpleConnection *gc, const char *name, PurpleTypingState state);
 
 // Callbacks from Rust
-void msg_callback(const char *user_id, const char *sender, const char *msg, const char *room_id, const char *thread_root_id, const char *event_id, guint64 timestamp, bool encrypted);
+void msg_callback(const char *user_id, const char *sender, const char *msg, const char *room_id, const char *thread_root_id, const char *event_id, guint64 timestamp, bool encrypted, bool is_system);
 void reactions_changed_callback(const char *user_id, const char *room_id,
                                  const char *event_id,
                                  const char *reactions_text);
 void message_edited_callback(const char *user_id, const char *room_id,
                              const char *event_id, const char *new_msg);void typing_callback(const char *user_id, const char *room_id, const char *who, bool is_typing);
 void read_marker_cb(const char *user_id, const char *room_id, const char *event_id, const char *who);
+void read_receipt_cb(const char *user_id, const char *room_id, const char *who, const char *event_id);
+void poll_creation_callback(const char *user_id, const char *room_id);
 
 GList *matrix_chat_info(PurpleConnection *gc);
 GHashTable *matrix_chat_info_defaults(PurpleConnection *gc, const char *chat_name);

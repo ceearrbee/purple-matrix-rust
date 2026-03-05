@@ -20,8 +20,10 @@ pub extern "C" fn purple_matrix_rust_ui_action_poll(user_id: *const c_char, room
         let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
         log::info!("UI action requested: Poll in room {}", room_id_str);
         
-        with_client(&user_id_str, move |_client: Client| {
-            // Hint to the UI to open a poll creation dialog
-        });
+        let event = crate::ffi::FfiEvent::PollCreationRequested {
+            user_id: user_id_str,
+            room_id: room_id_str,
+        };
+        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
     })
 }

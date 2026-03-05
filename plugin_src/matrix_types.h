@@ -23,6 +23,7 @@ typedef struct {
   char *event_id;
   guint64 timestamp;
   gboolean encrypted;
+  gboolean is_system;
 } MatrixMsgData;
 
 typedef struct {

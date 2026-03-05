@@ -176,3 +176,44 @@ pub extern "C" fn purple_matrix_rust_send_typing(user_id: *const c_char, room_id
         });
     })
 }
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_send_file(user_id: *const c_char, room_id: *const c_char, filename: *const c_char) {
+    crate::ffi_panic_boundary!({
+        if user_id.is_null() || room_id.is_null() || filename.is_null() { return; }
+        let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+        let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+        let filename_str = unsafe { CStr::from_ptr(filename).to_string_lossy().into_owned() };
+
+        with_client(&user_id_str, move |client: Client| {
+            RUNTIME.spawn(async move {
+                if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                    if let Some(room) = client.get_room(rid) {
+                        let path = std::path::Path::new(&filename_str);
+                        if path.exists() {
+                            if let Ok(data) = std::fs::read(path) {
+                                let mime = mime_guess::from_path(path).first_or_octet_stream();
+                                if let Ok(response) = client.media().upload(&mime, data, None).await {
+                                    use matrix_sdk::ruma::events::room::message::{RoomMessageEventContent, MessageType, ImageMessageEventContent, FileMessageEventContent};
+                                    let msg_type = if mime.type_() == mime_guess::mime::IMAGE {
+                                        MessageType::Image(ImageMessageEventContent::new(
+                                            filename_str.clone(),
+                                            matrix_sdk::ruma::events::room::MediaSource::Plain(response.content_uri),
+                                        ))
+                                    } else {
+                                        MessageType::File(FileMessageEventContent::new(
+                                            filename_str.clone(),
+                                            matrix_sdk::ruma::events::room::MediaSource::Plain(response.content_uri),
+                                        ))
+                                    };
+                                    let content = RoomMessageEventContent::new(msg_type);
+                                    let _ = room.send(content).await;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        });
+    })
+}

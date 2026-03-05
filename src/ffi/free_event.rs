@@ -187,6 +187,11 @@ pub extern "C" fn purple_matrix_rust_free_event(ev_type: i32, data: *mut c_void)
                     free_c_char(b.receipt_user_id);
                     free_c_char(b.event_id);
                 },
+                33 => {
+                    let b = Box::from_raw(data as *mut CPollCreationRequested);
+                    free_c_char(b.user_id);
+                    free_c_char(b.room_id);
+                },
                 _ => {}
             }
         }
