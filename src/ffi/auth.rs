@@ -1,7 +1,6 @@
 use std::os::raw::{c_char};
 use std::ffi::CStr;
 use crate::ffi::{with_client, CLIENTS};
-use crate::RUNTIME;
 use matrix_sdk::Client;
 
 #[no_mangle]
@@ -9,7 +8,7 @@ pub extern "C" fn purple_matrix_rust_login_with_password(user_data: *mut std::os
     crate::ffi_panic_boundary!({
         if user_data.is_null() || password.is_null() { return; }
         let user_id_str = unsafe { CStr::from_ptr(user_data as *const c_char).to_string_lossy().into_owned() };
-        let password_str = unsafe { CStr::from_ptr(password).to_string_lossy().into_owned() };
+        let _password_str = unsafe { CStr::from_ptr(password).to_string_lossy().into_owned() };
 
         log::info!("Attempting password login for {}", user_id_str);
         // We'd need homeserver and data_dir here. 

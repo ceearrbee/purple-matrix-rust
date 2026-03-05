@@ -16,6 +16,58 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct {
+  char *user_id;
+  char *target_user_id;
+  char *display_name;
+  char *avatar_url;
+} MatrixUserInfoData;
+
+typedef struct {
+  char *user_id;
+  char *room_id_or_alias;
+  char *html_body;
+} MatrixRoomPreviewData;
+
+typedef struct {
+  char *user_id;
+  char *room_id;
+  char *topic;
+  char *sender;
+} MatrixTopicData;
+
+typedef struct {
+  char *user_id;
+  char *room_id;
+  char *member_id;
+  bool add;
+  char *alias;
+  char *avatar_path;
+} MatrixChatUserData;
+
+typedef struct {
+  char *user_id;
+  char *target_user_id;
+  int status;
+  char *status_msg;
+} MatrixPresenceData;
+
+struct VerificationData {
+  char *user_id;
+  char *flow_id;
+};
+
+typedef struct {
+  char *user_id;
+  char *flow_id;
+  char *emojis;
+} MatrixEmojiData;
+
+typedef struct {
+  char *user_id;
+  char *html_data;
+} MatrixQrData;
+
 void matrix_login(PurpleAccount *account) {
   PurpleConnection *gc = purple_account_get_connection(account);
   const char *username = purple_account_get_username(account);
@@ -248,7 +300,7 @@ void matrix_set_public_alias(PurpleConnection *gc, const char *alias) {
 }
 void matrix_set_buddy_icon(PurpleConnection *gc, PurpleStoredImage *img) {
   if (img)
-    purple_matrix_rust_set_avatar_bytes(
+    purple_matrix_rust_set_avatar(
         purple_account_get_username(purple_connection_get_account(gc)),
         (const unsigned char *)purple_imgstore_get_data(img),
         purple_imgstore_get_size(img));
@@ -285,15 +337,13 @@ static gboolean process_user_info_cb(gpointer data) {
   return FALSE;
 }
 
-void show_user_info_cb(const char *user_id, const char *display_name,
-                       const char *avatar_url, const char *target_user_id,
-                       bool is_online) {
+void show_user_info_cb(const char *user_id, const char *target_user_id,
+                       const char *display_name, const char *avatar_url) {
   MatrixUserInfoData *d = g_new0(MatrixUserInfoData, 1);
   d->user_id = g_strdup(user_id);
   d->target_user_id = g_strdup(target_user_id);
   d->display_name = g_strdup(display_name);
   d->avatar_url = g_strdup(avatar_url);
-  d->is_online = is_online;
   g_idle_add(process_user_info_cb, d);
 }
 
@@ -407,21 +457,27 @@ void chat_user_callback(const char *user_id, const char *room_id,
 static gboolean process_presence_cb(gpointer data) {
   MatrixPresenceData *d = (MatrixPresenceData *)data;
   PurpleAccount *account = find_matrix_account_by_id(d->user_id);
-  if (account && purple_account_get_connection(account) != NULL)
-    purple_prpl_got_user_status(account, d->target_user_id,
-                                d->is_online ? "available" : "offline", NULL);
+  if (account && purple_account_get_connection(account) != NULL) {
+    const char *status_id = "available";
+    if (d->status == 2) status_id = "away";
+    else if (d->status == 0) status_id = "offline";
+    
+    purple_prpl_got_user_status(account, d->target_user_id, status_id, "message", d->status_msg, NULL);
+  }
   g_free(d->user_id);
   g_free(d->target_user_id);
+  g_free(d->status_msg);
   g_free(d);
   return FALSE;
 }
 
 void presence_callback(const char *user_id, const char *target_user_id,
-                       bool is_online) {
+                       int status, const char *status_msg) {
   MatrixPresenceData *d = g_new0(MatrixPresenceData, 1);
   d->user_id = g_strdup(user_id);
   d->target_user_id = g_strdup(target_user_id);
-  d->is_online = is_online;
+  d->status = status;
+  d->status_msg = g_strdup(status_msg);
   g_idle_add(process_presence_cb, d);
 }
 
@@ -524,4 +580,23 @@ void show_verification_qr_cb(const char *user_id, const char *target_user_id,
   d->user_id = g_strdup(target_user_id);
   d->html_data = g_strdup(html_data);
   g_idle_add(process_qr_cb, d);
+}
+
+void poll_creation_callback(const char *user_id, const char *room_id) {
+    purple_matrix_rust_ui_action_poll(user_id, room_id);
+}
+
+void poll_list_callback(const char *user_id, const char *room_id, const char *event_id,
+                        const char *question, const char *sender, const char *options_str) {
+    // Implement UI to show polls
+}
+
+void thread_list_callback(const char *user_id, const char *room_id, const char *thread_root_id,
+                          const char *latest_msg) {
+    // Implement UI to show threads
+}
+
+void room_list_add_callback(const char *user_id, const char *room_id, const char *name,
+                            const char *topic, const char *parent_id) {
+    // Implement room list discovery UI
 }

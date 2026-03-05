@@ -159,6 +159,34 @@ pub extern "C" fn purple_matrix_rust_send_edit(user_id: *const c_char, room_id: 
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_send_read_receipt(user_id: *const c_char, room_id: *const c_char, event_id: *const c_char) {
+    crate::ffi_panic_boundary!({
+        if user_id.is_null() || room_id.is_null() { return; }
+        let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+        let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+        let event_id_str = if event_id.is_null() { None } else { Some(unsafe { CStr::from_ptr(event_id).to_string_lossy().into_owned() }) };
+
+        with_client(&user_id_str, move |client: Client| {
+            RUNTIME.spawn(async move {
+                if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
+                    if let Some(room) = client.get_room(rid) {
+                        if let Some(eid_str) = event_id_str {
+                            if !eid_str.is_empty() {
+                                if let Ok(eid) = <&EventId>::try_from(eid_str.as_str()) {
+                                    use matrix_sdk::ruma::api::client::receipt::create_receipt::v3::ReceiptType as RumaReceiptType;
+                                    use matrix_sdk::ruma::events::receipt::ReceiptThread;
+                                    let _ = room.send_single_receipt(RumaReceiptType::Read, ReceiptThread::Unthreaded, eid.to_owned()).await;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        });
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_send_typing(user_id: *const c_char, room_id: *const c_char, is_typing: bool) {
     crate::ffi_panic_boundary!({
         if user_id.is_null() || room_id.is_null() { return; }

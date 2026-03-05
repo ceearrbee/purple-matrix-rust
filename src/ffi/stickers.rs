@@ -1,6 +1,6 @@
 use std::os::raw::{c_char, c_void};
 use std::ffi::CStr;
-use crate::ffi::{with_client};
+use crate::ffi::{with_client, send_event, events::FfiEvent};
 use crate::RUNTIME;
 use matrix_sdk::Client;
 
@@ -11,20 +11,20 @@ pub extern "C" fn purple_matrix_rust_list_sticker_packs(user_id: *const c_char, 
         let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
 
         // Fix: Send events synchronously to prevent UAF of C pointers if the window closes.
-        let event = crate::ffi::FfiEvent::StickerPack {
+        let event = FfiEvent::StickerPack {
             cb_ptr: cb_ptr as usize,
             user_id: user_id_str.clone(),
             pack_id: "default".to_string(),
             pack_name: "Default Stickers".to_string(),
             user_data: user_data as usize,
         };
-        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+        send_event(event);
 
-        let done = crate::ffi::FfiEvent::StickerDone {
+        let done = FfiEvent::StickerDone {
             cb_ptr: cb_ptr as usize,
             user_data: user_data as usize,
         };
-        let _ = crate::ffi::EVENTS_CHANNEL.0.send(done);
+        send_event(done);
     })
 }
 
@@ -44,7 +44,7 @@ pub extern "C" fn purple_matrix_rust_send_sticker(user_id: *const c_char, room_i
 
                 if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
                     if let Some(room) = client.get_room(rid) {
-                        let uri = <OwnedMxcUri>::try_from(mxc_uri_str).unwrap();
+                        let uri = <OwnedMxcUri>::try_from(mxc_uri_str.clone()).unwrap();
                         // Fix: StickerInfo doesn't have a simple new(), use default or construct manually
                         let content = StickerEventContent::new("Sticker".to_string(), Default::default(), uri);
                         let _ = room.send(content).await;

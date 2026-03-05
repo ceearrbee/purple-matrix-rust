@@ -51,19 +51,6 @@ pub fn sanitize_untrusted_html(input: &str) -> String {
     crate::html_fmt::sanitize_matrix_html(input)
 }
 
-pub(crate) fn sanitize_string(s: &str) -> String {
-    let filtered: String = s.chars()
-        .filter(|&c| c != '\0')
-        .collect();
-    
-    if filtered.is_empty() {
-        return " ".to_string();
-    }
-
-    // Prevent marker spoofing by breaking the specific marker format
-    filtered.replace("_MXID:[", "_MX_ID:[")
-}
-
 
 pub(crate) fn create_message_content(text: String) -> matrix_sdk::ruma::events::room::message::RoomMessageEventContent {
     use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;

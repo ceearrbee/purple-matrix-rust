@@ -274,8 +274,8 @@ static void submit_vote_cb(void *user_data, const char *index_str) {
       *sep2 = '\0';
       char *user_id = user_id_room_id;
       char *room_id = sep2 + 1;
-      purple_matrix_rust_poll_vote(user_id, room_id, event_id,
-                                   (guint64)atoll(index_str));
+      purple_matrix_rust_vote_poll(user_id, room_id, event_id,
+                                   (int)atoi(index_str));
     }
   }
   g_free(data_str);
@@ -591,23 +591,29 @@ guint32 get_history_page_size(PurpleAccount *account) {
 PurpleAccount *find_matrix_account_by_id(const char *user_id) {
   if (!user_id || strlen(user_id) == 0)
     return NULL;
+  
+  purple_debug_info("matrix-ffi", "find_matrix_account_by_id: Looking for %s\n", user_id);
+  
   GList *l;
   for (l = purple_accounts_get_all(); l != NULL; l = l->next) {
     PurpleAccount *account = (PurpleAccount *)l->data;
     if (strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") ==
         0) {
       const char *username = purple_account_get_username(account);
-      if (g_strcmp0(username, user_id) == 0)
+      if (g_strcmp0(username, user_id) == 0) {
+        purple_debug_info("matrix-ffi", "find_matrix_account_by_id: Exact match for %s\n", user_id);
         return account;
-      // Robust MXID matching: extract localpart if needed, or match substring
+      }
+      
+      // Robust MXID matching: extract localpart if needed
       if (user_id[0] == '@' && username) {
-        if (strstr(user_id, username))
-          return account;
         char *mxid_local = g_strdup(user_id + 1);
         char *sep = strchr(mxid_local, ':');
         if (sep)
           *sep = '\0';
+        
         if (g_strcmp0(username, mxid_local) == 0) {
+          purple_debug_info("matrix-ffi", "find_matrix_account_by_id: Localpart match: %s matched %s\n", username, user_id);
           g_free(mxid_local);
           return account;
         }
@@ -615,6 +621,8 @@ PurpleAccount *find_matrix_account_by_id(const char *user_id) {
       }
     }
   }
+  
+  purple_debug_warning("matrix-ffi", "find_matrix_account_by_id: No match found for %s\n", user_id);
   return NULL;
 }
 
@@ -641,8 +649,13 @@ PurpleAccount *find_matrix_account(void) {
 int get_chat_id(const char *room_id) {
   if (!room_id)
     return 0;
-  if (!room_id_map)
-    room_id_map = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+  
+  /* room_id_map is initialized in matrix_core.c:plugin_load */
+  if (!room_id_map) {
+      purple_debug_warning("matrix", "get_chat_id called before room_id_map initialization\n");
+      return 0; 
+  }
+
   gpointer val = g_hash_table_lookup(room_id_map, room_id);
   if (val)
     return GPOINTER_TO_INT(val);

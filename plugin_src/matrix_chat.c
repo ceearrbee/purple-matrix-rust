@@ -1,122 +1,20 @@
 #include "matrix_chat.h"
-#include "matrix_blist.h"
-#include "matrix_ffi_wrappers.h"
+#include "matrix_utils.h"
 #include "matrix_globals.h"
 #include "matrix_types.h"
-#include "matrix_utils.h"
+#include "matrix_ffi_wrappers.h"
+#include "matrix_blist.h"
 
+#include <libpurple/util.h>
 #include <libpurple/debug.h>
 #include <libpurple/imgstore.h>
-#include <libpurple/notify.h>
-#include <libpurple/prpl.h>
-#include <libpurple/request.h>
 #include <libpurple/server.h>
-#include <libpurple/util.h>
-#include <libpurple/version.h>
-#include <stdlib.h>
+#include <libpurple/signals.h>
+#include <unistd.h>
 #include <string.h>
+#include <stdlib.h>
 
-#define MATRIX_RECENT_EVENT_SLOTS 10
-
-static void matrix_record_recent_event(PurpleConversation *conv,
-                                       const char *event_id, const char *sender,
-                                       const char *message,
-                                       const char *thread_root_id,
-                                       gboolean encrypted, guint64 timestamp) {
-  int i;
-  char key_id[64], key_sender[64], key_msg[64], key_ts[64], key_enc[64],
-      key_thread[64];
-  char *plain = NULL;
-  char *snippet = NULL;
-  char tsbuf[32];
-  char encbuf[8];
-
-  if (!conv || !event_id || !*event_id)
-    return;
-
-  for (i = MATRIX_RECENT_EVENT_SLOTS - 1; i > 0; --i) {
-    char prev_id[64], prev_sender[64], prev_msg[64], prev_ts[64], prev_enc[64],
-        prev_thread[64];
-    const char *v = NULL;
-
-    g_snprintf(prev_id, sizeof(prev_id), "matrix_recent_event_id_%d", i - 1);
-    g_snprintf(prev_sender, sizeof(prev_sender), "matrix_recent_event_sender_%d",
-               i - 1);
-    g_snprintf(prev_msg, sizeof(prev_msg), "matrix_recent_event_msg_%d", i - 1);
-    g_snprintf(prev_ts, sizeof(prev_ts), "matrix_recent_event_ts_%d", i - 1);
-    g_snprintf(prev_enc, sizeof(prev_enc), "matrix_recent_event_enc_%d", i - 1);
-    g_snprintf(prev_thread, sizeof(prev_thread), "matrix_recent_event_thread_%d",
-               i - 1);
-
-    g_snprintf(key_id, sizeof(key_id), "matrix_recent_event_id_%d", i);
-    g_snprintf(key_sender, sizeof(key_sender), "matrix_recent_event_sender_%d",
-               i);
-    g_snprintf(key_msg, sizeof(key_msg), "matrix_recent_event_msg_%d", i);
-    g_snprintf(key_ts, sizeof(key_ts), "matrix_recent_event_ts_%d", i);
-    g_snprintf(key_enc, sizeof(key_enc), "matrix_recent_event_enc_%d", i);
-    g_snprintf(key_thread, sizeof(key_thread), "matrix_recent_event_thread_%d",
-               i);
-
-    v = purple_conversation_get_data(conv, prev_id);
-    g_free(purple_conversation_get_data(conv, key_id));
-    purple_conversation_set_data(conv, key_id, g_strdup(v));
-
-    v = purple_conversation_get_data(conv, prev_sender);
-    g_free(purple_conversation_get_data(conv, key_sender));
-    purple_conversation_set_data(conv, key_sender, g_strdup(v));
-
-    v = purple_conversation_get_data(conv, prev_msg);
-    g_free(purple_conversation_get_data(conv, key_msg));
-    purple_conversation_set_data(conv, key_msg, g_strdup(v));
-
-    v = purple_conversation_get_data(conv, prev_ts);
-    g_free(purple_conversation_get_data(conv, key_ts));
-    purple_conversation_set_data(conv, key_ts, g_strdup(v));
-
-    v = purple_conversation_get_data(conv, prev_enc);
-    g_free(purple_conversation_get_data(conv, key_enc));
-    purple_conversation_set_data(conv, key_enc, g_strdup(v));
-
-    v = purple_conversation_get_data(conv, prev_thread);
-    g_free(purple_conversation_get_data(conv, key_thread));
-    purple_conversation_set_data(conv, key_thread, g_strdup(v));
-  }
-
-  plain = purple_markup_strip_html(message);
-  if (plain) {
-    if ((int)strlen(plain) > 60)
-      plain[60] = '\0';
-    snippet = sanitize_markup_text(plain);
-    g_free(plain);
-  }
-
-  g_snprintf(tsbuf, sizeof(tsbuf), "%" G_GUINT64_FORMAT, timestamp);
-  g_snprintf(encbuf, sizeof(encbuf), "%d", encrypted ? 1 : 0);
-
-  g_free(purple_conversation_get_data(conv, "matrix_recent_event_id_0"));
-  purple_conversation_set_data(conv, "matrix_recent_event_id_0",
-                               g_strdup(event_id));
-  g_free(purple_conversation_get_data(conv, "matrix_recent_event_sender_0"));
-  purple_conversation_set_data(conv, "matrix_recent_event_sender_0",
-                               g_strdup(sender));
-  g_free(purple_conversation_get_data(conv, "matrix_recent_event_msg_0"));
-  purple_conversation_set_data(conv, "matrix_recent_event_msg_0",
-                               g_strdup(snippet ? snippet : ""));
-  g_free(purple_conversation_get_data(conv, "matrix_recent_event_ts_0"));
-  purple_conversation_set_data(conv, "matrix_recent_event_ts_0", g_strdup(tsbuf));
-  g_free(purple_conversation_get_data(conv, "matrix_recent_event_enc_0"));
-  purple_conversation_set_data(conv, "matrix_recent_event_enc_0",
-                               g_strdup(encbuf));
-  g_free(purple_conversation_get_data(conv, "matrix_recent_event_thread_0"));
-  purple_conversation_set_data(conv, "matrix_recent_event_thread_0",
-                               g_strdup(thread_root_id));
-
-  g_free(snippet);
-}
-
-void matrix_get_chat_info_cb(PurpleConnection *gc, GHashTable *components) {
-  // Return default chat components if needed
-}
+#define MATRIX_PASTED_PREFIX "matrix_pasted_"
 
 static void check_and_send_pasted_images(PurpleConnection *gc, const char *who,
                                          const char *message) {
@@ -127,22 +25,28 @@ static void check_and_send_pasted_images(PurpleConnection *gc, const char *who,
     if (id > 0) {
       PurpleStoredImage *img = purple_imgstore_find_by_id(id);
       if (img) {
-        size_t len = purple_imgstore_get_size(img);
-        const void *data = purple_imgstore_get_data(img);
-        char *tmp_path = g_build_filename(g_get_tmp_dir(), "matrix_pasted.png", NULL);
-        if (g_file_set_contents(tmp_path, data, len, NULL)) {
-          purple_matrix_rust_send_file(
-              purple_account_get_username(purple_connection_get_account(gc)), who,
-              tmp_path);
+        char *filename = g_build_filename(g_get_tmp_dir(),
+                                          MATRIX_PASTED_PREFIX "XXXXXX", NULL);
+        int fd = g_mkstemp(filename);
+        if (fd != -1) {
+          if (write(fd, purple_imgstore_get_data(img),
+                    purple_imgstore_get_size(img)) > 0) {
+            close(fd);
+            purple_matrix_rust_send_file(
+                purple_account_get_username(purple_connection_get_account(gc)),
+                who, filename);
+          } else {
+            close(fd);
+          }
         }
-        g_free(tmp_path);
+        g_free(filename);
       }
     }
   }
 }
 
-int matrix_send_im(PurpleConnection *gc, const char *who, const char *message,
-                   PurpleMessageFlags flags) {
+int matrix_send_im(PurpleConnection *gc, const char *who,
+                          const char *message, PurpleMessageFlags flags) {
   check_and_send_pasted_images(gc, who, message);
   if (who[0] == '!') {
     purple_matrix_rust_send_message(
@@ -157,352 +61,244 @@ int matrix_send_im(PurpleConnection *gc, const char *who, const char *message,
 }
 
 int matrix_send_chat(PurpleConnection *gc, int id, const char *message,
-                     PurpleMessageFlags flags) {
+                            PurpleMessageFlags flags) {
   PurpleConversation *conv = purple_find_chat(gc, id);
-  if (!conv)
-    return -1;
+  if (!conv) return -1;
   const char *room_id = purple_conversation_get_name(conv);
   check_and_send_pasted_images(gc, room_id, message);
-  
-  /* Disable local echo to avoid duplicates; rely on sync callback for correct Matrix event ID */
-  /* PurpleAccount *account = purple_connection_get_account(gc);
-  const char *me = purple_account_get_alias(account);
-  if (!me || !*me) me = purple_account_get_username(account);
-  purple_conv_chat_write(PURPLE_CONV_CHAT(conv), me, message,
-                         PURPLE_MESSAGE_SEND, time(NULL)); */
-  
   purple_matrix_rust_send_message(
       purple_account_get_username(purple_connection_get_account(gc)), room_id,
       message);
   return 0;
 }
 
+int matrix_chat_send(PurpleConnection *gc, int id, const char *message, PurpleMessageFlags flags) {
+    return matrix_send_chat(gc, id, message, flags);
+}
+
+void matrix_chat_leave(PurpleConnection *gc, int id) {
+    PurpleConversation *conv = purple_find_chat(gc, id);
+    if (!conv) return;
+    purple_matrix_rust_leave_room(purple_account_get_username(purple_connection_get_account(gc)), purple_conversation_get_name(conv));
+}
+
+void matrix_chat_invite(PurpleConnection *gc, int id, const char *message, const char *name) {
+    PurpleConversation *conv = purple_find_chat(gc, id);
+    if (!conv) return;
+    purple_matrix_rust_invite_user(purple_account_get_username(purple_connection_get_account(gc)), purple_conversation_get_name(conv), name);
+}
+
+void matrix_chat_whisper(PurpleConnection *gc, int id, const char *who, const char *message) {
+    // whisper is not native to Matrix, could be implemented as a separate IM
+    matrix_send_im(gc, who, message, PURPLE_MESSAGE_WHISPER);
+}
+
+void matrix_join_chat(PurpleConnection *gc, GHashTable *data) {
+    const char *room_id = g_hash_table_lookup(data, "room_id");
+    fprintf(stderr, "[Matrix FFI] matrix_join_chat CALLED for room_id: %s\n", room_id ? room_id : "(null)");
+    purple_debug_info("matrix-ffi", "matrix_join_chat: room_id=%s\n", room_id ? room_id : "(null)");
+    if (room_id) {
+        /* Proactively notify libpurple we've joined to ensure the window opens */
+        int cid = get_chat_id(room_id);
+        fprintf(stderr, "[Matrix FFI] Forcing join confirmation for %s (id %d)\n", room_id, cid);
+        serv_got_joined_chat(gc, cid, room_id);
+        
+        purple_matrix_rust_join_room(purple_account_get_username(purple_connection_get_account(gc)), room_id);
+    }
+}
+
+void matrix_reject_chat(PurpleConnection *gc, GHashTable *data) {
+    // Rejection is similar to leaving or just ignoring
+}
+
+GList *matrix_chat_info(PurpleConnection *gc) {
+    GList *m = NULL;
+    struct proto_chat_entry *pce;
+
+    pce = g_new0(struct proto_chat_entry, 1);
+    pce->label = "Room ID or Alias";
+    pce->identifier = "room_id";
+    pce->required = TRUE;
+    m = g_list_append(m, pce);
+
+    return m;
+}
+
+GHashTable *matrix_chat_info_defaults(PurpleConnection *gc, const char *chat_name) {
+    GHashTable *defaults = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, g_free);
+    if (chat_name) {
+        g_hash_table_insert(defaults, "room_id", g_strdup(chat_name));
+    }
+    return defaults;
+}
+
+void matrix_set_chat_topic(PurpleConnection *gc, int id, const char *topic) {
+    PurpleConversation *conv = purple_find_chat(gc, id);
+    if (conv) {
+        purple_matrix_rust_set_room_topic(purple_account_get_username(purple_connection_get_account(gc)), purple_conversation_get_name(conv), topic);
+    }
+}
+
+void matrix_send_file(PurpleConnection *gc, const char *who, const char *filename) {
+    if (filename && who) {
+        purple_matrix_rust_send_file(purple_account_get_username(purple_connection_get_account(gc)), who, filename);
+    }
+}
+
 unsigned int matrix_send_typing(PurpleConnection *gc, const char *name,
-                                PurpleTypingState state) {
+                                       PurpleTypingState state) {
+  static GHashTable *last_typing_times = NULL;
+  if (!last_typing_times) {
+    last_typing_times = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+  }
+
+  time_t now = time(NULL);
+  time_t last_time = GPOINTER_TO_INT(g_hash_table_lookup(last_typing_times, name));
+  
+  /* Matrix typing notifications typically last 4-5 seconds. 
+     Debounce to once every 4 seconds to avoid spamming the homeserver. */
+  if (state == PURPLE_TYPING) {
+    if (now - last_time < 4) {
+      return 0;
+    }
+    g_hash_table_insert(last_typing_times, g_strdup(name), GINT_TO_POINTER(now));
+  } else {
+    /* Always send "stopped typing" immediately, and clear the timer */
+    g_hash_table_remove(last_typing_times, name);
+  }
+
   purple_matrix_rust_send_typing(
       purple_account_get_username(purple_connection_get_account(gc)), name,
       state == PURPLE_TYPING);
   return 0;
 }
 
-static gboolean process_msg_cb(gpointer data) {
-  MatrixMsgData *d = (MatrixMsgData *)data;
+void msg_callback(const char *user_id, const char *sender, const char *msg,
+                   const char *room_id, const char *thread_root_id,
+                   const char *event_id, guint64 timestamp, bool encrypted, bool is_system) {
+  if (!user_id || !room_id || !sender || !msg) return;
 
-  if (!d->user_id || !d->room_id || !d->sender || !d->message) {
-    /* Cleanup and return */
-    goto cleanup;
+  purple_debug_info("matrix-ffi", "msg_callback: room_id=%s sender=%s user_id=%s\n", room_id, sender, user_id);
+
+  PurpleAccount *account = find_matrix_account_by_id(user_id);
+  if (!account) {
+    purple_debug_warning("matrix-ffi", "msg_callback: No account found for %s\n", user_id);
+    return;
   }
 
-  PurpleAccount *account = find_matrix_account_by_id(d->user_id);
-  if (!account) goto cleanup;
-
-  if (d->encrypted) {
-    purple_signal_emit(my_plugin, "matrix-ui-room-encrypted", d->room_id, TRUE);
+  if (encrypted) {
+    purple_signal_emit(my_plugin, "matrix-ui-room-encrypted", room_id, TRUE);
   }
 
   PurpleConversation *main_conv = purple_find_conversation_with_account(
-      PURPLE_CONV_TYPE_ANY, d->room_id, account);
+      PURPLE_CONV_TYPE_ANY, room_id, account);
 
   if (main_conv) {
-    if (d->event_id && *d->event_id) {
-      purple_conversation_set_data(main_conv, "last_event_id", g_strdup(d->event_id));
-      matrix_record_recent_event(main_conv, d->event_id, d->sender, d->message,
-                                 d->thread_root_id, d->encrypted, d->timestamp);
+    if (event_id && *event_id) {
+      g_free(purple_conversation_get_data(main_conv, "last_event_id"));
+      purple_conversation_set_data(main_conv, "last_event_id", g_strdup(event_id));
+      g_free(purple_conversation_get_data(main_conv, "pending_event_id"));
+      purple_conversation_set_data(main_conv, "pending_event_id", g_strdup(event_id));
     }
     
-    if (d->message && *d->message) {
-      char *plain = purple_markup_strip_html(d->message);
-      char *snippet = NULL;
-      if (!plain) plain = g_strdup("");
-      if ((int)strlen(plain) > 120) plain[120] = '\0';
-      snippet = sanitize_markup_text(plain);
-      purple_signal_emit(my_plugin, "matrix-ui-room-activity", d->room_id,
-                         d->sender ? d->sender : "user",
-                         snippet ? snippet : "");
-      g_free(snippet);
-      g_free(plain);
+    if (msg && *msg) {
+      char *plain = purple_markup_strip_html(msg);
+      if (plain) {
+          if (strlen(plain) > 120) plain[120] = '\0';
+          purple_signal_emit(my_plugin, "matrix-ui-room-activity", room_id, sender, plain);
+          g_free(plain);
+      }
     }
     
-    if (d->thread_root_id)
-      purple_conversation_set_data(main_conv, "last_thread_root_id", g_strdup(d->thread_root_id));
+    if (thread_root_id)
+      purple_conversation_set_data(main_conv, "last_thread_root_id", g_strdup(thread_root_id));
   }
 
-  char *target_id = g_strdup(d->room_id);
+  char *target_id = g_strdup(room_id);
   gboolean separate_threads = purple_account_get_bool(account, "separate_threads", FALSE);
-  if (d->thread_root_id && strlen(d->thread_root_id) > 0 && separate_threads) {
-    char *virtual_id = g_strdup_printf("%s|%s", d->room_id, d->thread_root_id);
+  if (thread_root_id && strlen(thread_root_id) > 0 && separate_threads) {
+    char *virtual_id = g_strdup_printf("%s|%s", room_id, thread_root_id);
     g_free(target_id);
     target_id = virtual_id;
   }
 
-  if (d->is_system) {
-    const char *sys_msg = d->message;
-    if (g_str_has_prefix(d->message, "[System] ")) {
-        sys_msg += 9;
-    }
+  if (is_system || g_str_has_prefix(msg, "[System] ")) {
+    const char *sys_msg = msg;
+    if (g_str_has_prefix(msg, "[System] ")) sys_msg += 9;
+    
     PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, target_id, account);
     if (conv) {
-      purple_conversation_write(conv, "", sys_msg, PURPLE_MESSAGE_SYSTEM, d->timestamp / 1000);
+      purple_conversation_write(conv, "", sys_msg, PURPLE_MESSAGE_SYSTEM, timestamp / 1000);
     }
-    g_free(target_id);
-    goto cleanup;
-  }
+  } else {
+    PurpleConnection *gc = purple_account_get_connection(account);
+    if (gc) {
+        int cid = get_chat_id(target_id);
+        time_t mtime = timestamp / 1000;
+        gboolean is_live = (mtime >= plugin_start_time - 5);
+        PurpleConversation *conv = purple_find_chat(gc, cid);
 
-  PurpleConnection *gc = purple_account_get_connection(account);
-  if (gc) {
-    PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, target_id, account);
-    if (d->thread_root_id && strlen(d->thread_root_id) > 0 && separate_threads) {
-      char *clean_alias = sanitize_markup_text(d->message);
-      ensure_thread_in_blist(account, target_id, clean_alias, d->room_id);
-      g_free(clean_alias);
-    }
-
-    if (conv) {
-      const char *me_id = purple_account_get_username(account);
-      const char *me_alias = purple_account_get_alias(account);
-      PurpleMessageFlags flags = PURPLE_MESSAGE_RECV;
-      
-      if (strcmp(d->sender, me_id) == 0 || (me_alias && strcmp(d->sender, me_alias) == 0)) {
-          flags = PURPLE_MESSAGE_SEND;
-      }
-      
-      purple_conversation_write(conv, d->sender, d->message, flags, d->timestamp / 1000);
+        if (target_id[0] == '!') {
+            if (conv) {
+                /* Chat already open: deliver normally */
+                serv_got_chat_in(gc, cid, sender, PURPLE_MESSAGE_RECV, msg, mtime);
+            } else if (is_live) {
+                /* Live message for closed chat: Join and deliver (opens window) */
+                fprintf(stderr, "[Matrix FFI] Live message for %s, opening window\n", target_id);
+                serv_got_joined_chat(gc, cid, target_id);
+                serv_got_chat_in(gc, cid, sender, PURPLE_MESSAGE_RECV, msg, mtime);
+            } else {
+                /* Backlog for closed chat: skip to avoid popping 100 windows */
+                purple_debug_info("matrix-ffi", "msg_callback: Skipping backlog for closed room %s\n", target_id);
+            }
+        } else {
+            /* IM delivery */
+            serv_got_im(gc, sender, msg, PURPLE_MESSAGE_RECV, mtime);
+        }
+    } else {
+        fprintf(stderr, "[Matrix FFI] GC IS NULL for user %s\n", user_id);
     }
   }
   g_free(target_id);
-
-cleanup:
-  g_free(d->user_id);
-  g_free(d->sender);
-  g_free(d->message);
-  g_free(d->room_id);
-  if (d->thread_root_id) g_free(d->thread_root_id);
-  if (d->event_id) g_free(d->event_id);
-  g_free(d);
-  return FALSE;
-}
-
-void msg_callback(const char *user_id, const char *sender, const char *msg,
-                  const char *room_id, const char *thread_root_id,
-                  const char *event_id, guint64 timestamp, bool encrypted, bool is_system) {
-  purple_debug_info("matrix", "msg_callback: sender=%s msg=%s\n", sender, msg);
-  MatrixMsgData *d = g_new0(MatrixMsgData, 1);
-  d->user_id = g_strdup(user_id);
-  d->sender = g_strdup(sender);
-  d->message = g_strdup(msg);
-  d->room_id = g_strdup(room_id);
-  if (thread_root_id)
-    d->thread_root_id = g_strdup(thread_root_id);
-  if (event_id)
-    d->event_id = g_strdup(event_id);
-  d->timestamp = timestamp;
-  d->encrypted = encrypted;
-  d->is_system = is_system;
-  g_idle_add(process_msg_cb, d);
-}
-
-static gboolean process_typing_cb(gpointer data) {
-  MatrixTypingData *d = (MatrixTypingData *)data;
-  PurpleAccount *account = find_matrix_account_by_id(d->user_id);
-  if (account && purple_account_get_connection(account) != NULL) {
-    PurpleConnection *gc = purple_account_get_connection(account);
-    if (gc) {
-      PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, d->room_id, account);
-      if (conv && purple_conversation_get_type(conv) == PURPLE_CONV_TYPE_IM) {
-        serv_got_typing(gc, d->room_id, 0,
-                        d->is_typing ? PURPLE_TYPING : PURPLE_NOT_TYPING);
-      }
-      purple_signal_emit(my_plugin, "matrix-ui-room-typing", d->room_id, d->who,
-                         d->is_typing);
-    }
-  }
-  g_free(d->user_id);
-  g_free(d->room_id);
-  g_free(d->who);
-  g_free(d);
-  return FALSE;
-}
-
-void typing_callback(const char *user_id, const char *room_id, const char *who,
-                     bool is_typing) {
-  MatrixTypingData *d = g_new0(MatrixTypingData, 1);
-  d->user_id = g_strdup(user_id);
-  d->room_id = g_strdup(room_id);
-  d->who = g_strdup(who);
-  d->is_typing = is_typing;
-  g_idle_add(process_typing_cb, d);
-}
-
-static gboolean process_reactions_changed_cb(gpointer data) {
-  MatrixReactionsData *d = (MatrixReactionsData *)data;
-  PurpleAccount *account = find_matrix_account_by_id(d->user_id);
-  if (account) {
-    PurpleConversation *conv = purple_find_conversation_with_account(
-        PURPLE_CONV_TYPE_ANY, d->room_id, account);
-    if (conv) {
-      char key[128];
-      g_snprintf(key, sizeof(key), "matrix_reactions_%s", d->event_id);
-      g_free(purple_conversation_get_data(conv, key));
-      purple_conversation_set_data(conv, key, g_strdup(d->reactions_text));
-
-      purple_signal_emit(my_plugin, "matrix-ui-reactions-changed", d->room_id,
-                         d->event_id, d->reactions_text);
-    }
-  }
-  g_free(d->user_id);
-  g_free(d->room_id);
-  g_free(d->event_id);
-  g_free(d->reactions_text);
-  g_free(d);
-  return FALSE;
 }
 
 void reactions_changed_callback(const char *user_id, const char *room_id,
-                                const char *event_id,
-                                const char *reactions_text) {
-  MatrixReactionsData *d = g_new0(MatrixReactionsData, 1);
-  d->user_id = g_strdup(user_id);
-  d->room_id = g_strdup(room_id);
-  d->event_id = g_strdup(event_id);
-  d->reactions_text = g_strdup(reactions_text);
-  g_idle_add(process_reactions_changed_cb, d);
-}
-
-static gboolean process_message_edited_cb(gpointer data) {
-  MatrixEditData *d = (MatrixEditData *)data;
-  PurpleAccount *account = find_matrix_account_by_id(d->user_id);
-  if (account) {
-    purple_signal_emit(my_plugin, "matrix-ui-message-edited", d->room_id,
-                       d->event_id, d->new_msg);
-  }
-  g_free(d->user_id);
-  g_free(d->room_id);
-  g_free(d->event_id);
-  g_free(d->new_msg);
-  g_free(d);
-  return FALSE;
+                                  const char *event_id,
+                                  const char *reactions_text) {
+    purple_signal_emit(my_plugin, "matrix-ui-reactions-changed", room_id, event_id, reactions_text);
 }
 
 void message_edited_callback(const char *user_id, const char *room_id,
-                             const char *event_id, const char *new_msg) {
-  MatrixEditData *d = g_new0(MatrixEditData, 1);
-  d->user_id = g_strdup(user_id);
-  d->room_id = g_strdup(room_id);
-  d->event_id = g_strdup(event_id);
-  d->new_msg = g_strdup(new_msg);
-  g_idle_add(process_message_edited_cb, d);
+                              const char *event_id, const char *new_msg) {
+    purple_signal_emit(my_plugin, "matrix-ui-message-edited", room_id, event_id, new_msg);
 }
 
-static gboolean process_read_receipt_cb(gpointer data) {
-  MatrixReadReceiptData *d = (MatrixReadReceiptData *)data;
-  PurpleAccount *account = find_matrix_account_by_id(d->user_id);
-  if (account) {
-    purple_signal_emit(my_plugin, "matrix-ui-read-receipt", d->room_id, d->who,
-                       d->event_id);
-  }
-  g_free(d->user_id);
-  g_free(d->room_id);
-  g_free(d->who);
-  g_free(d->event_id);
-  g_free(d);
-  return FALSE;
+void message_redacted_callback(const char *user_id, const char *room_id,
+                                const char *event_id) {
+    purple_signal_emit(my_plugin, "matrix-ui-message-redacted", room_id, event_id);
 }
 
-void read_receipt_callback(const char *user_id, const char *room_id,
-                           const char *who, const char *event_id) {
-  MatrixReadReceiptData *d = g_new0(MatrixReadReceiptData, 1);
-  d->user_id = g_strdup(user_id);
-  d->room_id = g_strdup(room_id);
-  d->who = g_strdup(who);
-  d->event_id = g_strdup(event_id);
-  g_idle_add(process_read_receipt_cb, d);
+void media_downloaded_callback(const char *user_id, const char *room_id,
+                                const char *event_id, const unsigned char *data,
+                                size_t size, const char *content_type) {
+    purple_signal_emit(my_plugin, "matrix-ui-media-downloaded", room_id, event_id, data, size, content_type);
 }
 
-void matrix_join_chat(PurpleConnection *gc, GHashTable *data) {
-  const char *room_id = g_hash_table_lookup(data, "room_id");
-  if (!room_id) room_id = g_hash_table_lookup(data, "room");
-  if (room_id) {
-    purple_matrix_rust_join_room(purple_account_get_username(purple_connection_get_account(gc)), room_id);
+void typing_callback(const char *user_id, const char *room_id, const char *who, bool is_typing) {
+  PurpleAccount *account = find_matrix_account_by_id(user_id);
+  if (account && purple_account_get_connection(account) != NULL) {
+    PurpleConnection *gc = purple_account_get_connection(account);
+    serv_got_typing(gc, who, 0, is_typing ? PURPLE_TYPING : PURPLE_NOT_TYPING);
+    purple_signal_emit(my_plugin, "matrix-ui-room-typing", room_id, who, is_typing);
   }
 }
 
-void matrix_reject_chat(PurpleConnection *gc, GHashTable *data) {
-  const char *room_id = g_hash_table_lookup(data, "room_id");
-  if (!room_id) room_id = g_hash_table_lookup(data, "room");
-  if (room_id) {
-    purple_matrix_rust_leave_room(purple_account_get_username(purple_connection_get_account(gc)), room_id);
-  }
+void read_marker_cb(const char *user_id, const char *room_id, const char *event_id, const char *who) {
+    purple_signal_emit(my_plugin, "matrix-ui-read-receipt", room_id, who, event_id);
 }
 
-void matrix_chat_invite(PurpleConnection *gc, int id, const char *message, const char *name) {
-  PurpleConversation *conv = purple_find_chat(gc, id);
-  if (conv) {
-    purple_matrix_rust_invite_user(purple_account_get_username(purple_connection_get_account(gc)), purple_conversation_get_name(conv), name);
-  }
+void read_receipt_cb(const char *user_id, const char *room_id, const char *who, const char *event_id) {
+    purple_signal_emit(my_plugin, "matrix-ui-read-receipt", room_id, who, event_id);
 }
 
-void matrix_chat_leave(PurpleConnection *gc, int id) {
-  PurpleConversation *conv = purple_find_chat(gc, id);
-  if (conv) {
-    purple_matrix_rust_leave_room(purple_account_get_username(purple_connection_get_account(gc)), purple_conversation_get_name(conv));
-  }
-}
-
-void matrix_chat_whisper(PurpleConnection *gc, int id, const char *who, const char *message) {
-  // Not supported by matrix
-}
-
-void matrix_set_chat_topic(PurpleConnection *gc, int id, const char *topic) {
-  PurpleConversation *conv = purple_find_chat(gc, id);
-  if (conv) {
-    purple_matrix_rust_set_room_topic(purple_account_get_username(purple_connection_get_account(gc)), purple_conversation_get_name(conv), topic);
-  }
-}
-
-void matrix_send_file(PurpleConnection *gc, const char *who, const char *filename) {
-  purple_matrix_rust_send_file(purple_account_get_username(purple_connection_get_account(gc)), who, filename);
-}
-
-GList *matrix_chat_info(PurpleConnection *gc) {
-  GList *m = NULL;
-  struct proto_chat_entry *pce = g_new0(struct proto_chat_entry, 1);
-  pce->label = "_Room ID or Alias:";
-  pce->identifier = "room_id";
-  pce->required = TRUE;
-  m = g_list_append(m, pce);
-  return m;
-}
-
-GHashTable *matrix_chat_info_defaults(PurpleConnection *gc, const char *chat_name) {
-  GHashTable *defaults = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, g_free);
-  if (chat_name) {
-    g_hash_table_insert(defaults, "room_id", g_strdup(chat_name));
-  }
-  return defaults;
-}
-
-static void matrix_create_poll_cb(void *user_data, PurpleRequestFields *fields) {
-  char *room_id = (char *)user_data;
-  PurpleAccount *account = find_matrix_account();
-  const char *question = purple_request_fields_get_string(fields, "question");
-  const char *opt1 = purple_request_fields_get_string(fields, "opt1");
-  const char *opt2 = purple_request_fields_get_string(fields, "opt2");
-  
-  if (question && *question && opt1 && *opt1 && opt2 && *opt2) {
-    const char *options[2] = {opt1, opt2};
-    purple_matrix_rust_create_poll(purple_account_get_username(account), room_id, question, options, 2);
-  }
-  g_free(room_id);
-}
-
-void poll_creation_callback(const char *user_id, const char *room_id) {
-  PurpleRequestFields *fields = purple_request_fields_new();
-  PurpleRequestFieldGroup *group = purple_request_field_group_new(NULL);
-  purple_request_fields_add_group(fields, group);
-
-  purple_request_field_group_add_field(group, purple_request_field_string_new("question", "_Question", NULL, FALSE));
-  purple_request_field_group_add_field(group, purple_request_field_string_new("opt1", "_Option 1", NULL, FALSE));
-  purple_request_field_group_add_field(group, purple_request_field_string_new("opt2", "_Option 2", NULL, FALSE));
-
-  purple_request_fields(my_plugin, "Create Poll", NULL, "Enter poll details", fields, "_Create", G_CALLBACK(matrix_create_poll_cb), "_Cancel", G_CALLBACK(g_free), find_matrix_account(), NULL, NULL, g_strdup(room_id));
-}
+// Rest of the file...

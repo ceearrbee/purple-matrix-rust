@@ -1,67 +1,55 @@
-use matrix_sdk::encryption::verification::{SasVerification, Verification};
+use matrix_sdk::encryption::verification::SasVerification;
 use matrix_sdk::Client;
-use dashmap::DashMap;
-use once_cell::sync::Lazy;
+use crate::ffi::{send_event, events::FfiEvent};
 
-pub static ACTIVE_SAS_FLOWS: Lazy<DashMap<String, SasVerification>> = Lazy::new(|| DashMap::new());
-
-pub async fn handle_verification_request(client: Client, event: matrix_sdk::ruma::events::key::verification::request::ToDeviceKeyVerificationRequestEvent) {
+pub async fn handle_sas_request(sas: SasVerification, client: Client) {
     let user_id = client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
-    let sender = event.sender.as_str();
-    let flow_id = event.content.transaction_id.as_str();
+    let target_user_id = sas.other_user_id().to_string();
+    
+    // In matrix-sdk 0.16, SasVerification has other_device() which returns DeviceData.
+    let flow_id = sas.other_device().device_id().to_string();
 
-    log::info!("Received verification request from {} with flow {}", sender, flow_id);
+    log::info!("Verification request from {} (flow: {})", target_user_id, flow_id);
 
-    let event = crate::ffi::FfiEvent::SasRequest {
-        user_id: user_id,
-        target_user_id: sender.to_string(),
-        flow_id: flow_id.to_string(),
+    let event = FfiEvent::SasRequest {
+        user_id,
+        target_user_id,
+        flow_id,
     };
-    let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+    send_event(event);
 }
 
-pub async fn handle_sas_verification(sas: SasVerification, client: Client) {
-    let user_id = client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
-    let target = sas.other_user_id().as_str();
-    // Fallback: use other_user_id joined with our local time or just an id
-    let flow_id = format!("{}_{}", sas.other_user_id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
-
-    log::info!("Handling SAS verification flow for {}", target);
-
+pub async fn handle_sas_emoji(sas: SasVerification, client: Client) {
     if let Some(emojis) = sas.emoji() {
+        let user_id = client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
+        let target_user_id = sas.other_user_id().to_string();
+        let flow_id = sas.other_device().device_id().to_string();
+
         let mut emoji_str = String::new();
-        for emoji in emojis {
-            emoji_str.push_str(&format!("{} ({}) ", emoji.symbol, emoji.description));
+        for (i, emoji) in emojis.iter().enumerate() {
+            if i > 0 { emoji_str.push_str(", "); }
+            emoji_str.push_str(emoji.description);
+            emoji_str.push(' ');
+            emoji_str.push_str(emoji.symbol);
         }
 
-        ACTIVE_SAS_FLOWS.insert(flow_id.clone(), sas.clone());
-        let event = crate::ffi::FfiEvent::SasHaveEmoji {
-            user_id: user_id.clone(),
-            target_user_id: target.to_string(),
-            flow_id: flow_id.clone(),
+        let event = FfiEvent::SasHaveEmoji {
+            user_id,
+            target_user_id,
+            flow_id,
             emojis: emoji_str,
         };
-        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+        send_event(event);
     }
 }
 
-pub async fn handle_verification_change(verification: Verification, client: Client) {
+pub async fn handle_qr_verification(client: Client, target_user_id: String, html_data: String) {
     let user_id = client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
-    match verification {
-        Verification::SasV1(sas) => handle_sas_verification(sas, client).await,
-        Verification::QrV1(qr) => {
-            if let Ok(_data) = qr.to_qr_code() {
-                let target = qr.other_user_id().as_str();
-                let html = format!("Scan this QR code in your other Matrix client to verify with {}: (QR data present)", target);
-                
-                let event = crate::ffi::FfiEvent::ShowVerificationQr {
-                    user_id: user_id.clone(),
-                    target_user_id: target.to_string(),
-                    html_data: html,
-                };
-                let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
-            }
-        }
-        _ => {}
-    }
+    
+    let event = FfiEvent::ShowVerificationQr {
+        user_id,
+        target_user_id,
+        html_data,
+    };
+    send_event(event);
 }

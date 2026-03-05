@@ -7,6 +7,8 @@
 #include <libpurple/roomlist.h>
 #include <stdbool.h>
 
+void ensure_room_in_blist(PurpleAccount *account, const char *room_id,
+                          const char *name, const char *group_name);
 void ensure_thread_in_blist(PurpleAccount *account, const char *virtual_id,
                             const char *alias, const char *parent_room_id);
 void room_joined_callback(const char *user_id, const char *room_id,

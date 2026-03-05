@@ -77,6 +77,16 @@ pub extern "C" fn purple_matrix_rust_accept_verification(user_id: *const c_char,
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_confirm_sas(user_id: *const c_char, target_user_id: *const c_char, flow_id: *const c_char, confirm: bool) {
+    purple_matrix_rust_confirm_verification(user_id, target_user_id, flow_id, confirm);
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_accept_sas(user_id: *const c_char, target_user_id: *const c_char, flow_id: *const c_char) {
+    purple_matrix_rust_accept_verification(user_id, target_user_id, flow_id);
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_is_room_encrypted(user_id: *const c_char, room_id: *const c_char) -> bool {
     crate::ffi_panic_boundary!({
         if user_id.is_null() || room_id.is_null() { return false; }

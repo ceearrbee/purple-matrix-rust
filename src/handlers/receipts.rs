@@ -1,5 +1,6 @@
 use matrix_sdk::ruma::events::receipt::SyncReceiptEvent;
 use matrix_sdk::Room;
+use crate::ffi::{send_event, events::FfiEvent};
 
 pub async fn handle_receipt(event: SyncReceiptEvent, room: Room) {
     let local_user_id = room.client().user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
@@ -13,13 +14,12 @@ pub async fn handle_receipt(event: SyncReceiptEvent, room: Room) {
                      user_id.as_str().to_string()
                  };
 
-                 let event = crate::ffi::FfiEvent::ReadMarker {
+                 send_event(FfiEvent::ReadMarker {
                      user_id: local_user_id.clone(),
                      room_id: room.room_id().as_str().to_string(),
                      event_id: event_id.as_str().to_string(),
                      who: who_display,
-                 };
-                 let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+                 });
             }
         }
     }

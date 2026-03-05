@@ -14,7 +14,14 @@ void reactions_changed_callback(const char *user_id, const char *room_id,
                                  const char *event_id,
                                  const char *reactions_text);
 void message_edited_callback(const char *user_id, const char *room_id,
-                             const char *event_id, const char *new_msg);void typing_callback(const char *user_id, const char *room_id, const char *who, bool is_typing);
+                              const char *event_id, const char *new_msg);
+
+void message_redacted_callback(const char *user_id, const char *room_id,
+                                const char *event_id);
+
+void media_downloaded_callback(const char *user_id, const char *room_id,
+                                const char *event_id, const unsigned char *data,
+                                size_t size, const char *content_type);void typing_callback(const char *user_id, const char *room_id, const char *who, bool is_typing);
 void read_marker_cb(const char *user_id, const char *room_id, const char *event_id, const char *who);
 void read_receipt_cb(const char *user_id, const char *room_id, const char *who, const char *event_id);
 void poll_creation_callback(const char *user_id, const char *room_id);

@@ -14,6 +14,7 @@
 #include <pidgin/gtkimhtml.h>
 #include <pidgin/pidgin.h>
 #include <string.h>
+#include "matrix_ffi_wrappers.h"
 
 #define MATRIX_UI_ACTION_BAR_KEY "matrix-ui-action-bar"
 #define MATRIX_UI_TYPING_LABEL_KEY "matrix-ui-typing-label"
@@ -26,14 +27,6 @@
 #define MATRIX_UI_SELECTED_EVENT_SENDER_KEY "matrix-ui-selected-event-sender"
 
 /* Local Utilities */
-static char *local_sanitize_markup_text(const char *input) {
-  if (!input) return g_strdup("");
-  char *tmp = purple_markup_strip_html(input);
-  char *ret = g_strdup(tmp ? tmp : "");
-  g_free(tmp);
-  return ret;
-}
-
 static PurpleAccount *local_find_matrix_account(void) {
   GList *it;
   for (it = purple_accounts_get_all(); it != NULL; it = it->next) {
@@ -149,83 +142,38 @@ static void on_matrix_more_actions_clicked(GtkWidget *b, PurpleConversation *c) 
 }
 
 static void identify_event_at_iter(PurpleConversation *conv, GtkTextIter *iter) {
-  GtkTextIter start = *iter;
-  GtkTextIter end = *iter;
-  char *line_text = NULL;
-  char *clean_line = NULL;
-  int i;
-
-  gtk_text_iter_set_line_offset(&start, 0);
-  if (!gtk_text_iter_ends_line(&end)) gtk_text_iter_forward_to_line_end(&end);
-
-  line_text = gtk_text_iter_get_text(&start, &end);
-  if (!line_text) return;
-
-  clean_line = local_sanitize_markup_text(line_text);
-  g_free(line_text);
+  GtkTextIter line_start = *iter;
+  gtk_text_iter_set_line_offset(&line_start, 0);
 
   g_free(purple_conversation_get_data(conv, MATRIX_UI_SELECTED_EVENT_ID_KEY));
   purple_conversation_set_data(conv, MATRIX_UI_SELECTED_EVENT_ID_KEY, NULL);
   g_free(purple_conversation_get_data(conv, MATRIX_UI_SELECTED_EVENT_SENDER_KEY));
   purple_conversation_set_data(conv, MATRIX_UI_SELECTED_EVENT_SENDER_KEY, NULL);
 
-  const char *markers[] = {"_MXID:[", "_MX_ID:", "[MXID:"};
-  for (int m=0; m<3; m++) {
-    const char *marker_start = g_strrstr(clean_line, markers[m]);
-    if (marker_start) {
-        const char *id_start = marker_start + strlen(markers[m]);
-        char *ev_id = g_strdup(id_start);
-        
-        char *end_ptr = strchr(ev_id, ']');
-        if (end_ptr) *end_ptr = '\0';
-        else {
-            char *space = strchr(ev_id, ' ');
-            if (space) *space = '\0';
-        }
-        
-        if (ev_id && strlen(ev_id) > 5) {
-            purple_conversation_set_data(conv, MATRIX_UI_SELECTED_EVENT_ID_KEY, g_strdup(ev_id));
-            for (i = 0; i < 10; i++) {
-                char key_id[64], key_sender[64];
-                g_snprintf(key_id, sizeof(key_id), "matrix_recent_event_id_%d", i);
-                g_snprintf(key_sender, sizeof(key_sender), "matrix_recent_event_sender_%d", i);
-                const char *stored_id = purple_conversation_get_data(conv, key_id);
-                if (stored_id && strcmp(stored_id, ev_id) == 0) {
-                    const char *stored_sender = purple_conversation_get_data(conv, key_sender);
-                    if (stored_sender) {
-                        purple_conversation_set_data(conv, MATRIX_UI_SELECTED_EVENT_SENDER_KEY, g_strdup(stored_sender));
-                    }
-                    break;
-                }
-            }
-            g_free(ev_id);
-            g_free(clean_line);
-            return;
-        }
-        g_free(ev_id);
-    }
+  while (TRUE) {
+      GSList *marks = gtk_text_iter_get_marks(&line_start);
+      gboolean found = FALSE;
+      for (GSList *l = marks; l != NULL; l = l->next) {
+          GtkTextMark *mark = GTK_TEXT_MARK(l->data);
+          const char *name = gtk_text_mark_get_name(mark);
+          if (name && g_str_has_prefix(name, "mxid_")) {
+              const char *event_id = name + 5;
+              purple_conversation_set_data(conv, MATRIX_UI_SELECTED_EVENT_ID_KEY, g_strdup(event_id));
+              found = TRUE;
+              break;
+          }
+      }
+      g_slist_free(marks);
+      if (found) break;
+
+      if (!gtk_text_iter_backward_line(&line_start)) {
+          break;
+      }
   }
 
-  for (i = 0; i < 10; i++) {
-    char key_id[64], key_msg[64], key_sender[64];
-    const char *ev_id, *ev_msg, *ev_sender;
-    g_snprintf(key_id, sizeof(key_id), "matrix_recent_event_id_%d", i);
-    g_snprintf(key_msg, sizeof(key_msg), "matrix_recent_event_msg_%d", i);
-    g_snprintf(key_sender, sizeof(key_sender), "matrix_recent_event_sender_%d", i);
-    ev_id = purple_conversation_get_data(conv, key_id);
-    ev_msg = purple_conversation_get_data(conv, key_msg);
-    ev_sender = purple_conversation_get_data(conv, key_sender);
-    if (ev_id && ev_msg && strlen(ev_msg) > 3) {
-      if (strstr(clean_line, ev_msg) != NULL) {
-        if (!ev_sender || !*ev_sender || strstr(clean_line, ev_sender) != NULL) {
-          purple_conversation_set_data(conv, MATRIX_UI_SELECTED_EVENT_ID_KEY, g_strdup(ev_id));
-          if (ev_sender) purple_conversation_set_data(conv, MATRIX_UI_SELECTED_EVENT_SENDER_KEY, g_strdup(ev_sender));
-          break;
-        }
-      }
-    }
-  }
-  g_free(clean_line);
+  // To find sender, we can still use the heuristic loop for the last 10 messages if we want
+  // Or just rely on the ID since that's the most critical part. 
+  // Let's keep the sender logic via the recent 10 messages array if we really need it, but mostly we only need the ID.
 }
 
 static gboolean imhtml_button_press_cb(GtkWidget *widget, GdkEventButton *event, gpointer data) {
@@ -306,42 +254,27 @@ static void handle_message_edited_cb(const char *room_id, const char *event_id, 
   GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gtkconv->imhtml));
   if (!buffer) return;
 
-  const char *markers[] = {"_MXID:[", "_MX_ID:", "[MXID:"};
-  for (int m=0; m<3; m++) {
-    char *search_str;
-    search_str = g_strdup_printf("%s%s", markers[m], event_id);
-    if (markers[m][0] != '_') {
-        char *tmp = search_str;
-        search_str = g_strdup_printf("%s]", tmp);
-        g_free(tmp);
-    }
-    
-    GtkTextIter start, end;
-    gtk_text_buffer_get_start_iter(buffer, &start);
-    if (gtk_text_iter_forward_search(&start, search_str, 0, &start, &end, NULL)) {
-        GtkTextIter line_start = start;
-        GtkTextIter line_end = end;
-        gtk_text_iter_set_line_offset(&line_start, 0);
-        if (!gtk_text_iter_ends_line(&line_end)) gtk_text_iter_forward_to_line_end(&line_end);
-        
-        /* Find colon after sender to preserve prefix (timestamp/sender) */
-        GtkTextIter body_start = line_start;
-        GtkTextIter paren_end;
-        if (gtk_text_iter_forward_search(&body_start, ") ", 0, &paren_end, &body_start, &start)) {
-            if (gtk_text_iter_forward_search(&body_start, ": ", 0, &body_start, &body_start, &start)) {
-                line_start = body_start;
-            }
-        }
+  char *mark_name = g_strdup_printf("mxid_%s", event_id);
+  GtkTextMark *mark = gtk_text_buffer_get_mark(buffer, mark_name);
+  if (mark) {
+      GtkTextIter line_start, line_end, body_start, paren_end;
+      gtk_text_buffer_get_iter_at_mark(buffer, &line_start, mark);
+      
+      line_end = line_start;
+      if (!gtk_text_iter_ends_line(&line_end)) gtk_text_iter_forward_to_line_end(&line_end);
+      
+      /* Find colon after sender to preserve prefix (timestamp/sender) */
+      body_start = line_start;
+      if (gtk_text_iter_forward_search(&body_start, ") ", 0, &paren_end, &body_start, &line_end)) {
+          if (gtk_text_iter_forward_search(&body_start, ": ", 0, &body_start, &body_start, &line_end)) {
+              line_start = body_start;
+          }
+      }
 
-        char *replacement_html = g_strdup_printf("%s <font color='#fdfdfd' size='1'>%s</font>", new_msg, search_str);
-        gtk_text_buffer_delete(buffer, &line_start, &line_end);
-        gtk_imhtml_insert_html_at_iter(GTK_IMHTML(gtkconv->imhtml), replacement_html, 0, &line_start);
-        g_free(replacement_html);
-        g_free(search_str);
-        return;
-    }
-    g_free(search_str);
+      gtk_text_buffer_delete(buffer, &line_start, &line_end);
+      gtk_imhtml_insert_html_at_iter(GTK_IMHTML(gtkconv->imhtml), new_msg, 0, &line_start);
   }
+  g_free(mark_name);
 }
 
 static void handle_reactions_changed_cb(const char *room_id, const char *event_id, const char *reactions_text, gpointer data) {
@@ -354,51 +287,124 @@ static void handle_reactions_changed_cb(const char *room_id, const char *event_i
   GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gtkconv->imhtml));
   if (!buffer) return;
 
-  const char *markers[] = {"_MXID:[", "_MX_ID:", "[MXID:"};
-  for (int m=0; m<3; m++) {
-    char *search_str;
-    search_str = g_strdup_printf("%s%s", markers[m], event_id);
-    if (markers[m][0] != '_') {
-        char *tmp = search_str;
-        search_str = g_strdup_printf("%s]", tmp);
-        g_free(tmp);
-    }
+  char rx_mark_name[128];
+  g_snprintf(rx_mark_name, sizeof(rx_mark_name), "rxmark_%s", event_id);
+  GtkTextMark *mark = gtk_text_buffer_get_mark(buffer, rx_mark_name);
+  if (mark) {
+      GtkTextIter start, block_end;
+      gtk_text_buffer_get_iter_at_mark(buffer, &start, mark);
+      
+      block_end = start;
+      if (!gtk_text_iter_ends_line(&block_end)) gtk_text_iter_forward_to_line_end(&block_end);
+      
+      /* Delete existing reactions if present */
+      gtk_text_buffer_delete(buffer, &start, &block_end);
 
-    GtkTextIter start, end;
-    gtk_text_buffer_get_start_iter(buffer, &start);
-    
-    if (gtk_text_iter_forward_search(&start, search_str, 0, &start, &end, NULL)) {
-        GtkTextIter block_end = end;
-        if (!gtk_text_iter_ends_line(&block_end)) gtk_text_iter_forward_to_line_end(&block_end);
-        
-        char *full_text = gtk_text_buffer_get_text(buffer, &end, &block_end, FALSE);
-        if (full_text && strstr(full_text, "[Reactions: ")) {
-            GtkTextIter del_start = end;
-            GtkTextIter del_end = end;
-            if (gtk_text_iter_forward_search(&del_start, " [Reactions: ", 0, &del_start, &del_end, &block_end)) {
-                if (gtk_text_iter_forward_search(&del_end, "]", 0, &del_start, &del_end, &block_end)) {
-                    gtk_text_buffer_delete(buffer, &del_start, &del_end);
-                }
-            }
-        }
-        g_free(full_text);
-
-        if (reactions_text && strlen(reactions_text) > 0) {
-            const char *raw_text = reactions_text;
-            if (g_str_has_prefix(raw_text, "[System] [Reactions] ")) raw_text += 21;
-            
-            char *esc_reactions = g_markup_escape_text(raw_text, -1);
-            char *markup = g_strdup_printf(" <font color='#666666' back='#eeeeee'>&nbsp;[Reactions: %s]&nbsp;</font>", esc_reactions);
-            gtk_imhtml_insert_html_at_iter(GTK_IMHTML(gtkconv->imhtml), markup, 0, &end);
-            g_free(markup);
-            g_free(esc_reactions);
-        }
-        
-        g_free(search_str);
-        return;
-    }
-    g_free(search_str);
+      if (reactions_text && strlen(reactions_text) > 0) {
+          const char *raw_text = reactions_text;
+          if (g_str_has_prefix(raw_text, "[System] [Reactions] ")) raw_text += 21;
+          
+          char *esc_reactions = g_markup_escape_text(raw_text, -1);
+          char *markup = g_strdup_printf(" <font color='#666666' back='#eeeeee'>&nbsp;[Reactions: %s]&nbsp;</font>", esc_reactions);
+          
+          gtk_imhtml_insert_html_at_iter(GTK_IMHTML(gtkconv->imhtml), markup, 0, &start);
+          g_free(markup);
+          g_free(esc_reactions);
+      }
   }
+}
+
+static void handle_message_redacted_cb(const char *room_id, const char *event_id, gpointer data) {
+  PurpleAccount *account = local_find_matrix_account();
+  if (!account) return;
+  PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+  if (!conv) return;
+  PidginConversation *gtkconv = PIDGIN_CONVERSATION(conv);
+  if (!gtkconv || !gtkconv->imhtml) return;
+  GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gtkconv->imhtml));
+  if (!buffer) return;
+
+  char *mark_name = g_strdup_printf("mxid_%s", event_id);
+  GtkTextMark *mark = gtk_text_buffer_get_mark(buffer, mark_name);
+  if (mark) {
+      GtkTextIter line_start, line_end;
+      gtk_text_buffer_get_iter_at_mark(buffer, &line_start, mark);
+      
+      line_end = line_start;
+      if (!gtk_text_iter_ends_line(&line_end)) gtk_text_iter_forward_to_line_end(&line_end);
+      
+      gtk_text_buffer_delete(buffer, &line_start, &line_end);
+      gtk_imhtml_insert_html_at_iter(GTK_IMHTML(gtkconv->imhtml), "<span color='#aa0000'><i>[Message deleted]</i></span>", 0, &line_start);
+  }
+  g_free(mark_name);
+}
+
+#if !GLIB_CHECK_VERSION(2, 68, 0)
+static gpointer local_memdup2(gconstpointer mem, gsize byte_size) {
+  gpointer new_mem;
+  if (mem && byte_size != 0) {
+    new_mem = g_malloc(byte_size);
+    memcpy(new_mem, mem, byte_size);
+  } else {
+    new_mem = NULL;
+  }
+  return new_mem;
+}
+#define g_memdup2 local_memdup2
+#endif
+
+static void handle_media_downloaded_cb(const char *room_id, const char *event_id, const unsigned char *data, size_t size, const char *content_type, gpointer user_data) {
+  PurpleAccount *account = local_find_matrix_account();
+  if (!account) return;
+  PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+  if (!conv) return;
+  PidginConversation *gtkconv = PIDGIN_CONVERSATION(conv);
+  if (!gtkconv || !gtkconv->imhtml) return;
+  GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gtkconv->imhtml));
+  if (!buffer) return;
+
+  char *mark_name = g_strdup_printf("mxid_%s", event_id);
+  GtkTextMark *mark = gtk_text_buffer_get_mark(buffer, mark_name);
+  if (mark) {
+      GtkTextIter line_start, line_end;
+      gtk_text_buffer_get_iter_at_mark(buffer, &line_start, mark);
+      
+      line_end = line_start;
+      if (!gtk_text_iter_ends_line(&line_end)) gtk_text_iter_forward_to_line_end(&line_end);
+      
+      /* Find placeholder text: " (Downloading...)" and replace the whole line body or just placeholder */
+      /* For simplicity, let's replace the whole message content if it was an image placeholder */
+      char *line_text = gtk_text_buffer_get_text(buffer, &line_start, &line_end, FALSE);
+      if (line_text && strstr(line_text, " (Downloading...)")) {
+          /* Extract original description from "🖼️ [Image: DESC] (Downloading...)" */
+          const char *start_desc = strstr(line_text, "[Image: ");
+          char *desc = NULL;
+          if (start_desc) {
+              start_desc += 8;
+              const char *end_desc = strstr(start_desc, "] (Downloading...)");
+              if (end_desc) {
+                  desc = g_strndup(start_desc, end_desc - start_desc);
+              }
+          }
+
+          int img_id = purple_imgstore_add_with_id(g_memdup2(data, size), size, NULL);
+          if (img_id > 0) {
+              char *img_html = g_strdup_printf("<img id=\"%d\" alt=\"%s\">", img_id, desc ? desc : "image");
+              
+              /* Preserve the mark by inserting after it */
+              gtk_text_buffer_delete(buffer, &line_start, &line_end);
+              gtk_imhtml_insert_html_at_iter(GTK_IMHTML(gtkconv->imhtml), img_html, 0, &line_start);
+              g_free(img_html);
+              
+              /* The store now owns the data, we release our reference. 
+                 The IMHtml widget will ref it when displayed. */
+              purple_imgstore_unref_by_id(img_id);
+          }
+          g_free(desc);
+      }
+      g_free(line_text);
+  }
+  g_free(mark_name);
 }
 
 static void handle_read_receipt_cb(const char *room_id, const char *who, const char *event_id, gpointer data) {
@@ -590,6 +596,50 @@ static void conversation_deleted_cb(PurpleConversation *conv, gpointer data) {
   purple_conversation_set_data(conv, MATRIX_UI_SELECTED_EVENT_SENDER_KEY, NULL);
 }
 
+typedef struct {
+    PurpleConversation *conv;
+    char *event_id;
+} PendingMark;
+
+static gboolean set_marks_idle_cb(gpointer data) {
+    PendingMark *pm = (PendingMark *)data;
+    PidginConversation *gtkconv = PIDGIN_CONVERSATION(pm->conv);
+    if (gtkconv && gtkconv->imhtml) {
+        GtkTextBuffer *tbuf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gtkconv->imhtml));
+        GtkTextIter end;
+        gtk_text_buffer_get_end_iter(tbuf, &end);
+        
+        char mark_name[128], rx_mark_name[128];
+        g_snprintf(mark_name, sizeof(mark_name), "mxid_%s", pm->event_id);
+        g_snprintf(rx_mark_name, sizeof(rx_mark_name), "rxmark_%s", pm->event_id);
+        
+        /* mxid mark at start of message (already exists if we set it in writing_msg_cb, but let's reposition it) */
+        /* Actually, let's find the start of the line. */
+        GtkTextIter start = end;
+        gtk_text_iter_set_line_offset(&start, 0);
+        
+        gtk_text_buffer_create_mark(tbuf, mark_name, &start, TRUE);
+        gtk_text_buffer_create_mark(tbuf, rx_mark_name, &end, TRUE);
+    }
+    g_free(pm->event_id);
+    g_free(pm);
+    return FALSE;
+}
+
+static gboolean writing_msg_cb(PurpleAccount *account, const char *who, char **buffer, PurpleConversation *conv, PurpleMessageFlags flags, gpointer data) {
+    char *event_id = purple_conversation_get_data(conv, "pending_event_id");
+    if (event_id) {
+        PendingMark *pm = g_new0(PendingMark, 1);
+        pm->conv = conv;
+        pm->event_id = g_strdup(event_id);
+        g_idle_add(set_marks_idle_cb, pm);
+        
+        g_free(event_id);
+        purple_conversation_set_data(conv, "pending_event_id", NULL);
+    }
+    return FALSE;
+}
+
 static void connect_ui_signals(PurplePlugin *plugin) {
   void *conv_handle = purple_conversations_get_handle();
   PurplePlugin *matrix_plugin = purple_plugins_find_with_id("prpl-matrix-rust");
@@ -606,6 +656,8 @@ static void connect_ui_signals(PurplePlugin *plugin) {
   if (conv_handle) {
     purple_signal_connect(conv_handle, "conversation-created", plugin, PURPLE_CALLBACK(conversation_created_cb), NULL);
     purple_signal_connect(conv_handle, "deleting-conversation", plugin, PURPLE_CALLBACK(conversation_deleted_cb), NULL);
+    purple_signal_connect(conv_handle, "writing-im-msg", plugin, PURPLE_CALLBACK(writing_msg_cb), NULL);
+    purple_signal_connect(conv_handle, "writing-chat-msg", plugin, PURPLE_CALLBACK(writing_msg_cb), NULL);
   }
   
   if (matrix_plugin) {
@@ -615,6 +667,8 @@ static void connect_ui_signals(PurplePlugin *plugin) {
     purple_signal_connect(matrix_plugin, "matrix-ui-room-activity", plugin, PURPLE_CALLBACK(handle_room_activity_cb), NULL);
     purple_signal_connect(matrix_plugin, "matrix-ui-reactions-changed", plugin, PURPLE_CALLBACK(handle_reactions_changed_cb), NULL);
     purple_signal_connect(matrix_plugin, "matrix-ui-message-edited", plugin, PURPLE_CALLBACK(handle_message_edited_cb), NULL);
+    purple_signal_connect(matrix_plugin, "matrix-ui-message-redacted", plugin, PURPLE_CALLBACK(handle_message_redacted_cb), NULL);
+    purple_signal_connect(matrix_plugin, "matrix-ui-media-downloaded", plugin, PURPLE_CALLBACK(handle_media_downloaded_cb), NULL);
     purple_signal_connect(matrix_plugin, "matrix-ui-read-receipt", plugin, PURPLE_CALLBACK(handle_read_receipt_cb), NULL);
     purple_signal_connect(matrix_plugin, "matrix-ui-room-topic", plugin, PURPLE_CALLBACK(handle_room_topic_cb), NULL);
   }

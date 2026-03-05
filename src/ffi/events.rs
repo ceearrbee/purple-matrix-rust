@@ -1,168 +1,183 @@
-use std::ffi::CString;
-use std::os::raw::c_char;
-
-pub fn to_c_char(s: &str) -> *mut c_char {
-    match CString::new(crate::sanitize_string(s)) {
-        Ok(c) => c.into_raw(),
-        Err(_) => CString::new("").unwrap_or_default().into_raw()
-    }
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiEventType {
+    MessageReceived = 1,
+    TypingState = 2,
+    RoomJoined = 3,
+    RoomLeft = 4,
+    ReadMarker = 5,
+    PresenceUpdate = 6,
+    ChatTopicUpdate = 7,
+    ChatMemberUpdate = 8,
+    InviteReceived = 9,
+    RoomListAdded = 10,
+    RoomPreview = 11,
+    LoginFailed = 12,
+    UserInfoReceived = 13,
+    ThreadListReceived = 14,
+    PollListReceived = 15,
+    SearchResultReceived = 16,
+    RoomMuteUpdate = 17,
+    RoomTagUpdate = 18,
+    BuddyUpdate = 19,
+    SsoUrlReceived = 20,
+    Connected = 21,
+    VerificationRequest = 22,
+    VerificationEmoji = 23,
+    VerificationQr = 24,
+    MessageEdited = 25,
+    ReactionUpdate = 26,
+    ReceiptReceived = 27,
+    PowerLevelUpdate = 28,
+    MessageRedacted = 29,
+    MediaDownloaded = 30,
 }
 
-pub fn to_c_char_opt(s: &Option<String>) -> *mut c_char {
-    if let Some(val) = s {
-        to_c_char(val)
-    } else {
-        std::ptr::null_mut()
-    }
-}
-
-pub fn free_c_char(ptr: *mut c_char) {
-    if !ptr.is_null() {
-        unsafe {
-            let _ = CString::from_raw(ptr);
+impl TryFrom<i32> for FfiEventType {
+    type Error = ();
+    fn try_from(v: i32) -> Result<Self, Self::Error> {
+        match v {
+            1 => Ok(FfiEventType::MessageReceived),
+            2 => Ok(FfiEventType::TypingState),
+            3 => Ok(FfiEventType::RoomJoined),
+            4 => Ok(FfiEventType::RoomLeft),
+            5 => Ok(FfiEventType::ReadMarker),
+            6 => Ok(FfiEventType::PresenceUpdate),
+            7 => Ok(FfiEventType::ChatTopicUpdate),
+            8 => Ok(FfiEventType::ChatMemberUpdate),
+            9 => Ok(FfiEventType::InviteReceived),
+            10 => Ok(FfiEventType::RoomListAdded),
+            11 => Ok(FfiEventType::RoomPreview),
+            12 => Ok(FfiEventType::LoginFailed),
+            13 => Ok(FfiEventType::UserInfoReceived),
+            14 => Ok(FfiEventType::ThreadListReceived),
+            15 => Ok(FfiEventType::PollListReceived),
+            16 => Ok(FfiEventType::SearchResultReceived),
+            17 => Ok(FfiEventType::RoomMuteUpdate),
+            18 => Ok(FfiEventType::RoomTagUpdate),
+            19 => Ok(FfiEventType::BuddyUpdate),
+            20 => Ok(FfiEventType::SsoUrlReceived),
+            21 => Ok(FfiEventType::Connected),
+            22 => Ok(FfiEventType::VerificationRequest),
+            23 => Ok(FfiEventType::VerificationEmoji),
+            24 => Ok(FfiEventType::VerificationQr),
+            25 => Ok(FfiEventType::MessageEdited),
+            26 => Ok(FfiEventType::ReactionUpdate),
+            27 => Ok(FfiEventType::ReceiptReceived),
+            28 => Ok(FfiEventType::PowerLevelUpdate),
+            29 => Ok(FfiEventType::MessageRedacted),
+            30 => Ok(FfiEventType::MediaDownloaded),
+            _ => Err(()),
         }
     }
 }
 
 #[repr(C)]
-pub struct CMessageReceived {
-    pub user_id: *mut c_char,
-    pub sender: *mut c_char,
-    pub msg: *mut c_char,
-    pub room_id: *mut c_char,
-    pub thread_root_id: *mut c_char,
-    pub event_id: *mut c_char,
+pub struct MessageEventData {
+    pub user_id: *mut i8,
+    pub sender: *mut i8,
+    pub msg: *mut i8,
+    pub room_id: *mut i8,
+    pub thread_root_id: *mut i8,
+    pub event_id: *mut i8,
     pub timestamp: u64,
     pub encrypted: bool,
-    pub is_system: bool,
 }
 
 #[repr(C)]
-pub struct CRoomJoined {
-    pub user_id: *mut c_char,
-    pub room_id: *mut c_char,
-    pub name: *mut c_char,
-    pub group_name: *mut c_char,
-    pub avatar_url: *mut c_char,
-    pub topic: *mut c_char,
+pub struct MessageEditedData {
+    pub user_id: *mut i8,
+    pub room_id: *mut i8,
+    pub event_id: *mut i8,
+    pub new_msg: *mut i8,
+}
+
+#[repr(C)]
+pub struct TypingEventData {
+    pub user_id: *mut i8,
+    pub room_id: *mut i8,
+    pub who: *mut i8,
+    pub is_typing: bool,
+}
+
+#[repr(C)]
+pub struct RoomJoinedEventData {
+    pub user_id: *mut i8,
+    pub room_id: *mut i8,
+    pub name: *mut i8,
+    pub group_name: *mut i8,
+    pub avatar_url: *mut i8,
+    pub topic: *mut i8,
     pub encrypted: bool,
     pub member_count: u64,
 }
 
 #[repr(C)]
-pub struct CTyping {
-    pub user_id: *mut c_char,
-    pub room_id: *mut c_char,
-    pub who: *mut c_char,
-    pub is_typing: bool,
+pub struct RoomLeftEventData {
+    pub user_id: *mut i8,
+    pub room_id: *mut i8,
 }
 
 #[repr(C)]
-pub struct CRoomLeft {
-    pub user_id: *mut c_char,
-    pub room_id: *mut c_char,
+pub struct ChatTopicEventData {
+    pub user_id: *mut i8,
+    pub room_id: *mut i8,
+    pub topic: *mut i8,
+    pub sender: *mut i8,
 }
 
 #[repr(C)]
-pub struct CReadMarker {
-    pub user_id: *mut c_char,
-    pub room_id: *mut c_char,
-    pub event_id: *mut c_char,
-    pub who: *mut c_char,
-}
-
-#[repr(C)]
-pub struct CPresence {
-    pub user_id: *mut c_char,
-    pub target_user_id: *mut c_char,
-    pub is_online: bool,
-}
-
-#[repr(C)]
-pub struct CChatTopic {
-    pub user_id: *mut c_char,
-    pub room_id: *mut c_char,
-    pub topic: *mut c_char,
-    pub sender: *mut c_char,
-}
-
-#[repr(C)]
-pub struct CChatUser {
-    pub user_id: *mut c_char,
-    pub room_id: *mut c_char,
-    pub member_id: *mut c_char,
+pub struct ChatUserEventData {
+    pub user_id: *mut i8,
+    pub room_id: *mut i8,
+    pub member_id: *mut i8,
     pub add: bool,
-    pub alias: *mut c_char,
-    pub avatar_path: *mut c_char,
+    pub alias: *mut i8,
+    pub avatar_path: *mut i8,
 }
 
 #[repr(C)]
-pub struct CInvite {
-    pub user_id: *mut c_char,
-    pub room_id: *mut c_char,
-    pub inviter: *mut c_char,
+pub struct InviteEventData {
+    pub user_id: *mut i8,
+    pub room_id: *mut i8,
+    pub inviter: *mut i8,
 }
 
 #[repr(C)]
-pub struct CLoginFailed {
-    pub user_id: *mut c_char,
-    pub message: *mut c_char,
+pub struct UpdateBuddyEventData {
+    pub user_id: *mut i8,
+    pub alias: *mut i8,
+    pub avatar_url: *mut i8,
 }
 
 #[repr(C)]
-pub struct CConnected {
-    pub user_id: *mut c_char,
+pub struct LoginFailedEventData {
+    pub user_id: *mut i8,
+    pub error_msg: *mut i8,
 }
 
 #[repr(C)]
-pub struct CSso {
-    pub url: *mut c_char,
+pub struct SsoUrlEventData {
+    pub url: *mut i8,
 }
 
 #[repr(C)]
-pub struct CReadReceipt {
-    pub user_id: *mut c_char,
-    pub room_id: *mut c_char,
-    pub receipt_user_id: *mut c_char,
-    pub event_id: *mut c_char,
+pub struct ConnectedEventData {
+    pub user_id: *mut i8,
 }
 
 #[repr(C)]
-pub struct CSasRequest {
-    pub user_id: *mut c_char,
-    pub target_user_id: *mut c_char,
-    pub flow_id: *mut c_char,
+pub struct ReadMarkerEventData {
+    pub user_id: *mut i8,
+    pub room_id: *mut i8,
+    pub event_id: *mut i8,
+    pub who: *mut i8,
 }
 
 #[repr(C)]
-pub struct CSasHaveEmoji {
-    pub user_id: *mut c_char,
-    pub target_user_id: *mut c_char,
-    pub flow_id: *mut c_char,
-    pub emojis: *mut c_char,
-}
-
-#[repr(C)]
-pub struct CShowVerificationQr {
-    pub user_id: *mut c_char,
-    pub target_user_id: *mut c_char,
-    pub html_data: *mut c_char,
-}
-
-#[repr(C)]
-pub struct CPollList {
-    pub user_id: *mut c_char,
-    pub room_id: *mut c_char,
-    pub event_id: *mut c_char,
-    pub question: *mut c_char,
-    pub sender: *mut c_char,
-    pub options_str: *mut c_char,
-}
-
-#[repr(C)]
-pub struct CPowerLevelUpdate {
-    pub user_id: *mut c_char,
-    pub room_id: *mut c_char,
+pub struct PowerLevelUpdateEventData {
+    pub user_id: *mut i8,
+    pub room_id: *mut i8,
     pub is_admin: bool,
     pub can_kick: bool,
     pub can_ban: bool,
@@ -171,108 +186,126 @@ pub struct CPowerLevelUpdate {
 }
 
 #[repr(C)]
-pub struct CRoomListAdd {
-    pub user_id: *mut c_char,
-    pub room_id: *mut c_char,
-    pub name: *mut c_char,
-    pub topic: *mut c_char,
-    pub member_count: usize,
-    pub is_space: bool,
-    pub parent_id: *mut c_char,
+pub struct ReactionsChangedEventData {
+    pub user_id: *mut i8,
+    pub room_id: *mut i8,
+    pub event_id: *mut i8,
+    pub reactions_text: *mut i8,
 }
 
 #[repr(C)]
-pub struct CRoomPreview {
-    pub user_id: *mut c_char,
-    pub room_id_or_alias: *mut c_char,
-    pub html_body: *mut c_char,
+pub struct PresenceEventData {
+    pub user_id: *mut i8,
+    pub target_user_id: *mut i8,
+    pub status: i32,
+    pub status_msg: *mut i8,
 }
 
 #[repr(C)]
-pub struct CThreadList {
-    pub user_id: *mut c_char,
-    pub room_id: *mut c_char,
-    pub thread_root_id: *mut c_char,
-    pub latest_msg: *mut c_char,
-    pub count: u64,
-    pub ts: u64,
+pub struct SasRequestEventData {
+    pub user_id: *mut i8,
+    pub target_user_id: *mut i8,
+    pub flow_id: *mut i8,
 }
 
 #[repr(C)]
-pub struct CUpdateBuddy {
-    pub user_id: *mut c_char,
-    pub alias: *mut c_char,
-    pub avatar_url: *mut c_char,
+pub struct SasHaveEmojiEventData {
+    pub user_id: *mut i8,
+    pub target_user_id: *mut i8,
+    pub flow_id: *mut i8,
+    pub emojis: *mut i8,
 }
 
 #[repr(C)]
-pub struct CShowUserInfo {
-    pub user_id: *mut c_char,
-    pub target_user_id: *mut c_char,
-    pub display_name: *mut c_char,
-    pub avatar_url: *mut c_char,
-    pub is_online: bool,
+pub struct ShowVerificationQrEventData {
+    pub user_id: *mut i8,
+    pub target_user_id: *mut i8,
+    pub html_data: *mut i8,
 }
 
 #[repr(C)]
-pub struct CStickerPack {
-    pub cb_ptr: usize,
-    pub user_id: *mut c_char,
-    pub pack_id: *mut c_char,
-    pub pack_name: *mut c_char,
-    pub user_data: usize,
+pub struct ShowUserInfoEventData {
+    pub user_id: *mut i8,
+    pub target_user_id: *mut i8,
+    pub display_name: *mut i8,
+    pub avatar_url: *mut i8,
 }
 
 #[repr(C)]
-pub struct CStickerDone {
-    pub cb_ptr: usize,
-    pub user_data: usize,
+pub struct PollListEventData {
+    pub user_id: *mut i8,
+    pub room_id: *mut i8,
+    pub event_id: *mut i8,
+    pub question: *mut i8,
+    pub sender: *mut i8,
+    pub options_str: *mut i8,
 }
 
 #[repr(C)]
-pub struct CSticker {
-    pub cb_ptr: usize,
-    pub user_id: *mut c_char,
-    pub pack_id: *mut c_char,
-    pub sticker_id: *mut c_char,
-    pub uri: *mut c_char,
-    pub description: *mut c_char,
-    pub user_data: usize,
+pub struct ThreadListEventData {
+    pub user_id: *mut i8,
+    pub room_id: *mut i8,
+    pub thread_root_id: *mut i8,
+    pub latest_msg: *mut i8,
 }
 
 #[repr(C)]
-pub struct CMessageEdited {
-    pub user_id: *mut c_char,
-    pub room_id: *mut c_char,
-    pub event_id: *mut c_char,
-    pub new_msg: *mut c_char,
+pub struct RoomListAddEventData {
+    pub user_id: *mut i8,
+    pub room_id: *mut i8,
+    pub name: *mut i8,
+    pub topic: *mut i8,
+    pub parent_id: *mut i8,
 }
 
 #[repr(C)]
-pub struct CReactionsChanged {
-    pub user_id: *mut c_char,
-    pub room_id: *mut c_char,
-    pub event_id: *mut c_char,
-    pub reactions_text: *mut c_char,
+pub struct RoomPreviewEventData {
+    pub user_id: *mut i8,
+    pub room_id_or_alias: *mut i8,
+    pub html_body: *mut i8,
 }
 
 #[repr(C)]
-pub struct CPollCreationRequested {
-    pub user_id: *mut c_char,
-    pub room_id: *mut c_char,
+pub struct PollCreationRequestedEventData {
+    pub user_id: *mut i8,
+    pub room_id: *mut i8,
 }
 
+#[repr(C)]
+pub struct MessageRedactedEventData {
+    pub user_id: *mut i8,
+    pub room_id: *mut i8,
+    pub event_id: *mut i8,
+}
+
+#[repr(C)]
+pub struct MediaDownloadedEventData {
+    pub user_id: *mut i8,
+    pub room_id: *mut i8,
+    pub event_id: *mut i8,
+    pub media_data: *mut u8,
+    pub media_size: usize,
+    pub content_type: *mut i8,
+}
+
+// Internal Rust enum for the channel
+#[derive(Debug, Clone)]
 pub enum FfiEvent {
-    MessageReceived {
+    Message {
         user_id: String,
         sender: String,
         msg: String,
-        room_id: Option<String>,
+        room_id: String,
         thread_root_id: Option<String>,
-        event_id: String,
+        event_id: Option<String>,
         timestamp: u64,
         encrypted: bool,
-        is_system: bool,
+    },
+    MessageEdited {
+        user_id: String,
+        room_id: String,
+        event_id: String,
+        new_msg: String,
     },
     Typing {
         user_id: String,
@@ -286,24 +319,13 @@ pub enum FfiEvent {
         name: String,
         group_name: String,
         avatar_url: Option<String>,
-        topic: Option<String>,
+        topic: String,
         encrypted: bool,
         member_count: u64,
     },
     RoomLeft {
         user_id: String,
         room_id: String,
-    },
-    ReadMarker {
-        user_id: String,
-        room_id: String,
-        event_id: String,
-        who: String,
-    },
-    Presence {
-        user_id: String,
-        target_user_id: String,
-        is_online: bool,
     },
     ChatTopic {
         user_id: String,
@@ -324,33 +346,47 @@ pub enum FfiEvent {
         room_id: String,
         inviter: String,
     },
+    UpdateBuddy {
+        user_id: String,
+        alias: String,
+        avatar_url: String,
+    },
     LoginFailed {
         user_id: String,
-        message: String,
-    },
-    Connected {
-        user_id: String,
+        error_msg: String,
     },
     SsoUrl {
         url: String,
     },
-    UpdateBuddy {
+    Connected {
+        user_id: String,
+    },
+    ReadMarker {
+        user_id: String,
+        room_id: String,
+        event_id: String,
+        who: String,
+    },
+    PowerLevelUpdate {
+        user_id: String,
+        room_id: String,
+        is_admin: bool,
+        can_kick: bool,
+        can_ban: bool,
+        can_redact: bool,
+        can_invite: bool,
+    },
+    ReactionsChanged {
+        user_id: String,
+        room_id: String,
+        event_id: String,
+        reactions_text: String,
+    },
+    Presence {
         user_id: String,
         target_user_id: String,
-        alias: String,
-        avatar_url: String,
-    },
-    MessageEdited {
-        user_id: String,
-        room_id: String,
-        event_id: String,
-        new_msg: String,
-    },
-    ReadReceipt {
-        user_id: String,
-        room_id: String,
-        receipt_user_id: String,
-        event_id: String,
+        status: i32,
+        status_msg: Option<String>,
     },
     SasRequest {
         user_id: String,
@@ -368,30 +404,31 @@ pub enum FfiEvent {
         target_user_id: String,
         html_data: String,
     },
+    ShowUserInfo {
+        user_id: String,
+        target_user_id: String,
+        display_name: Option<String>,
+        avatar_url: Option<String>,
+    },
     PollList {
         user_id: String,
         room_id: String,
-        event_id: Option<String>,
-        question: Option<String>,
-        sender: Option<String>,
-        options_str: Option<String>,
+        event_id: String,
+        question: String,
+        sender: String,
+        options_str: String,
     },
-    PowerLevelUpdate {
+    ThreadList {
         user_id: String,
         room_id: String,
-        is_admin: bool,
-        can_kick: bool,
-        can_ban: bool,
-        can_redact: bool,
-        can_invite: bool,
+        thread_root_id: String,
+        latest_msg: String,
     },
     RoomListAdd {
         user_id: String,
         room_id: String,
         name: String,
-        topic: String,
-        member_count: usize,
-        is_space: bool,
+        topic: Option<String>,
         parent_id: Option<String>,
     },
     RoomPreview {
@@ -399,30 +436,28 @@ pub enum FfiEvent {
         room_id_or_alias: String,
         html_body: String,
     },
-    ThreadList {
+    PollCreationRequested {
         user_id: String,
         room_id: String,
-        thread_root_id: Option<String>,
-        latest_msg: Option<String>,
-        count: u64,
-        ts: u64,
     },
-    ShowUserInfo {
+    MessageRedacted {
         user_id: String,
-        target_user_id: String,
-        display_name: Option<String>,
-        avatar_url: Option<String>,
-        is_online: bool,
+        room_id: String,
+        event_id: String,
     },
+    MediaDownloaded {
+        user_id: String,
+        room_id: String,
+        event_id: String,
+        data: Vec<u8>,
+        content_type: String,
+    },
+    // Required by stickers.rs
     StickerPack {
         cb_ptr: usize,
         user_id: String,
         pack_id: String,
         pack_name: String,
-        user_data: usize,
-    },
-    StickerDone {
-        cb_ptr: usize,
         user_data: usize,
     },
     Sticker {
@@ -434,14 +469,8 @@ pub enum FfiEvent {
         description: String,
         user_data: usize,
     },
-    ReactionsChanged {
-        user_id: String,
-        room_id: String,
-        event_id: String,
-        reactions_text: String,
+    StickerDone {
+        cb_ptr: usize,
+        user_data: usize,
     },
-    PollCreationRequested {
-        user_id: String,
-        room_id: String,
-    }
 }

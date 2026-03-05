@@ -1,22 +1,24 @@
 use matrix_sdk::ruma::events::presence::PresenceEvent;
-use matrix_sdk::Client;
+use matrix_sdk::Room;
+use crate::ffi::{send_event, events::FfiEvent};
 
-pub async fn handle_presence(event: PresenceEvent, client: Client) {
-     let user_id = client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
-     let target_user_id = event.sender.as_str();
-     use matrix_sdk::ruma::presence::PresenceState;
-     let is_online = match event.content.presence {
-         PresenceState::Online => true,
-         PresenceState::Unavailable => true, // "Away" is online-ish
-         _ => false,
+pub async fn handle_presence(event: PresenceEvent, _room: Room) {
+     let user_id = event.sender.to_string();
+     let status = match event.content.presence {
+         matrix_sdk::ruma::presence::PresenceState::Online => 1,
+         matrix_sdk::ruma::presence::PresenceState::Unavailable => 2,
+         matrix_sdk::ruma::presence::PresenceState::Offline => 0,
+         _ => 0,
      };
-     
-     log::debug!("Presence update for {}: {:?}", target_user_id, event.content.presence);
-     
-     let event = crate::ffi::FfiEvent::Presence {
-         user_id,
-         target_user_id: target_user_id.to_string(),
-         is_online,
+     let status_msg = event.content.status_msg.clone();
+
+     let me = _room.client().user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
+
+     let event = FfiEvent::Presence {
+         user_id: me,
+         target_user_id: user_id,
+         status,
+         status_msg,
      };
-     let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+     send_event(event);
 }

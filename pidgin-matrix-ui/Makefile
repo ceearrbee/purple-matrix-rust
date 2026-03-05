@@ -8,7 +8,7 @@ GTK_VERSION = 2.0 # Pidgin typically uses GTK+ 2.0
 PIDGIN_CFLAGS = $(shell pkg-config --cflags purple pidgin gtk+-$(GTK_VERSION))
 PIDGIN_LIBS = $(shell pkg-config --libs purple pidgin gtk+-$(GTK_VERSION))
 
-CFLAGS = -g -Wall -fPIC $(PIDGIN_CFLAGS)
+CFLAGS = -g -Wall -fPIC $(PIDGIN_CFLAGS) -I../plugin_src
 LDFLAGS = -shared $(PIDGIN_LIBS)
 
 # Output filename for the plugin

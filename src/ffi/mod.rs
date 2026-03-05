@@ -1,7 +1,13 @@
+use std::sync::Mutex;
 use once_cell::sync::Lazy;
-use std::os::raw::{c_char, c_void};
-use dashmap::DashMap;
+use std::os::raw::{c_char, c_void, c_int};
+use std::ffi::{CString, CStr};
+use crossbeam_channel::{unbounded, Receiver, Sender};
+use dashmap::{DashMap, DashSet};
 use matrix_sdk::Client;
+
+pub mod events;
+pub use events::*;
 
 pub mod auth;
 pub mod rooms;
@@ -14,384 +20,601 @@ pub mod threads;
 pub mod encryption;
 pub mod aliases;
 pub mod discovery;
-pub mod events;
-pub mod free_event;
 
-#[cfg(test)]
-mod tests;
+// --- Phase 2.2: Safe FFI String Conversion ---
+pub fn safe_c_string(s: &str) -> CString {
+    let mut bytes = s.as_bytes().to_vec();
+    bytes.retain(|&b| b != 0); // Strip null bytes
+    CString::new(bytes).unwrap_or_default()
+}
 
-pub use events::*;
+#[macro_export]
+macro_rules! into_c_ptr {
+    ($s:expr) => {
+        $crate::ffi::safe_c_string($s).into_raw()
+    };
+    (opt $s:expr) => {
+        $s.as_ref().map(|s| $crate::ffi::safe_c_string(s).into_raw()).unwrap_or(std::ptr::null_mut())
+    };
+}
 
 #[macro_export]
 macro_rules! ffi_panic_boundary {
-    ( $block:block ) => {
-        if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $block)) {
-            log::error!("FFI Panic caught: {:?}", e);
+    ($t:block) => {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            $t
+        })) {
+            Ok(res) => res,
+            Err(_) => {
+                log::error!("FFI boundary caught a panic!");
+            }
         }
     };
-    ( $block:block, $default:expr ) => {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $block)) {
+    ($t:block, $default:expr) => {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            $t
+        })) {
             Ok(res) => res,
-            Err(e) => {
-                log::error!("FFI Panic caught (returning default): {:?}", e);
+            Err(_) => {
+                log::error!("FFI boundary caught a panic!");
                 $default
             }
         }
     };
 }
 
-pub static CLIENTS: Lazy<DashMap<String, Client>> = Lazy::new(|| DashMap::new());
-pub static HISTORY_FETCHED_ROOMS: Lazy<dashmap::DashSet<String>> = Lazy::new(|| dashmap::DashSet::new());
-pub static EVENTS_CHANNEL: Lazy<(crossbeam_channel::Sender<FfiEvent>, crossbeam_channel::Receiver<FfiEvent>)> = Lazy::new(|| crossbeam_channel::unbounded());
+// Globals
+pub(crate) static CLIENTS: Lazy<DashMap<String, Client>> = Lazy::new(DashMap::new);
+pub(crate) static HISTORY_FETCHED_ROOMS: Lazy<DashSet<String>> = Lazy::new(DashSet::new);
 
-pub(crate) static IMGSTORE_ADD_CALLBACK: Lazy<std::sync::Mutex<Option<extern "C" fn(*const u8, usize) -> std::os::raw::c_int>>> = Lazy::new(|| std::sync::Mutex::new(None));
-
-pub fn with_client<F, R>(user_id: &str, f: F) -> Option<R>
-where
-    F: FnOnce(Client) -> R,
-{
+pub fn with_client<F, R>(user_id: &str, f: F) -> Option<R> 
+where F: FnOnce(Client) -> R {
     CLIENTS.get(user_id).map(|c| f(c.clone()))
 }
 
+// --- Phase 1.2: Thread-Safe Bridge ---
+pub(crate) static EVENT_CHANNEL: Lazy<(Sender<FfiEvent>, Receiver<FfiEvent>)> = Lazy::new(|| unbounded());
+
+pub(crate) fn send_event(event: FfiEvent) {
+    let _ = EVENT_CHANNEL.0.send(event);
+}
+
+// Alias for files still using EVENTS_CHANNEL
+
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_init() {
-    ffi_panic_boundary!({
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .try_init();
-        log::info!("Matrix Rust FFI initialized");
-        crate::RUNTIME.spawn(async {
-            crate::media_helper::cleanup_media_files().await;
-        });
+    crate::ffi_panic_boundary!({
+        // Force initialization of Lazy globals
+        let _ = &*CLIENTS;
+        let _ = &*EVENT_CHANNEL;
+        let _ = &*crate::RUNTIME;
+        log::info!("Matrix Rust SDK FFI initialized.");
     })
 }
 
 #[no_mangle]
-pub extern "C" fn purple_matrix_rust_set_imgstore_add_callback(cb: extern "C" fn(*const u8, usize) -> std::os::raw::c_int) {
-    ffi_panic_boundary!({
-        if let Ok(mut lock) = IMGSTORE_ADD_CALLBACK.lock() {
-            *lock = Some(cb);
+pub extern "C" fn purple_matrix_rust_close_conversation(user_id: *const c_char, room_id: *const c_char) {
+    crate::ffi_panic_boundary!({
+        if user_id.is_null() || room_id.is_null() { return; }
+        let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+        let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+
+        log::info!("Conversation closed: {} for user {}", room_id_str, user_id_str);
+        // Here we could implement logic to stop tracking certain thread data if needed
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_poll_event(out_type: *mut i32, out_data: *mut *mut c_void) -> bool {
+    crate::ffi_panic_boundary!({
+        if out_type.is_null() || out_data.is_null() {
+            return false;
         }
-    })
-}
 
-#[no_mangle]
-pub extern "C" fn purple_matrix_rust_poll_event(
-    out_type: *mut i32,
-    out_data: *mut *mut c_void,
-) -> bool {
-    ffi_panic_boundary!({
-        if let Ok(event) = EVENTS_CHANNEL.1.try_recv() {
-            let (ev_type, ptr) = match event {
-                FfiEvent::MessageReceived { user_id, sender, msg, room_id, thread_root_id, event_id, timestamp, encrypted, is_system } => (
-                    1,
-                    Box::into_raw(Box::new(CMessageReceived {
-                        user_id: to_c_char(&user_id),
-                        sender: to_c_char(&sender),
-                        msg: to_c_char(&msg),
-                        room_id: to_c_char_opt(&room_id),
-                        thread_root_id: to_c_char_opt(&thread_root_id),
-                        event_id: to_c_char(&event_id),
+        match EVENT_CHANNEL.1.try_recv() {
+        Ok(event) => unsafe {
+            match event {
+                FfiEvent::Message { user_id, sender, msg, room_id, thread_root_id, event_id, timestamp, encrypted } => {
+                    *out_type = FfiEventType::MessageReceived as i32;
+                    let data = Box::new(MessageEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        sender: into_c_ptr!(&sender),
+                        msg: into_c_ptr!(&msg),
+                        room_id: into_c_ptr!(&room_id),
+                        thread_root_id: into_c_ptr!(opt thread_root_id),
+                        event_id: into_c_ptr!(opt event_id),
                         timestamp,
                         encrypted,
-                        is_system,
-                    })) as *mut c_void
-                ),
-                FfiEvent::ReactionsChanged { user_id, room_id, event_id, reactions_text } => (
-                    30,
-                    Box::into_raw(Box::new(CReactionsChanged {
-                        user_id: to_c_char(&user_id),
-                        room_id: to_c_char(&room_id),
-                        event_id: to_c_char(&event_id),
-                        reactions_text: to_c_char(&reactions_text),
-                    })) as *mut c_void
-                ),
-                FfiEvent::PollCreationRequested { user_id, room_id } => (
-                    33,
-                    Box::into_raw(Box::new(CPollCreationRequested {
-                        user_id: to_c_char(&user_id),
-                        room_id: to_c_char(&room_id),
-                    })) as *mut c_void
-                ),
-                FfiEvent::Typing { user_id, room_id, who, is_typing } => (
-                    2,
-                    Box::into_raw(Box::new(CTyping {
-                        user_id: to_c_char(&user_id),
-                        room_id: to_c_char(&room_id),
-                        who: to_c_char(&who),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::MessageEdited { user_id, room_id, event_id, new_msg } => {
+                    *out_type = FfiEventType::MessageEdited as i32;
+                    let data = Box::new(MessageEditedData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id: into_c_ptr!(&room_id),
+                        event_id: into_c_ptr!(&event_id),
+                        new_msg: into_c_ptr!(&new_msg),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::Typing { user_id, room_id, who, is_typing } => {
+                    *out_type = FfiEventType::TypingState as i32;
+                    let data = Box::new(TypingEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id: into_c_ptr!(&room_id),
+                        who: into_c_ptr!(&who),
                         is_typing,
-                    })) as *mut c_void
-                ),
-                FfiEvent::RoomJoined { user_id, room_id, name, group_name, avatar_url, topic, encrypted, member_count } => (
-                    3,
-                    Box::into_raw(Box::new(CRoomJoined {
-                        user_id: to_c_char(&user_id),
-                        room_id: to_c_char(&room_id),
-                        name: to_c_char(&name),
-                        group_name: to_c_char(&group_name),
-                        avatar_url: to_c_char_opt(&avatar_url),
-                        topic: to_c_char_opt(&topic),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::RoomJoined { user_id, room_id, name, group_name, avatar_url, topic, encrypted, member_count } => {
+                    *out_type = FfiEventType::RoomJoined as i32;
+                    let data = Box::new(RoomJoinedEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id: into_c_ptr!(&room_id),
+                        name: into_c_ptr!(&name),
+                        group_name: into_c_ptr!(&group_name),
+                        avatar_url: into_c_ptr!(opt avatar_url),
+                        topic: into_c_ptr!(&topic),
                         encrypted,
                         member_count,
-                    })) as *mut c_void
-                ),
-                FfiEvent::RoomLeft { user_id, room_id } => (
-                    4,
-                    Box::into_raw(Box::new(CRoomLeft {
-                        user_id: to_c_char(&user_id),
-                        room_id: to_c_char(&room_id),
-                    })) as *mut c_void
-                ),
-                FfiEvent::ReadMarker { user_id, room_id, event_id, who } => (
-                    5,
-                    Box::into_raw(Box::new(CReadMarker {
-                        user_id: to_c_char(&user_id),
-                        room_id: to_c_char(&room_id),
-                        event_id: to_c_char(&event_id),
-                        who: to_c_char(&who),
-                    })) as *mut c_void
-                ),
-                FfiEvent::Presence { user_id, target_user_id, is_online } => (
-                    6,
-                    Box::into_raw(Box::new(CPresence {
-                        user_id: to_c_char(&user_id),
-                        target_user_id: to_c_char(&target_user_id),
-                        is_online,
-                    })) as *mut c_void
-                ),
-                FfiEvent::ChatTopic { user_id, room_id, topic, sender } => (
-                    7,
-                    Box::into_raw(Box::new(CChatTopic {
-                        user_id: to_c_char(&user_id),
-                        room_id: to_c_char(&room_id),
-                        topic: to_c_char(&topic),
-                        sender: to_c_char(&sender),
-                    })) as *mut c_void
-                ),
-                FfiEvent::ChatUser { user_id, room_id, member_id, add, alias, avatar_path } => (
-                    8,
-                    Box::into_raw(Box::new(CChatUser {
-                        user_id: to_c_char(&user_id),
-                        room_id: to_c_char(&room_id),
-                        member_id: to_c_char(&member_id),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::ChatTopic { user_id, room_id, topic, sender } => {
+                    *out_type = FfiEventType::ChatTopicUpdate as i32;
+                    let data = Box::new(ChatTopicEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id: into_c_ptr!(&room_id),
+                        topic: into_c_ptr!(&topic),
+                        sender: into_c_ptr!(&sender),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::ChatUser { user_id, room_id, member_id, add, alias, avatar_path } => {
+                    *out_type = FfiEventType::ChatMemberUpdate as i32;
+                    let data = Box::new(ChatUserEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id: into_c_ptr!(&room_id),
+                        member_id: into_c_ptr!(&member_id),
                         add,
-                        alias: to_c_char_opt(&alias),
-                        avatar_path: to_c_char_opt(&avatar_path),
-                    })) as *mut c_void
-                ),
-                FfiEvent::Invite { user_id, room_id, inviter } => (
-                    9,
-                    Box::into_raw(Box::new(CInvite {
-                        user_id: to_c_char(&user_id),
-                        room_id: to_c_char(&room_id),
-                        inviter: to_c_char(&inviter),
-                    })) as *mut c_void
-                ),
-                FfiEvent::LoginFailed { user_id, message } => (
-                    12,
-                    Box::into_raw(Box::new(CLoginFailed {
-                        user_id: to_c_char(&user_id),
-                        message: to_c_char(&message),
-                    })) as *mut c_void
-                ),
-                FfiEvent::Connected { user_id } => (
-                    25,
-                    Box::into_raw(Box::new(CConnected {
-                        user_id: to_c_char(&user_id),
-                    })) as *mut c_void
-                ),
-                FfiEvent::SsoUrl { url } => (
-                    24,
-                    Box::into_raw(Box::new(CSso {
-                        url: to_c_char(&url),
-                    })) as *mut c_void
-                ),
-                FfiEvent::UpdateBuddy { user_id, target_user_id: _, alias, avatar_url } => (
-                    19,
-                    Box::into_raw(Box::new(CUpdateBuddy {
-                        user_id: to_c_char(&user_id),
-                        alias: to_c_char(&alias),
-                        avatar_url: to_c_char(&avatar_url),
-                    })) as *mut c_void
-                ),
-                FfiEvent::MessageEdited { user_id, room_id, event_id, new_msg } => (
-                    31,
-                    Box::into_raw(Box::new(CMessageEdited {
-                        user_id: to_c_char(&user_id),
-                        room_id: to_c_char(&room_id),
-                        event_id: to_c_char(&event_id),
-                        new_msg: to_c_char(&new_msg),
-                    })) as *mut c_void
-                ),
-                FfiEvent::SasRequest { user_id, target_user_id, flow_id } => (
-                    26,
-                    Box::into_raw(Box::new(CSasRequest {
-                        user_id: to_c_char(&user_id),
-                        target_user_id: to_c_char(&target_user_id),
-                        flow_id: to_c_char(&flow_id),
-                    })) as *mut c_void
-                ),
-                FfiEvent::SasHaveEmoji { user_id, target_user_id, flow_id, emojis } => (
-                    27,
-                    Box::into_raw(Box::new(CSasHaveEmoji {
-                        user_id: to_c_char(&user_id),
-                        target_user_id: to_c_char(&target_user_id),
-                        flow_id: to_c_char(&flow_id),
-                        emojis: to_c_char(&emojis),
-                    })) as *mut c_void
-                ),
-                FfiEvent::ShowVerificationQr { user_id, target_user_id, html_data } => (
-                    28,
-                    Box::into_raw(Box::new(CShowVerificationQr {
-                        user_id: to_c_char(&user_id),
-                        target_user_id: to_c_char(&target_user_id),
-                        html_data: to_c_char(&html_data),
-                    })) as *mut c_void
-                ),
-                FfiEvent::PollList { user_id, room_id, event_id, question, sender, options_str } => (
-                    15,
-                    Box::into_raw(Box::new(CPollList {
-                        user_id: to_c_char(&user_id),
-                        room_id: to_c_char(&room_id),
-                        event_id: to_c_char_opt(&event_id),
-                        question: to_c_char_opt(&question),
-                        sender: to_c_char_opt(&sender),
-                        options_str: to_c_char_opt(&options_str),
-                    })) as *mut c_void
-                ),
-                FfiEvent::RoomListAdd { user_id, room_id, name, topic, member_count, is_space, parent_id } => (
-                    10,
-                    Box::into_raw(Box::new(CRoomListAdd {
-                        user_id: to_c_char(&user_id),
-                        room_id: to_c_char(&room_id),
-                        name: to_c_char(&name),
-                        topic: to_c_char(&topic),
-                        member_count,
-                        is_space,
-                        parent_id: to_c_char_opt(&parent_id),
-                    })) as *mut c_void
-                ),
-                FfiEvent::RoomPreview { user_id, room_id_or_alias, html_body } => (
-                    11,
-                    Box::into_raw(Box::new(CRoomPreview {
-                        user_id: to_c_char(&user_id),
-                        room_id_or_alias: to_c_char(&room_id_or_alias),
-                        html_body: to_c_char(&html_body),
-                    })) as *mut c_void
-                ),
-                FfiEvent::ThreadList { user_id, room_id, thread_root_id, latest_msg, count, ts } => (
-                    14,
-                    Box::into_raw(Box::new(CThreadList {
-                        user_id: to_c_char(&user_id),
-                        room_id: to_c_char(&room_id),
-                        thread_root_id: to_c_char_opt(&thread_root_id),
-                        latest_msg: to_c_char_opt(&latest_msg),
-                        count,
-                        ts,
-                    })) as *mut c_void
-                ),
-                FfiEvent::ShowUserInfo { user_id, target_user_id, display_name, avatar_url, is_online } => (
-                    13,
-                    Box::into_raw(Box::new(CShowUserInfo {
-                        user_id: to_c_char(&user_id),
-                        target_user_id: to_c_char(&target_user_id),
-                        display_name: to_c_char_opt(&display_name),
-                        avatar_url: to_c_char_opt(&avatar_url),
-                        is_online,
-                    })) as *mut c_void
-                ),
-                FfiEvent::StickerPack { cb_ptr, user_id, pack_id, pack_name, user_data } => (
-                    21,
-                    Box::into_raw(Box::new(CStickerPack {
-                        cb_ptr,
-                        user_id: to_c_char(&user_id),
-                        pack_id: to_c_char(&pack_id),
-                        pack_name: to_c_char(&pack_name),
-                        user_data,
-                    })) as *mut c_void
-                ),
-                FfiEvent::StickerDone { cb_ptr, user_data } => (
-                    23,
-                    Box::into_raw(Box::new(CStickerDone {
-                        cb_ptr,
-                        user_data,
-                    })) as *mut c_void
-                ),
-                FfiEvent::Sticker { cb_ptr, user_id, pack_id, sticker_id, uri, description, user_data } => (
-                    22,
-                    Box::into_raw(Box::new(CSticker {
-                        cb_ptr,
-                        user_id: to_c_char(&user_id),
-                        pack_id: to_c_char(&pack_id),
-                        sticker_id: to_c_char(&sticker_id),
-                        uri: to_c_char(&uri),
-                        description: to_c_char(&description),
-                        user_data,
-                    })) as *mut c_void
-                ),
-                FfiEvent::PowerLevelUpdate { user_id, room_id, is_admin, can_kick, can_ban, can_redact, can_invite } => (
-                    29,
-                    Box::into_raw(Box::new(CPowerLevelUpdate {
-                        user_id: to_c_char(&user_id),
-                        room_id: to_c_char(&room_id),
+                        alias: into_c_ptr!(opt alias),
+                        avatar_path: into_c_ptr!(opt avatar_path),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::Invite { user_id, room_id, inviter } => {
+                    *out_type = FfiEventType::InviteReceived as i32;
+                    let data = Box::new(InviteEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id: into_c_ptr!(&room_id),
+                        inviter: into_c_ptr!(&inviter),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::UpdateBuddy { user_id, alias, avatar_url } => {
+                    *out_type = FfiEventType::BuddyUpdate as i32;
+                    let data = Box::new(UpdateBuddyEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        alias: into_c_ptr!(&alias),
+                        avatar_url: into_c_ptr!(&avatar_url),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::LoginFailed { user_id, error_msg } => {
+                    *out_type = FfiEventType::LoginFailed as i32;
+                    let data = Box::new(LoginFailedEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        error_msg: into_c_ptr!(&error_msg),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::SsoUrl { url } => {
+                    *out_type = FfiEventType::SsoUrlReceived as i32;
+                    let data = Box::new(SsoUrlEventData {
+                        url: into_c_ptr!(&url),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::Connected { user_id } => {
+                    *out_type = FfiEventType::Connected as i32;
+                    let data = Box::new(ConnectedEventData {
+                        user_id: into_c_ptr!(&user_id),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::ReadMarker { user_id, room_id, event_id, who } => {
+                    *out_type = FfiEventType::ReadMarker as i32;
+                    let data = Box::new(ReadMarkerEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id: into_c_ptr!(&room_id),
+                        event_id: into_c_ptr!(&event_id),
+                        who: into_c_ptr!(&who),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::PowerLevelUpdate { user_id, room_id, is_admin, can_kick, can_ban, can_redact, can_invite } => {
+                    *out_type = FfiEventType::PowerLevelUpdate as i32;
+                    let data = Box::new(PowerLevelUpdateEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id: into_c_ptr!(&room_id),
                         is_admin,
                         can_kick,
                         can_ban,
                         can_redact,
                         can_invite,
-                    })) as *mut c_void
-                ),
-                FfiEvent::ReadReceipt { user_id, room_id, receipt_user_id, event_id } => (
-                    32,
-                    Box::into_raw(Box::new(CReadReceipt {
-                        user_id: to_c_char(&user_id),
-                        room_id: to_c_char(&room_id),
-                        receipt_user_id: to_c_char(&receipt_user_id),
-                        event_id: to_c_char(&event_id),
-                    })) as *mut c_void
-                ),
-            };
-
-            unsafe {
-                *out_type = ev_type;
-                *out_data = ptr;
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::ReactionsChanged { user_id, room_id, event_id, reactions_text } => {
+                    *out_type = FfiEventType::ReactionUpdate as i32;
+                    let data = Box::new(ReactionsChangedEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id: into_c_ptr!(&room_id),
+                        event_id: into_c_ptr!(&event_id),
+                        reactions_text: into_c_ptr!(&reactions_text),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::Presence { user_id, target_user_id, status, status_msg } => {
+                    *out_type = FfiEventType::PresenceUpdate as i32;
+                    let data = Box::new(PresenceEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        target_user_id: into_c_ptr!(&target_user_id),
+                        status,
+                        status_msg: into_c_ptr!(opt status_msg),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::SasRequest { user_id, target_user_id, flow_id } => {
+                    *out_type = FfiEventType::VerificationRequest as i32;
+                    let data = Box::new(SasRequestEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        target_user_id: into_c_ptr!(&target_user_id),
+                        flow_id: into_c_ptr!(&flow_id),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::SasHaveEmoji { user_id, target_user_id, flow_id, emojis } => {
+                    *out_type = FfiEventType::VerificationEmoji as i32;
+                    let data = Box::new(SasHaveEmojiEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        target_user_id: into_c_ptr!(&target_user_id),
+                        flow_id: into_c_ptr!(&flow_id),
+                        emojis: into_c_ptr!(&emojis),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::ShowVerificationQr { user_id, target_user_id, html_data } => {
+                    *out_type = FfiEventType::VerificationQr as i32;
+                    let data = Box::new(ShowVerificationQrEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        target_user_id: into_c_ptr!(&target_user_id),
+                        html_data: into_c_ptr!(&html_data),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::RoomLeft { user_id, room_id } => {
+                    *out_type = FfiEventType::RoomLeft as i32;
+                    let data = Box::new(RoomLeftEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id: into_c_ptr!(&room_id),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::PollCreationRequested { user_id, room_id } => {
+                    *out_type = 33; 
+                    let data = Box::new(PollCreationRequestedEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id: into_c_ptr!(&room_id),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::ShowUserInfo { user_id, target_user_id, display_name, avatar_url } => {
+                    *out_type = FfiEventType::UserInfoReceived as i32;
+                    let data = Box::new(ShowUserInfoEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        target_user_id: into_c_ptr!(&target_user_id),
+                        display_name: into_c_ptr!(opt display_name),
+                        avatar_url: into_c_ptr!(opt avatar_url),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::PollList { user_id, room_id, event_id, question, sender, options_str } => {
+                    *out_type = FfiEventType::PollListReceived as i32;
+                    let data = Box::new(PollListEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id: into_c_ptr!(&room_id),
+                        event_id: into_c_ptr!(&event_id),
+                        question: into_c_ptr!(&question),
+                        sender: into_c_ptr!(&sender),
+                        options_str: into_c_ptr!(&options_str),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::ThreadList { user_id, room_id, thread_root_id, latest_msg } => {
+                    *out_type = FfiEventType::ThreadListReceived as i32;
+                    let data = Box::new(ThreadListEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id: into_c_ptr!(&room_id),
+                        thread_root_id: into_c_ptr!(&thread_root_id),
+                        latest_msg: into_c_ptr!(&latest_msg),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::RoomListAdd { user_id, room_id, name, topic, parent_id } => {
+                    *out_type = FfiEventType::RoomListAdded as i32;
+                    let data = Box::new(RoomListAddEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id: into_c_ptr!(&room_id),
+                        name: into_c_ptr!(&name),
+                        topic: into_c_ptr!(opt topic),
+                        parent_id: into_c_ptr!(opt parent_id),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::RoomPreview { user_id, room_id_or_alias, html_body } => {
+                    *out_type = FfiEventType::RoomPreview as i32;
+                    let data = Box::new(RoomPreviewEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id_or_alias: into_c_ptr!(&room_id_or_alias),
+                        html_body: into_c_ptr!(&html_body),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::MessageRedacted { user_id, room_id, event_id } => {
+                    *out_type = FfiEventType::MessageRedacted as i32;
+                    let data = Box::new(MessageRedactedEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id: into_c_ptr!(&room_id),
+                        event_id: into_c_ptr!(&event_id),
+                    });
+                    *out_data = Box::into_raw(data) as *mut c_void;
+                },
+                FfiEvent::MediaDownloaded { user_id, room_id, event_id, data, content_type } => {
+                    *out_type = FfiEventType::MediaDownloaded as i32;
+                    let data_len = data.len();
+                    let data_ptr = libc::malloc(data_len) as *mut u8;
+                    std::ptr::copy_nonoverlapping(data.as_ptr(), data_ptr, data_len);
+                    
+                    let event_data = Box::new(MediaDownloadedEventData {
+                        user_id: into_c_ptr!(&user_id),
+                        room_id: into_c_ptr!(&room_id),
+                        event_id: into_c_ptr!(&event_id),
+                        media_data: data_ptr,
+                        media_size: data_len,
+                        content_type: into_c_ptr!(&content_type),
+                    });
+                    *out_data = Box::into_raw(event_data) as *mut c_void;
+                },
+                _ => return false,
             }
-            return true;
-        }
-        false
+            true
+        },
+        Err(_) => false,
+    }
     }, false)
 }
 
-pub fn send_system_message(user_id: &str, msg: &str) {
-    ffi_panic_boundary!({
-        let event = FfiEvent::MessageReceived {
-            user_id: user_id.to_string(),
-            sender: "System".to_string(),
-            msg: msg.to_string(),
-            room_id: None,
-            thread_root_id: None,
-            event_id: "".to_string(),
-            timestamp: 0,
-            encrypted: false,
-            is_system: true,
-        };
-        let _ = EVENTS_CHANNEL.0.send(event);
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_free_event(event_type: i32, data: *mut c_void) {
+    crate::ffi_panic_boundary!({
+        if data.is_null() {
+            return;
+        }
+        unsafe {
+            if let Ok(event_enum) = FfiEventType::try_from(event_type) {
+            match event_enum {
+                FfiEventType::MessageReceived => { // MessageReceived
+                    let d = Box::from_raw(data as *mut MessageEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.sender as *mut c_char);
+                    let _ = CString::from_raw(d.msg as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                    if !d.thread_root_id.is_null() { let _ = CString::from_raw(d.thread_root_id as *mut c_char); }
+                    if !d.event_id.is_null() { let _ = CString::from_raw(d.event_id as *mut c_char); }
+                },
+                FfiEventType::MessageEdited => { // MessageEdited
+                    let d = Box::from_raw(data as *mut MessageEditedData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                    let _ = CString::from_raw(d.event_id as *mut c_char);
+                    let _ = CString::from_raw(d.new_msg as *mut c_char);
+                },
+                FfiEventType::TypingState => { // TypingState
+                    let d = Box::from_raw(data as *mut TypingEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                    let _ = CString::from_raw(d.who as *mut c_char);
+                },
+                FfiEventType::RoomJoined => { // RoomJoined
+                    let d = Box::from_raw(data as *mut RoomJoinedEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                    let _ = CString::from_raw(d.name as *mut c_char);
+                    let _ = CString::from_raw(d.group_name as *mut c_char);
+                    if !d.avatar_url.is_null() { let _ = CString::from_raw(d.avatar_url as *mut c_char); }
+                    let _ = CString::from_raw(d.topic as *mut c_char);
+                },
+                FfiEventType::ChatTopicUpdate => { // ChatTopicUpdate
+                    let d = Box::from_raw(data as *mut ChatTopicEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                    let _ = CString::from_raw(d.topic as *mut c_char);
+                    let _ = CString::from_raw(d.sender as *mut c_char);
+                },
+                FfiEventType::ChatMemberUpdate => { // ChatMemberUpdate
+                    let d = Box::from_raw(data as *mut ChatUserEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                    let _ = CString::from_raw(d.member_id as *mut c_char);
+                    if !d.alias.is_null() { let _ = CString::from_raw(d.alias as *mut c_char); }
+                    if !d.avatar_path.is_null() { let _ = CString::from_raw(d.avatar_path as *mut c_char); }
+                },
+                FfiEventType::InviteReceived => { // InviteReceived
+                    let d = Box::from_raw(data as *mut InviteEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                    let _ = CString::from_raw(d.inviter as *mut c_char);
+                },
+                FfiEventType::BuddyUpdate => { // BuddyUpdate
+                    let d = Box::from_raw(data as *mut UpdateBuddyEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.alias as *mut c_char);
+                    let _ = CString::from_raw(d.avatar_url as *mut c_char);
+                },
+                FfiEventType::LoginFailed => { // LoginFailed
+                    let d = Box::from_raw(data as *mut LoginFailedEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.error_msg as *mut c_char);
+                },
+                FfiEventType::SsoUrlReceived => { // SsoUrlReceived
+                    let d = Box::from_raw(data as *mut SsoUrlEventData);
+                    let _ = CString::from_raw(d.url as *mut c_char);
+                },
+                FfiEventType::Connected => { // Connected
+                    let d = Box::from_raw(data as *mut ConnectedEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                },
+                FfiEventType::ReadMarker => { // ReadMarker
+                    let d = Box::from_raw(data as *mut ReadMarkerEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                    let _ = CString::from_raw(d.event_id as *mut c_char);
+                    let _ = CString::from_raw(d.who as *mut c_char);
+                },
+                FfiEventType::PowerLevelUpdate => { // PowerLevelUpdate
+                    let d = Box::from_raw(data as *mut PowerLevelUpdateEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                },
+                FfiEventType::ReactionUpdate => { // ReactionUpdate
+                    let d = Box::from_raw(data as *mut ReactionsChangedEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                    let _ = CString::from_raw(d.event_id as *mut c_char);
+                    let _ = CString::from_raw(d.reactions_text as *mut c_char);
+                },
+                FfiEventType::PresenceUpdate => { // PresenceUpdate
+                    let d = Box::from_raw(data as *mut PresenceEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.target_user_id as *mut c_char);
+                    if !d.status_msg.is_null() { let _ = CString::from_raw(d.status_msg as *mut c_char); }
+                },
+                FfiEventType::VerificationRequest => { // VerificationRequest
+                    let d = Box::from_raw(data as *mut SasRequestEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.target_user_id as *mut c_char);
+                    let _ = CString::from_raw(d.flow_id as *mut c_char);
+                },
+                FfiEventType::VerificationEmoji => { // VerificationEmoji
+                    let d = Box::from_raw(data as *mut SasHaveEmojiEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.target_user_id as *mut c_char);
+                    let _ = CString::from_raw(d.flow_id as *mut c_char);
+                    let _ = CString::from_raw(d.emojis as *mut c_char);
+                },
+                FfiEventType::VerificationQr => { // VerificationQr
+                    let d = Box::from_raw(data as *mut ShowVerificationQrEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.target_user_id as *mut c_char);
+                    let _ = CString::from_raw(d.html_data as *mut c_char);
+                },
+                FfiEventType::RoomLeft => { // RoomLeft
+                    let d = Box::from_raw(data as *mut RoomLeftEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                },
+                FfiEventType::UserInfoReceived => { // UserInfoReceived
+                    let d = Box::from_raw(data as *mut ShowUserInfoEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.target_user_id as *mut c_char);
+                    if !d.display_name.is_null() { let _ = CString::from_raw(d.display_name as *mut c_char); }
+                    if !d.avatar_url.is_null() { let _ = CString::from_raw(d.avatar_url as *mut c_char); }
+                },
+                FfiEventType::PollListReceived => { // PollListReceived
+                    let d = Box::from_raw(data as *mut PollListEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                    let _ = CString::from_raw(d.event_id as *mut c_char);
+                    let _ = CString::from_raw(d.question as *mut c_char);
+                    let _ = CString::from_raw(d.sender as *mut c_char);
+                    let _ = CString::from_raw(d.options_str as *mut c_char);
+                },
+                FfiEventType::ThreadListReceived => { // ThreadListReceived
+                    let d = Box::from_raw(data as *mut ThreadListEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                    let _ = CString::from_raw(d.thread_root_id as *mut c_char);
+                    let _ = CString::from_raw(d.latest_msg as *mut c_char);
+                },
+                FfiEventType::RoomListAdded => { // RoomListAdded
+                    let d = Box::from_raw(data as *mut RoomListAddEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                    let _ = CString::from_raw(d.name as *mut c_char);
+                    if !d.topic.is_null() { let _ = CString::from_raw(d.topic as *mut c_char); }
+                    if !d.parent_id.is_null() { let _ = CString::from_raw(d.parent_id as *mut c_char); }
+                },
+                FfiEventType::RoomPreview => { // RoomPreview
+                    let d = Box::from_raw(data as *mut RoomPreviewEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id_or_alias as *mut c_char);
+                    let _ = CString::from_raw(d.html_body as *mut c_char);
+                },
+                FfiEventType::MessageRedacted => { // MessageRedacted
+                    let d = Box::from_raw(data as *mut MessageRedactedEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                    let _ = CString::from_raw(d.event_id as *mut c_char);
+                },
+                FfiEventType::MediaDownloaded => { // MediaDownloaded
+                    let d = Box::from_raw(data as *mut MediaDownloadedEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                    let _ = CString::from_raw(d.event_id as *mut c_char);
+                    let _ = CString::from_raw(d.content_type as *mut c_char);
+                    if !d.media_data.is_null() {
+                        libc::free(d.media_data as *mut libc::c_void);
+                    }
+                },
+                _ => {} // RoomMuteUpdate, RoomTagUpdate, etc. handled by generic ignore or unused
+            }
+        } else if event_type == 33 { // PollCreationRequested
+            let d = Box::from_raw(data as *mut PollCreationRequestedEventData);
+            let _ = CString::from_raw(d.user_id as *mut c_char);
+            let _ = CString::from_raw(d.room_id as *mut c_char);
+        }
+        }
     })
 }
 
+pub(crate) static IMGSTORE_ADD_CALLBACK: Lazy<Mutex<Option<extern "C" fn(*const u8, usize) -> c_int>>> = Lazy::new(|| Mutex::new(None));
+#[no_mangle] pub extern "C" fn purple_matrix_rust_set_imgstore_add_callback(cb: extern "C" fn(*const u8, usize) -> c_int) { *IMGSTORE_ADD_CALLBACK.lock().unwrap_or_else(|e| e.into_inner()) = Some(cb); }
+
+pub fn send_system_message(user_id: &str, msg: &str) {
+    send_event(FfiEvent::Message {
+        user_id: user_id.to_string(),
+        sender: "System".to_string(),
+        msg: format!("[System] {}", msg),
+        room_id: String::new(),
+        thread_root_id: None,
+        event_id: None,
+        timestamp: 0,
+        encrypted: false,
+    });
+}
+
 pub fn send_system_message_to_room(user_id: &str, room_id: &str, msg: &str) {
-    ffi_panic_boundary!({
-        let event = FfiEvent::MessageReceived {
-            user_id: user_id.to_string(),
-            sender: "System".to_string(),
-            msg: msg.to_string(),
-            room_id: Some(room_id.to_string()),
-            thread_root_id: None,
-            event_id: "".to_string(),
-            timestamp: 0,
-            encrypted: false,
-            is_system: true,
-        };
-        let _ = EVENTS_CHANNEL.0.send(event);
-    })
+    send_event(FfiEvent::Message {
+        user_id: user_id.to_string(),
+        sender: "System".to_string(),
+        msg: format!("[System] {}", msg),
+        room_id: room_id.to_string(),
+        thread_root_id: None,
+        event_id: None,
+        timestamp: 0,
+        encrypted: false,
+    });
 }

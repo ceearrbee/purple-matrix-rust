@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use matrix_sdk::Client;
 use crate::{RUNTIME, DATA_PATH};
-use crate::ffi::{CLIENTS};
+use crate::ffi::{CLIENTS, send_event, events::FfiEvent};
 use crate::sync_logic;
 
 const SSO_CALLBACK_TIMEOUT_SECS: u64 = 180;
@@ -128,11 +128,11 @@ async fn finish_sso_internal(client: Client, token: String) {
                 }
             } else {
                 // Notify user of non-mismatch error
-                let event = crate::ffi::FfiEvent::LoginFailed {
+                let event = FfiEvent::LoginFailed {
                     user_id: pending_id,
-                    message: err_msg,
+                    error_msg: err_msg,
                 };
-                let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+                send_event(event);
             }
         }
     }
@@ -462,10 +462,10 @@ async fn finish_login_success(client: Client) {
          }
     }
     {
-         let event = crate::ffi::FfiEvent::Connected {
+         let event = FfiEvent::Connected {
              user_id: username.clone(),
          };
-         let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+         send_event(event);
     }
 
     // 2. Bootstrap Crypto
@@ -499,11 +499,11 @@ async fn finish_login_success(client: Client) {
 
 fn report_login_failure(msg: String) {
     log::error!("{}", msg);
-    let event = crate::ffi::FfiEvent::LoginFailed {
+    let event = FfiEvent::LoginFailed {
         user_id: "".to_string(), // we don't always have user ID here, fallback to empty
-        message: msg,
+        error_msg: msg,
     };
-    let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+    send_event(event);
 }
 
 pub(crate) fn start_sso_flow(client: Client) {
@@ -545,10 +545,10 @@ pub(crate) fn start_sso_flow(client: Client) {
             
             // Emit Callback
             {
-                let event = crate::ffi::FfiEvent::SsoUrl {
+                let event = FfiEvent::SsoUrl {
                     url: sso_url,
                 };
-                let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+                send_event(event);
             }
             
             let deadline = Instant::now() + Duration::from_secs(SSO_CALLBACK_TIMEOUT_SECS);
@@ -611,14 +611,16 @@ pub extern "C" fn purple_matrix_rust_finish_sso(token: *const c_char) {
 
     let mut pending_client = None;
     for entry in CLIENTS.iter() {
-        if entry.value().user_id().is_none() {
-            pending_client = Some(entry.value().clone());
+        let client: &Client = entry.value();
+        if client.user_id().is_none() {
+            pending_client = Some(client.clone());
             break;
         }
     }
     if pending_client.is_none() {
         if let Some(entry) = CLIENTS.iter().next() {
-            pending_client = Some(entry.value().clone());
+            let client: &Client = entry.value();
+            pending_client = Some(client.clone());
         }
     }
 
@@ -636,7 +638,7 @@ pub extern "C" fn purple_matrix_rust_deactivate_account(erase_data: bool) {
 
     if let Some(client) = client_opt {
         RUNTIME.spawn(async move {
-            let res: Result<(), _> = client.logout().await;
+            let res = client.matrix_auth().logout().await;
             if let Err(e) = res {
                 log::error!("Failed to logout during deactivation: {:?}", e);
             }
@@ -691,7 +693,7 @@ pub extern "C" fn purple_matrix_rust_destroy_session(user_id: *const c_char) {
     RUNTIME.spawn(async move {
         // 2. Invalidate on server if client was active
         if let Some(client) = client_opt {
-            let res: Result<(), _> = client.logout().await;
+            let res = client.matrix_auth().logout().await;
             if let Err(e) = res {
                 log::error!("Failed to logout from homeserver: {:?}", e);
             } else {

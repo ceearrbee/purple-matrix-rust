@@ -1,4 +1,5 @@
 use matrix_sdk::Room;
+use crate::ffi::{send_event, events::FfiEvent};
 
 pub async fn handle_poll_start(event: matrix_sdk::ruma::events::poll::start::SyncPollStartEvent, room: Room) {
     if let matrix_sdk::ruma::events::poll::start::SyncPollStartEvent::Original(ev) = event {
@@ -14,22 +15,20 @@ pub async fn handle_poll_start(event: matrix_sdk::ruma::events::poll::start::Syn
         let options: Vec<String> = ev.content.poll.answers.iter().map(|a| a.text.find_plain().unwrap_or("Option").to_string()).collect();
         let body = crate::html_fmt::style_poll(question, options);
         
-        let event = crate::ffi::FfiEvent::MessageReceived {
+        send_event(FfiEvent::Message {
             user_id: local_user_id,
             sender: sender.to_string(),
             msg: body,
-            room_id: Some(room_id.to_string()),
+            room_id: room_id.to_string(),
             thread_root_id: None,
-            event_id: ev.event_id.to_string(),
+            event_id: Some(ev.event_id.to_string()),
             timestamp,
             encrypted: false,
-            is_system: false,
-        };
-        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+        });
     }
 }
 
-pub async fn handle_poll_response(event: matrix_sdk::ruma::events::poll::response::SyncPollResponseEvent, room: Room) {
+pub async fn handle_poll_response(event: matrix_sdk::ruma::events::poll::response::SyncPollResponseEvent, _room: Room) {
     if let matrix_sdk::ruma::events::poll::response::SyncPollResponseEvent::Original(ev) = event {
         let sender = ev.sender.as_str();
         let poll_id = ev.content.relates_to.event_id.as_str();

@@ -1,53 +1,61 @@
 /// Helper functions for formatting Matrix messages as HTML for Pidgin/libpurple.
+use ammonia::Builder;
+use std::collections::{HashSet, HashMap};
+use once_cell::sync::Lazy;
 
 pub fn style_reply(quoted_body: &str, reply_body: &str) -> String {
     format!(
-        "<font color='#777777'><b>[Reply]</b> {}</font><hr/>{}",
-        quoted_body,
-        reply_body
-    )
-}
-
-pub fn style_reply_v2(quoted_body: &str, reply_body: &str) -> String {
-    // A clean, compact reply style that avoids extra spacing.
-    format!(
-        "<font color='#777777'><b>[Reply]</b> {}</font><br/>&gt; {}",
+        "<blockquote style=\"border-left: 3px solid #ccc; padding-left: 8px; margin-left: 5px; color: #666; font-size: 90%;\">{}</blockquote><br/>{}",
         quoted_body,
         reply_body
     )
 }
 
 pub fn style_edit(body: &str) -> String {
-    format!("{} <font color='#777777' size='1'><i>(edited)</i></font>", body)
+    format!(
+        "{} <span style=\"color: #888; font-size: 80%;\">(edited)</span>",
+        body
+    )
 }
 
 pub fn style_poll(question: &str, options: Vec<String>) -> String {
-    let mut body = format!("<b>Poll: {}</b><br/>", question);
+    let mut opts_html = String::new();
     for (i, opt) in options.iter().enumerate() {
-        body.push_str(&format!("{}. {}<br/>", i + 1, opt));
+        opts_html.push_str(&format!("<li><b>{}.</b> {}</li>", i + 1, crate::escape_html(opt)));
     }
-    body
+    
+    format!(
+        "<div style=\"background-color: #f0f0f0; padding: 10px; border: 1px solid #ccc; border-radius: 5px; margin-top: 5px; margin-bottom: 5px;\"><div style=\"font-size: 1.1em; font-weight: bold; margin-bottom: 8px;\">📊 {}</div><ul style=\"list-style-type: none; padding-left: 10px; margin-top: 0; margin-bottom: 5px;\">{}</ul><div style=\"font-size: smaller; color: #777; margin-top: 5px;\">(Use 'Active Polls' menu to vote)</div></div>",
+        crate::escape_html(question),
+        opts_html
+    )
 }
 
+/// Sanitizes HTML while preserving basic formatting.
+/// Uses ammonia for production-grade security.
 pub fn sanitize_matrix_html(input: &str) -> String {
-    let mut cleaner = ammonia::Builder::default();
-    cleaner
-        .tags(
-            [
-                "b", "i", "u", "s", "strong", "em", "del", "blockquote", "p", "br", "span", "a",
-                "img", "code", "pre", "font", "hr", "ul", "ol", "li",
-            ]
-            .iter()
-            .cloned()
-            .collect(),
-        )
-        .link_rel(None)
-        .url_schemes(
-            ["http", "https", "mailto", "matrix", "mxc"]
-                .iter()
-                .cloned()
-                .collect(),
-        );
+    static AMMONIA: Lazy<Builder> = Lazy::new(|| {
+        let mut builder = Builder::default();
+        
+        let tags: HashSet<&str> = HashSet::from_iter([
+            "b", "i", "u", "s", "strong", "em", "strike", "del", "blockquote", 
+            "p", "br", "span", "a", "code", "pre", "font", "hr", "ul", "ol", "li"
+        ]);
+        
+        let mut tag_attrs: HashMap<&str, HashSet<&str>> = HashMap::new();
+        tag_attrs.insert("a", HashSet::from_iter(["href"]));
+        tag_attrs.insert("span", HashSet::from_iter(["style"]));
+        tag_attrs.insert("blockquote", HashSet::from_iter(["style"]));
+        tag_attrs.insert("code", HashSet::from_iter(["style"]));
+        tag_attrs.insert("font", HashSet::from_iter(["color", "size", "face"]));
 
-    cleaner.clean(input).to_string()
+        builder
+            .tags(tags)
+            .tag_attributes(tag_attrs)
+            .allowed_classes(HashMap::new())
+            .link_rel(None);
+        builder
+    });
+
+    AMMONIA.clean(input).to_string()
 }

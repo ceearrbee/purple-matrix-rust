@@ -1,5 +1,6 @@
 use matrix_sdk::Room;
 use matrix_sdk::ruma::EventId;
+use crate::ffi::{send_event, events::FfiEvent};
 
 pub async fn update_reactions_for_event(room: &Room, target_id: &EventId) {
     let client = room.client();
@@ -42,13 +43,12 @@ pub async fn update_reactions_for_event(room: &Room, target_id: &EventId) {
     };
 
     log::info!("Dispatching ReactionsChanged for {}: {}", target_id, summary);
-    let event = crate::ffi::FfiEvent::ReactionsChanged {
+    send_event(FfiEvent::ReactionsChanged {
         user_id: local_user_id,
         room_id: room.room_id().to_string(),
         event_id: target_id.to_string(),
         reactions_text: display_text,
-    };
-    let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+    });
 }
 
 pub async fn handle_reaction(event: matrix_sdk::ruma::events::reaction::SyncReactionEvent, room: Room) {
@@ -72,17 +72,15 @@ pub async fn handle_sticker(event: matrix_sdk::ruma::events::sticker::SyncSticke
         let body = format!("[Sticker] {}", ev.content.body);
         let is_encrypted = room.get_state_event_static::<matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent>().await.ok().flatten().is_some();
         
-        let event = crate::ffi::FfiEvent::MessageReceived {
+        send_event(FfiEvent::Message {
             user_id: local_user_id,
             sender: sender_id.to_string(),
             msg: body,
-            room_id: Some(room_id.to_string()),
+            room_id: room_id.to_string(),
             thread_root_id: None,
-            event_id: ev.event_id.to_string(),
+            event_id: Some(ev.event_id.to_string()),
             timestamp,
             encrypted: is_encrypted,
-            is_system: false,
-        };
-        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+        });
     }
 }

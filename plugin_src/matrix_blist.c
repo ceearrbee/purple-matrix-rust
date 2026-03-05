@@ -14,6 +14,35 @@
 #include <libpurple/util.h>
 #include <string.h>
 
+typedef struct {
+  char *user_id;
+  char *room_id;
+  char *name;
+  char *group_name;
+  char *avatar_url;
+  char *topic;
+  bool encrypted;
+  guint64 member_count;
+} MatrixRoomData;
+
+typedef struct {
+  char *user_id;
+  char *name;
+  char *id;
+  char *topic;
+  guint64 count;
+  gboolean is_space;
+  char *parent_id;
+} RoomListData;
+
+typedef struct {
+  char *user_id;
+  char *room_id;
+  char *inviter;
+} MatrixInviteData;
+
+static gboolean process_room_cb(gpointer data);
+
 static PurpleRoomlist *active_roomlist = NULL;
 static GHashTable *roomlist_nodes = NULL;
 
@@ -21,6 +50,15 @@ typedef struct {
   PurpleAccount *account;
   char *target_user_id;
 } ModerateBuddyCtx;
+
+void ensure_room_in_blist(PurpleAccount *account, const char *room_id, const char *name, const char *group_name) {
+    MatrixRoomData *d = g_new0(MatrixRoomData, 1);
+    d->user_id = g_strdup(purple_account_get_username(account));
+    d->room_id = g_strdup(room_id);
+    d->name = g_strdup(name);
+    d->group_name = g_strdup(group_name);
+    process_room_cb(d);
+}
 
 static void moderate_buddy_room_cb(void *user_data, const char *room_id) {
   ModerateBuddyCtx *ctx = (ModerateBuddyCtx *)user_data;
@@ -80,13 +118,27 @@ static gboolean process_room_cb(gpointer data) {
   MatrixRoomData *d = (MatrixRoomData *)data;
   PurpleAccount *account = find_matrix_account_by_id(d->user_id);
 
-  if (!account || purple_account_get_connection(account) == NULL) {
+  if (!account) {
+    fprintf(stderr, "[Matrix FFI] process_room_cb FAILED: No account found for user_id=%s\n", d->user_id);
+    purple_debug_warning("matrix-ffi", "process_room_cb: No account found for user_id=%s\n", d->user_id);
+    goto cleanup;
+  }
+
+  PurpleConnection *gc = purple_account_get_connection(account);
+  if (!gc) {
+    fprintf(stderr, "[Matrix FFI] process_room_cb FAILED: Account %s is not connected\n", d->user_id);
+    purple_debug_warning("matrix-ffi", "process_room_cb: Account %s is not connected\n", d->user_id);
     goto cleanup;
   }
 
   /* Atomic safety: ensure we have something to work with */
-  if (!d->room_id)
+  if (!d->room_id) {
+    fprintf(stderr, "[Matrix FFI] process_room_cb FAILED: room_id is NULL\n");
+    purple_debug_error("matrix-ffi", "process_room_cb: room_id is NULL\n");
     goto cleanup;
+  }
+
+  purple_debug_info("matrix-ffi", "process_room_cb: Processing room_id=%s name=%s for user_id=%s\n", d->room_id, d->name ? d->name : "(null)", d->user_id);
 
   char *s_name = strip_emojis(d->name ? d->name : "");
   char *s_topic = strip_emojis(d->topic ? d->topic : "");
@@ -228,6 +280,7 @@ void room_joined_callback(const char *user_id, const char *room_id,
                           const char *name, const char *group_name,
                           const char *avatar_url, const char *topic,
                           bool encrypted, guint64 member_count) {
+  purple_debug_info("matrix-ffi", "room_joined_callback: room_id=%s user_id=%s\n", room_id, user_id);
   MatrixRoomData *d = g_new0(MatrixRoomData, 1);
   d->user_id = g_strdup(user_id);
   d->room_id = g_strdup(room_id);
@@ -237,7 +290,8 @@ void room_joined_callback(const char *user_id, const char *room_id,
   d->topic = g_strdup(topic);
   d->encrypted = encrypted;
   d->member_count = member_count;
-  g_idle_add(process_room_cb, d);
+  
+  process_room_cb(d);
 }
 
 typedef struct {
@@ -251,6 +305,9 @@ static gboolean process_room_left_cb(gpointer data) {
     PurpleConnection *gc = purple_account_get_connection(account);
     if (gc)
       serv_got_chat_left(gc, get_chat_id(d->room_id));
+    
+    PurpleChat *chat = purple_blist_find_chat(account, d->room_id);
+    if (chat) purple_blist_remove_chat(chat);
   }
   g_free(d->user_id);
   g_free(d->room_id);
@@ -413,10 +470,6 @@ void ensure_thread_in_blist(PurpleAccount *account, const char *virtual_id,
     purple_blist_alias_chat(chat, nice_alias);
   }
 
-  /* Atomic UI pop - ensures history is triggered via conversation-created
-   * signal in core */
-  serv_got_joined_chat(gc, get_chat_id(virtual_id), virtual_id);
-
   g_free(nice_alias);
   g_free(group_name);
   g_free(s_alias);
@@ -481,7 +534,7 @@ PurpleRoomlist *matrix_roomlist_get_list(PurpleConnection *gc) {
                          purple_roomlist_field_new(PURPLE_ROOMLIST_FIELD_STRING,
                                                    "Topic", "topic", FALSE));
   purple_roomlist_set_fields(active_roomlist, fields);
-  purple_matrix_rust_fetch_public_rooms_for_list(
+  purple_matrix_rust_list_public_rooms(
       purple_account_get_username(purple_connection_get_account(gc)));
   return active_roomlist;
 }
@@ -808,6 +861,6 @@ void matrix_roomlist_expand_category(PurpleRoomlist *list,
   GList *fields = purple_roomlist_room_get_fields(category);
   if (fields && fields->data) {
     const char *space_id = (const char *)fields->data;
-    purple_matrix_rust_get_space_hierarchy(user_id, space_id);
+    purple_matrix_rust_get_hierarchy(user_id, space_id);
   }
 }

@@ -2,6 +2,7 @@ use matrix_sdk::ruma::events::room::topic::SyncRoomTopicEvent;
 use matrix_sdk::ruma::events::room::member::SyncRoomMemberEvent;
 use matrix_sdk::ruma::events::room::tombstone::SyncRoomTombstoneEvent;
 use matrix_sdk::Room;
+use crate::ffi::{send_event, events::FfiEvent};
 
 pub async fn handle_room_topic(event: SyncRoomTopicEvent, room: Room) {
     if let SyncRoomTopicEvent::Original(ev) = event {
@@ -13,30 +14,27 @@ pub async fn handle_room_topic(event: SyncRoomTopicEvent, room: Room) {
         let Some(me) = client.user_id() else { return; };
         let local_user_id = me.as_str().to_string();
 
-        let body = format!("[System] {} set the topic to: {}", crate::escape_html(sender), crate::escape_html(topic));
+        let body = format!("[System] {} set the topic to: {}", sender, topic);
 
         // 1. Dispatch Message
-        let msg_event = crate::ffi::FfiEvent::MessageReceived {
+        send_event(FfiEvent::Message {
             user_id: local_user_id.clone(),
             sender: "System".to_string(),
             msg: body,
-            room_id: Some(room_id.to_string()),
+            room_id: room_id.to_string(),
             thread_root_id: None,
-            event_id: "".to_string(),
+            event_id: None,
             timestamp,
             encrypted: false,
-            is_system: true,
-        };
-        let _ = crate::ffi::EVENTS_CHANNEL.0.send(msg_event);
+        });
 
         // 2. Dispatch Topic Update
-        let topic_event = crate::ffi::FfiEvent::ChatTopic {
+        send_event(FfiEvent::ChatTopic {
             user_id: local_user_id,
             room_id: room_id.to_string(),
             topic: topic.to_string(),
             sender: sender.to_string(),
-        };
-        let _ = crate::ffi::EVENTS_CHANNEL.0.send(topic_event);
+        });
     }
 }
 
@@ -52,79 +50,66 @@ pub async fn handle_room_member(event: SyncRoomMemberEvent, room: Room) {
         let local_user_id = me.as_str().to_string();
 
         let body = match ev.content.membership {
-            MembershipState::Join => format!("[System] {} joined the room.", crate::escape_html(target)),
-            MembershipState::Leave => format!("[System] {} left the room.", crate::escape_html(target)),
-            MembershipState::Invite => format!("[System] {} invited {} to the room.", crate::escape_html(sender), crate::escape_html(target)),
-            MembershipState::Ban => format!("[System] {} was banned by {}.", crate::escape_html(target), crate::escape_html(sender)),
-            _ => format!("[System] Membership change for {}: {:?}", crate::escape_html(target), ev.content.membership),
+            MembershipState::Join => format!("[System] {} joined the room.", target),
+            MembershipState::Leave => format!("[System] {} left the room.", target),
+            MembershipState::Invite => format!("[System] {} invited {} to the room.", sender, target),
+            MembershipState::Ban => format!("[System] {} was banned by {}.", target, sender),
+            _ => format!("[System] Membership change for {}: {:?}", target, ev.content.membership),
         };
 
-        // Update buddy info (display name and avatar)
+        // Update buddy info
         if ev.content.membership == MembershipState::Join {
-            let display_name_raw = ev.content.displayname.clone().unwrap_or_else(|| target.to_string());
-            let display_name = crate::escape_html(&display_name_raw);
+            let display_name = ev.content.displayname.clone().unwrap_or_else(|| target.to_string());
             
-            // Handle Avatar Download
             let avatar_path = if let Some(mxc_url) = &ev.content.avatar_url {
                 crate::media_helper::download_avatar(&client, mxc_url, target).await
             } else {
                 None
             };
             
-            // 1. Update Buddy List
-            let update_ev = crate::ffi::FfiEvent::UpdateBuddy {
+            send_event(FfiEvent::UpdateBuddy {
                 user_id: local_user_id.clone(),
-                target_user_id: target.to_string(),
                 alias: display_name.clone(),
                 avatar_url: avatar_path.clone().unwrap_or_default(),
-            };
-            let _ = crate::ffi::EVENTS_CHANNEL.0.send(update_ev);
+            });
 
-            // 2. Update Chat Room User List
-            let chat_user_ev = crate::ffi::FfiEvent::ChatUser {
+            send_event(FfiEvent::ChatUser {
                 user_id: local_user_id.clone(),
                 room_id: room_id.to_string(),
                 member_id: target.to_string(),
                 add: true,
                 alias: Some(display_name.clone()),
                 avatar_path: avatar_path.clone(),
-            };
-            let _ = crate::ffi::EVENTS_CHANNEL.0.send(chat_user_ev);
+            });
             
-            // If it's US, update our own profile alias
             if target == local_user_id {
-                let me_ev = crate::ffi::FfiEvent::UpdateBuddy {
+                send_event(FfiEvent::UpdateBuddy {
                     user_id: local_user_id.clone(),
-                    target_user_id: local_user_id.clone(),
                     alias: display_name,
                     avatar_url: avatar_path.unwrap_or_default(),
-                };
-                let _ = crate::ffi::EVENTS_CHANNEL.0.send(me_ev);
+                });
             }
         } else if ev.content.membership == MembershipState::Leave || ev.content.membership == MembershipState::Ban {
-            let chat_user_ev = crate::ffi::FfiEvent::ChatUser {
+            send_event(FfiEvent::ChatUser {
                 user_id: local_user_id.clone(),
                 room_id: room_id.to_string(),
                 member_id: target.to_string(),
                 add: false,
                 alias: None,
                 avatar_path: None,
-            };
-            let _ = crate::ffi::EVENTS_CHANNEL.0.send(chat_user_ev);
+            });
         }
 
-        let event = crate::ffi::FfiEvent::MessageReceived {
+        send_event(FfiEvent::Message {
             user_id: local_user_id,
             sender: "System".to_string(),
             msg: body,
-            room_id: Some(room_id.to_string()),
+            room_id: room_id.to_string(),
             thread_root_id: None,
-            event_id: "".to_string(),
+            event_id: None,
             timestamp,
             encrypted: false,
-            is_system: true,
-        };
-        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+        });
     }
 }
 
@@ -140,20 +125,18 @@ pub async fn handle_tombstone(event: SyncRoomTombstoneEvent, room: Room) {
         let Some(me) = client.user_id() else { return; };
         let local_user_id = me.as_str().to_string();
 
-        let body = format!("[System] This room has been upgraded. New room ID: {}", crate::escape_html(new_room));
+        let body = format!("[System] This room has been upgraded. New room ID: {}", new_room);
 
-        let event = crate::ffi::FfiEvent::MessageReceived {
+        send_event(FfiEvent::Message {
             user_id: local_user_id,
             sender: "System".to_string(),
             msg: body,
-            room_id: Some(room_id.to_string()),
+            room_id: room_id.to_string(),
             thread_root_id: None,
-            event_id: "".to_string(),
+            event_id: None,
             timestamp,
             encrypted: false,
-            is_system: true,
-        };
-        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+        });
     }
 }
 
@@ -171,7 +154,7 @@ pub async fn handle_power_levels(_event: matrix_sdk::ruma::events::room::power_l
         let can_redact = my_level >= pl.redact;
         let can_invite = my_level >= pl.invite;
         
-        let event = crate::ffi::FfiEvent::PowerLevelUpdate {
+        send_event(FfiEvent::PowerLevelUpdate {
             user_id,
             room_id,
             is_admin,
@@ -179,7 +162,6 @@ pub async fn handle_power_levels(_event: matrix_sdk::ruma::events::room::power_l
             can_ban,
             can_redact,
             can_invite,
-        };
-        let _ = crate::ffi::EVENTS_CHANNEL.0.send(event);
+        });
     }
 }
