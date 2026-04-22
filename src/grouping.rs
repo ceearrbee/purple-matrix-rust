@@ -1,109 +1,137 @@
 use matrix_sdk::Room;
-use matrix_sdk::ruma::events::{StateEventType, AnySyncStateEvent};
+use matrix_sdk::ruma::events::{StateEventType, AnySyncStateEvent, AnyStrippedStateEvent};
 use matrix_sdk::deserialized_responses::AnySyncOrStrippedState;
-use matrix_sdk::ruma::events::tag::TagName;
+use async_recursion::async_recursion;
 
 pub async fn get_room_group_name(room: &Room) -> String {
-    // 1. Check Tags (Favorites / Low Priority)
-    if let Ok(Some(tags)) = room.tags().await {
-        if tags.contains_key(&TagName::Favorite) {
-            return "Favorites".to_string();
-        }
-        if tags.contains_key(&TagName::LowPriority) {
-            return "Low Priority".to_string();
-        }
-    }
+    let room_id = room.room_id().as_str();
 
-    // 2. Check Direct Message
+    // 1. Check Direct Message
     if let Ok(true) = room.is_direct().await {
+        log::debug!("Grouping: Room {} is a Direct Message", room_id);
         return "Direct Messages".to_string();
     }
 
-    // 3. Check Space Parent (Recursive)
-    if let Some(space_name) = find_top_space_parent(room).await {
-        return space_name;
+    // 2. Check Space Path (Recursive)
+    if let Some(path) = get_space_path(room).await {
+        log::debug!("Grouping: Room {} belongs to space path: {}", room_id, path);
+        return path;
     }
 
-    // 4. Default
+    // 3. Default fallback group for standalone rooms
+    log::debug!("Grouping: Room {} has no space/DM found, using 'Matrix Rooms' fallback", room_id);
     "Matrix Rooms".to_string()
 }
 
-async fn find_top_space_parent(room: &Room) -> Option<String> {
-    find_top_space_parent_recursive(room, 0).await
-}
-
-async fn find_parent_space_by_children(room: &Room) -> Option<Room> {
-    let client = room.client();
-    let room_id = room.room_id().as_str();
-    for r in client.joined_rooms() {
-        if r.is_space() {
-            // Check if this space has the room as a child
-            if let Ok(events) = r.get_state_events(StateEventType::SpaceChild).await {
-                for raw_event in events {
-                    if let Ok(AnySyncOrStrippedState::Sync(any_sync_event_box)) = raw_event.deserialize() {
-                        if let AnySyncStateEvent::SpaceChild(e) = *any_sync_event_box {
-                            if e.state_key() == room_id {
-                                // Found it! (Make sure it's not a deletion - usually indicated by lack of 'via')
-                                if let Some(original) = e.as_original() {
-                                    if !original.content.via.is_empty() {
-                                        return Some(r);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+async fn get_space_path(room: &Room) -> Option<String> {
+    let mut path_parts = Vec::new();
+    get_space_path_recursive(room, &mut path_parts, 0).await;
+    
+    if path_parts.is_empty() {
+        None
+    } else {
+        path_parts.reverse();
+        Some(path_parts.join(" / "))
     }
-    None
 }
 
-#[async_recursion::async_recursion]
-async fn find_top_space_parent_recursive(room: &Room, depth: u32) -> Option<String> {
-    if depth > 5 { return None; } // Prevent infinite loops or too deep search
+#[async_recursion]
+async fn get_space_path_recursive(room: &Room, path: &mut Vec<String>, depth: u32) {
+    if depth > 5 { return; }
 
     let mut parent_room = None;
 
-    // 1. Try SpaceParent state events in the room itself
+    // Try finding SpaceParent state events
     if let Ok(events) = room.get_state_events(StateEventType::SpaceParent).await {
          let mut parents = Vec::new();
          for raw_event in events {
-             if let Ok(AnySyncOrStrippedState::Sync(any_sync_event_box)) = raw_event.deserialize() {
-                 if let AnySyncStateEvent::SpaceParent(e) = *any_sync_event_box {
-                     if let Some(original_event) = e.as_original() {
-                         if let Ok(parent_id) = <&matrix_sdk::ruma::RoomId>::try_from(e.state_key().as_str()) {
-                             parents.push((parent_id.to_owned(), original_event.content.canonical));
+             match raw_event.deserialize() {
+                 Ok(AnySyncOrStrippedState::Sync(any_sync_event_box)) => {
+                     if let AnySyncStateEvent::SpaceParent(e) = *any_sync_event_box {
+                         if let Some(original_event) = e.as_original() {
+                             if let Ok(parent_id) = <&matrix_sdk::ruma::RoomId>::try_from(e.state_key().as_str()) {
+                                 parents.push((parent_id.to_owned(), original_event.content.canonical));
+                             }
                          }
                      }
-                 }
+                 },
+                 Ok(AnySyncOrStrippedState::Stripped(any_stripped_event)) => {
+                     if let AnyStrippedStateEvent::SpaceParent(e) = *any_stripped_event {
+                         if let Ok(parent_id) = <&matrix_sdk::ruma::RoomId>::try_from(e.state_key.as_str()) {
+                             parents.push((parent_id.to_owned(), true));
+                         }
+                     }
+                 },
+                 _ => {}
              }
          }
 
-         // Prefer canonical parent
          let canonical = parents.iter().find(|(_, is_canonical)| *is_canonical);
          let target_parent = canonical.or(parents.first());
 
          if let Some((parent_id, _)) = target_parent {
              parent_room = room.client().get_room(parent_id);
+             if parent_room.is_none() {
+                 log::debug!("Grouping: Found parent space ID {} but it is not joined. Using ID as name part.", parent_id);
+                 path.push(format!("Space: {}", parent_id));
+                 return;
+             }
          }
     }
 
-    // 2. Fallback: Search joined spaces for m.space.child events
     if parent_room.is_none() {
         parent_room = find_parent_space_by_children(room).await;
     }
 
     if let Some(p_room) = parent_room {
-         // Try to go higher
-         if let Some(top_name) = find_top_space_parent_recursive(&p_room, depth + 1).await {
-             return Some(top_name);
-         }
-         // If no higher parent found, this is the top one we know
          if let Ok(name) = p_room.display_name().await {
-             return Some(name.to_string());
+             path.push(name.to_string());
+         } else {
+             path.push("Unknown Space".to_string());
          }
+         get_space_path_recursive(&p_room, path, depth + 1).await;
     }
+}
 
+async fn find_parent_space_by_children(room: &Room) -> Option<Room> {
+    let client = room.client();
+    let room_id = room.room_id();
+    for r in client.joined_rooms() {
+        // Even if is_space() is false, it might have space child events if it's a space
+        // Some rooms might be missing the type flag in early sync
+        let has_children = if let Ok(events) = r.get_state_events(StateEventType::SpaceChild).await {
+            !events.is_empty()
+        } else {
+            false
+        };
+
+        if r.is_space() || has_children {
+            if let Ok(events) = r.get_state_events(StateEventType::SpaceChild).await {
+                for raw_event in events {
+                    match raw_event.deserialize() {
+                        Ok(AnySyncOrStrippedState::Sync(any_sync_event_box)) => {
+                            if let AnySyncStateEvent::SpaceChild(e) = *any_sync_event_box {
+                                if e.state_key() == room_id.as_str() {
+                                    if let Some(original) = e.as_original() {
+                                        if !original.content.via.is_empty() {
+                                            return Some(r);
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        Ok(AnySyncOrStrippedState::Stripped(any_stripped_event)) => {
+                            if let AnyStrippedStateEvent::SpaceChild(e) = *any_stripped_event {
+                                if e.state_key == room_id.as_str() {
+                                    return Some(r);
+                                }
+                            }
+                        },
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
     None
 }

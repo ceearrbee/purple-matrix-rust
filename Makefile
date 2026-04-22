@@ -9,8 +9,14 @@ PLUGIN_DIR := $(shell pkg-config --variable=plugindir purple)
 DATA_DIR := $(shell pkg-config --variable=datadir purple)
 
 CC ?= gcc
-CFLAGS += -g -O2 -Wall -fPIC $(PURPLE_CFLAGS) $(GLIB_CFLAGS) -I./src -I./plugin_src
-LDFLAGS += -shared
+# Security hardening flags:
+#   -fstack-protector-strong   stack smashing protection
+#   -D_FORTIFY_SOURCE=2        runtime buffer-overflow detection (requires -O2)
+#   -Werror                    treat warnings as errors (prevents silent regressions)
+#   -Wl,-z,relro,-z,now        full RELRO — make GOT read-only after startup
+CFLAGS += -g -O2 -Wall -Werror -fPIC -fstack-protector-strong -D_FORTIFY_SOURCE=2 \
+          $(PURPLE_CFLAGS) $(GLIB_CFLAGS) -I./src -I./plugin_src
+LDFLAGS += -shared -Wl,-z,relro,-z,now
 
 RUST_LIB := target/release/libpurple_matrix_rust.a
 TARGET := libpurple-matrix-rust.so

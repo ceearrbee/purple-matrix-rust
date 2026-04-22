@@ -38,6 +38,7 @@ typedef enum {
     FFI_EVENT_MESSAGE_REDACTED = 29,
     FFI_EVENT_MEDIA_DOWNLOADED = 30,
     FFI_EVENT_ROOM_DASHBOARD_INFO = 31,
+    FFI_EVENT_POLL_CREATION_REQUESTED = 32,
 } FfiEventType;
 
 // Structs matching src/ffi/events.rs exactly for FFI safety
@@ -45,12 +46,14 @@ typedef enum {
 typedef struct {
     char *user_id;
     char *sender;
+    char *sender_id;
     char *msg;
     char *room_id;
     char *thread_root_id;
     char *event_id;
     uint64_t timestamp;
     bool encrypted;
+    bool is_direct;
 } MessageEventData;
 
 typedef struct {

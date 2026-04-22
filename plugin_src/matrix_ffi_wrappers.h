@@ -7,6 +7,16 @@
 #include "matrix_types.h"
 
 // FFI Functions for Event Polling
+//
+// Memory ownership contract for purple_matrix_rust_poll_event / free_event:
+//   - purple_matrix_rust_poll_event() transfers ownership of *out_data to the
+//     caller.  The caller MUST call purple_matrix_rust_free_event(type, data)
+//     exactly once when it is done with the event data.
+//   - For FFI_EVENT_MEDIA_DOWNLOADED, the MediaDownloadedEventData.media_data
+//     pointer is allocated with libc::malloc() by the Rust side.  It is freed
+//     by purple_matrix_rust_free_event() — callers must NOT call free() on it
+//     directly, and must NOT use it after calling free_event().
+//   - Calling free_event() twice with the same pointer is undefined behaviour.
 extern void purple_matrix_rust_init();
 extern bool purple_matrix_rust_poll_event(int *out_type, void **out_data);
 extern void purple_matrix_rust_free_event(int type, void *data);
@@ -37,6 +47,7 @@ extern void purple_matrix_rust_invite_user(const char *account_user_id, const ch
 extern void purple_matrix_rust_set_room_topic(const char *user_id, const char *room_id, const char *topic);
 extern void purple_matrix_rust_send_read_receipt(const char *user_id, const char *room_id, const char *event_id);
 extern void purple_matrix_rust_close_conversation(const char *user_id, const char *room_id);
+extern void purple_matrix_rust_track_room(const char *user_id, const char *room_id);
 
 // FFI Functions for Profile/Buddy List
 extern void purple_matrix_rust_set_status(const char *user_id, int status, const char *msg);
@@ -49,6 +60,10 @@ extern void purple_matrix_rust_ignore_user(const char *user_id, const char *targ
 extern void purple_matrix_rust_unignore_user(const char *user_id, const char *target_id);
 
 // FFI Functions for Verification & Crypto
+extern void purple_matrix_rust_verify_sas_match(const char *user_id, const char *flow_id);
+extern void purple_matrix_rust_verify_sas_mismatch(const char *user_id, const char *flow_id);
+extern void purple_matrix_rust_verify_sas_cancel(const char *user_id, const char *flow_id);
+
 extern void purple_matrix_rust_verify_user(const char *user_id, const char *target_user_id);
 extern void purple_matrix_rust_confirm_verification(const char *user_id, const char *target_user_id, const char *flow_id, bool confirm);
 extern void purple_matrix_rust_accept_verification(const char *user_id, const char *target_user_id, const char *flow_id);
@@ -62,6 +77,7 @@ extern void purple_matrix_rust_list_own_devices(const char *user_id);
 extern void purple_matrix_rust_bootstrap_cross_signing(const char *user_id);
 extern void purple_matrix_rust_bootstrap_cross_signing_with_password(const char *user_id, const char *password);
 extern void purple_matrix_rust_enable_key_backup(const char *user_id);
+extern void purple_matrix_rust_cleanup_media(void);
 
 // Image Store Callback (Sync call from Rust to C, needs careful handling)
 extern void purple_matrix_rust_set_imgstore_add_callback(int (*cb)(const uint8_t *data, size_t size));

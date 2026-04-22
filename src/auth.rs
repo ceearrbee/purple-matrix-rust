@@ -84,8 +84,14 @@ async fn finish_sso_internal(client: Client, token: String) {
             log::error!("{}", err_msg);
             
             if (err_msg.contains("Mismatched") || err_msg.contains("Session")) && !err_msg.contains("Invalid login token") {
-                log::warn!("SSO mismatch detected. Wiping data and retrying SSO flow immediately...");
-                
+                log::warn!("SSO mismatch detected. Notifying user, wiping data, and retrying SSO flow...");
+
+                // Notify the user before wiping so they aren't left guessing.
+                send_event(FfiEvent::LoginFailed {
+                    user_id: pending_id.clone(),
+                    error_msg: "Session mismatch detected — resetting local data and retrying SSO. Please re-authenticate when prompted.".to_string(),
+                });
+
                 // 1. Preserve config
                 let hs_url = client.homeserver().to_string();
                 
@@ -95,7 +101,7 @@ async fn finish_sso_internal(client: Client, token: String) {
                 
                 // 3. Wipe Data
                 let path_opt = {
-                        let guard = DATA_PATH.lock().unwrap_or_else(|e| e.into_inner());
+                        let guard = DATA_PATH.lock().unwrap_or_else(|e| { log::error!("DATA_PATH mutex poisoned (another thread panicked); recovering stale value"); e.into_inner() });
                         guard.clone()
                 };
                 
@@ -285,7 +291,7 @@ async fn perform_login(username: String, password: secrecy::SecretString, homese
     
     // update global data path
     {
-        let mut guard = DATA_PATH.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = DATA_PATH.lock().unwrap_or_else(|e| { log::error!("DATA_PATH mutex poisoned (another thread panicked); recovering stale value"); e.into_inner() });
         *guard = Some(data_path.clone());
     }
 
@@ -440,7 +446,7 @@ async fn finish_login_success(client: Client) {
          };
          
          let path_opt = {
-              let guard = DATA_PATH.lock().unwrap_or_else(|e| e.into_inner());
+              let guard = DATA_PATH.lock().unwrap_or_else(|e| { log::error!("DATA_PATH mutex poisoned (another thread panicked); recovering stale value"); e.into_inner() });
               guard.clone()
          };
          
@@ -647,7 +653,7 @@ pub extern "C" fn purple_matrix_rust_deactivate_account(erase_data: bool) {
 
     if erase_data {
         let path_opt = {
-            let guard = DATA_PATH.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = DATA_PATH.lock().unwrap_or_else(|e| { log::error!("DATA_PATH mutex poisoned (another thread panicked); recovering stale value"); e.into_inner() });
             guard.clone()
         };
         if let Some(path) = path_opt {
@@ -703,7 +709,7 @@ pub extern "C" fn purple_matrix_rust_destroy_session(user_id: *const c_char) {
         
         // 3. Remove Local Session File and Data Dir
         let path_opt = {
-             let guard = DATA_PATH.lock().unwrap_or_else(|e| e.into_inner());
+             let guard = DATA_PATH.lock().unwrap_or_else(|e| { log::error!("DATA_PATH mutex poisoned (another thread panicked); recovering stale value"); e.into_inner() });
              guard.clone()
         };
         if let Some(path) = path_opt {

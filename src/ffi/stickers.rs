@@ -44,7 +44,13 @@ pub extern "C" fn purple_matrix_rust_send_sticker(user_id: *const c_char, room_i
 
                 if let Ok(rid) = <&RoomId>::try_from(room_id_str.as_str()) {
                     if let Some(room) = client.get_room(rid) {
-                        let uri = <OwnedMxcUri>::try_from(mxc_uri_str.clone()).unwrap();
+                        let uri = match <OwnedMxcUri>::try_from(mxc_uri_str.clone()) {
+                                Ok(u) => u,
+                                Err(e) => {
+                                    log::error!("Invalid MXC URI '{}': {:?}", mxc_uri_str, e);
+                                    return;
+                                }
+                            };
                         // Fix: StickerInfo doesn't have a simple new(), use default or construct manually
                         let content = StickerEventContent::new("Sticker".to_string(), Default::default(), uri);
                         let _ = room.send(content).await;

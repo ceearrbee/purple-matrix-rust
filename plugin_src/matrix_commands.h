@@ -28,6 +28,7 @@ void matrix_ui_action_unignore_user(const char *room_id, const char *target_user
 void matrix_ui_action_leave_room(const char *room_id);
 void matrix_ui_action_verify_self(const char *room_id);
 void matrix_ui_action_crypto_status(const char *room_id);
+void matrix_ui_action_bootstrap_crypto(const char *room_id);
 void matrix_ui_action_list_devices(const char *room_id);
 void matrix_ui_action_room_settings(const char *room_id);
 void matrix_ui_action_invite_user(const char *room_id);

@@ -1,3 +1,5 @@
+use libc::c_char;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiEventType {
@@ -32,6 +34,7 @@ pub enum FfiEventType {
     MessageRedacted = 29,
     MediaDownloaded = 30,
     RoomDashboardInfo = 31,
+    PollCreationRequested = 32,
 }
 
 impl TryFrom<i32> for FfiEventType {
@@ -69,6 +72,7 @@ impl TryFrom<i32> for FfiEventType {
             29 => Ok(FfiEventType::MessageRedacted),
             30 => Ok(FfiEventType::MediaDownloaded),
             31 => Ok(FfiEventType::RoomDashboardInfo),
+            32 => Ok(FfiEventType::PollCreationRequested),
             _ => Err(()),
         }
     }
@@ -76,110 +80,112 @@ impl TryFrom<i32> for FfiEventType {
 
 #[repr(C)]
 pub struct MessageEventData {
-    pub user_id: *mut i8,
-    pub sender: *mut i8,
-    pub msg: *mut i8,
-    pub room_id: *mut i8,
-    pub thread_root_id: *mut i8,
-    pub event_id: *mut i8,
+    pub user_id: *mut c_char,
+    pub sender: *mut c_char,
+    pub sender_id: *mut c_char,
+    pub msg: *mut c_char,
+    pub room_id: *mut c_char,
+    pub thread_root_id: *mut c_char,
+    pub event_id: *mut c_char,
     pub timestamp: u64,
     pub encrypted: bool,
+    pub is_direct: bool,
 }
 
 #[repr(C)]
 pub struct MessageEditedData {
-    pub user_id: *mut i8,
-    pub room_id: *mut i8,
-    pub event_id: *mut i8,
-    pub new_msg: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub event_id: *mut c_char,
+    pub new_msg: *mut c_char,
 }
 
 #[repr(C)]
 pub struct TypingEventData {
-    pub user_id: *mut i8,
-    pub room_id: *mut i8,
-    pub who: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub who: *mut c_char,
     pub is_typing: bool,
 }
 
 #[repr(C)]
 pub struct RoomJoinedEventData {
-    pub user_id: *mut i8,
-    pub room_id: *mut i8,
-    pub name: *mut i8,
-    pub group_name: *mut i8,
-    pub avatar_url: *mut i8,
-    pub topic: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub name: *mut c_char,
+    pub group_name: *mut c_char,
+    pub avatar_url: *mut c_char,
+    pub topic: *mut c_char,
     pub encrypted: bool,
     pub member_count: u64,
 }
 
 #[repr(C)]
 pub struct RoomLeftEventData {
-    pub user_id: *mut i8,
-    pub room_id: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
 }
 
 #[repr(C)]
 pub struct ChatTopicEventData {
-    pub user_id: *mut i8,
-    pub room_id: *mut i8,
-    pub topic: *mut i8,
-    pub sender: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub topic: *mut c_char,
+    pub sender: *mut c_char,
 }
 
 #[repr(C)]
 pub struct ChatUserEventData {
-    pub user_id: *mut i8,
-    pub room_id: *mut i8,
-    pub member_id: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub member_id: *mut c_char,
     pub add: bool,
-    pub alias: *mut i8,
-    pub avatar_path: *mut i8,
+    pub alias: *mut c_char,
+    pub avatar_path: *mut c_char,
 }
 
 #[repr(C)]
 pub struct InviteEventData {
-    pub user_id: *mut i8,
-    pub room_id: *mut i8,
-    pub inviter: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub inviter: *mut c_char,
 }
 
 #[repr(C)]
 pub struct UpdateBuddyEventData {
-    pub user_id: *mut i8,
-    pub alias: *mut i8,
-    pub avatar_url: *mut i8,
+    pub user_id: *mut c_char,
+    pub alias: *mut c_char,
+    pub avatar_url: *mut c_char,
 }
 
 #[repr(C)]
 pub struct LoginFailedEventData {
-    pub user_id: *mut i8,
-    pub error_msg: *mut i8,
+    pub user_id: *mut c_char,
+    pub error_msg: *mut c_char,
 }
 
 #[repr(C)]
 pub struct SsoUrlEventData {
-    pub url: *mut i8,
+    pub url: *mut c_char,
 }
 
 #[repr(C)]
 pub struct ConnectedEventData {
-    pub user_id: *mut i8,
+    pub user_id: *mut c_char,
 }
 
 #[repr(C)]
 pub struct ReadMarkerEventData {
-    pub user_id: *mut i8,
-    pub room_id: *mut i8,
-    pub event_id: *mut i8,
-    pub who: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub event_id: *mut c_char,
+    pub who: *mut c_char,
 }
 
 #[repr(C)]
 pub struct PowerLevelUpdateEventData {
-    pub user_id: *mut i8,
-    pub room_id: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
     pub is_admin: bool,
     pub can_kick: bool,
     pub can_ban: bool,
@@ -189,117 +195,117 @@ pub struct PowerLevelUpdateEventData {
 
 #[repr(C)]
 pub struct ReactionsChangedEventData {
-    pub user_id: *mut i8,
-    pub room_id: *mut i8,
-    pub event_id: *mut i8,
-    pub reactions_text: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub event_id: *mut c_char,
+    pub reactions_text: *mut c_char,
 }
 
 #[repr(C)]
 pub struct PresenceEventData {
-    pub user_id: *mut i8,
-    pub target_user_id: *mut i8,
+    pub user_id: *mut c_char,
+    pub target_user_id: *mut c_char,
     pub status: i32,
-    pub status_msg: *mut i8,
+    pub status_msg: *mut c_char,
 }
 
 #[repr(C)]
 pub struct SasRequestEventData {
-    pub user_id: *mut i8,
-    pub target_user_id: *mut i8,
-    pub flow_id: *mut i8,
+    pub user_id: *mut c_char,
+    pub target_user_id: *mut c_char,
+    pub flow_id: *mut c_char,
 }
 
 #[repr(C)]
 pub struct SasHaveEmojiEventData {
-    pub user_id: *mut i8,
-    pub target_user_id: *mut i8,
-    pub flow_id: *mut i8,
-    pub emojis: *mut i8,
+    pub user_id: *mut c_char,
+    pub target_user_id: *mut c_char,
+    pub flow_id: *mut c_char,
+    pub emojis: *mut c_char,
 }
 
 #[repr(C)]
 pub struct ShowVerificationQrEventData {
-    pub user_id: *mut i8,
-    pub target_user_id: *mut i8,
-    pub html_data: *mut i8,
+    pub user_id: *mut c_char,
+    pub target_user_id: *mut c_char,
+    pub html_data: *mut c_char,
 }
 
 #[repr(C)]
 pub struct ShowUserInfoEventData {
-    pub user_id: *mut i8,
-    pub target_user_id: *mut i8,
-    pub display_name: *mut i8,
-    pub avatar_url: *mut i8,
+    pub user_id: *mut c_char,
+    pub target_user_id: *mut c_char,
+    pub display_name: *mut c_char,
+    pub avatar_url: *mut c_char,
 }
 
 #[repr(C)]
 pub struct PollListEventData {
-    pub user_id: *mut i8,
-    pub room_id: *mut i8,
-    pub event_id: *mut i8,
-    pub question: *mut i8,
-    pub sender: *mut i8,
-    pub options_str: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub event_id: *mut c_char,
+    pub question: *mut c_char,
+    pub sender: *mut c_char,
+    pub options_str: *mut c_char,
 }
 
 #[repr(C)]
 pub struct ThreadListEventData {
-    pub user_id: *mut i8,
-    pub room_id: *mut i8,
-    pub thread_root_id: *mut i8,
-    pub latest_msg: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub thread_root_id: *mut c_char,
+    pub latest_msg: *mut c_char,
 }
 
 #[repr(C)]
 pub struct RoomListAddEventData {
-    pub user_id: *mut i8,
-    pub room_id: *mut i8,
-    pub name: *mut i8,
-    pub topic: *mut i8,
-    pub parent_id: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub name: *mut c_char,
+    pub topic: *mut c_char,
+    pub parent_id: *mut c_char,
 }
 
 #[repr(C)]
 pub struct RoomPreviewEventData {
-    pub user_id: *mut i8,
-    pub room_id_or_alias: *mut i8,
-    pub html_body: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id_or_alias: *mut c_char,
+    pub html_body: *mut c_char,
 }
 
 #[repr(C)]
 pub struct PollCreationRequestedEventData {
-    pub user_id: *mut i8,
-    pub room_id: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
 }
 
 #[repr(C)]
 pub struct MessageRedactedEventData {
-    pub user_id: *mut i8,
-    pub room_id: *mut i8,
-    pub event_id: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub event_id: *mut c_char,
 }
 
 #[repr(C)]
 pub struct MediaDownloadedEventData {
-    pub user_id: *mut i8,
-    pub room_id: *mut i8,
-    pub event_id: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub event_id: *mut c_char,
     pub media_data: *mut u8,
     pub media_size: usize,
-    pub content_type: *mut i8,
+    pub content_type: *mut c_char,
 }
 
 #[repr(C)]
 pub struct RoomDashboardInfoEventData {
-    pub user_id: *mut i8,
-    pub room_id: *mut i8,
-    pub name: *mut i8,
-    pub topic: *mut i8,
+    pub user_id: *mut c_char,
+    pub room_id: *mut c_char,
+    pub name: *mut c_char,
+    pub topic: *mut c_char,
     pub member_count: u64,
     pub encrypted: bool,
     pub power_level: i64,
-    pub alias: *mut i8,
+    pub alias: *mut c_char,
 }
 
 // Internal Rust enum for the channel
@@ -308,12 +314,14 @@ pub enum FfiEvent {
     Message {
         user_id: String,
         sender: String,
+        sender_id: String,
         msg: String,
         room_id: String,
         thread_root_id: Option<String>,
         event_id: Option<String>,
         timestamp: u64,
         encrypted: bool,
+        is_direct: bool,
     },
     MessageEdited {
         user_id: String,

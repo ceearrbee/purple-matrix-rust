@@ -3,20 +3,43 @@ use crate::ffi::{send_event, events::FfiEvent};
 use crate::verification_logic::handle_verification_request_with_state;
 
 pub async fn run_sync_loop(client: Client) {
+    let local_user_id = client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
+    if local_user_id.is_empty() { return; }
+
+    if !crate::ffi::ACTIVE_SYNC_LOOPS.insert(local_user_id.clone()) {
+        log::warn!("Sync loop already running for {}, skipping second start.", local_user_id);
+        return;
+    }
+
+    log::info!("Starting run_sync_loop for {}", local_user_id);
+
     let client_for_sync = client.clone();
 
     // 1. Initial State Recovery
     let rooms = client.joined_rooms();
     for room in rooms {
         let room_id = room.room_id().to_string();
-        let local_user_id = client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
+        
+        let name = room.display_name().await.map(|d| d.to_string()).unwrap_or_else(|_| room_id.clone());
+        
+        if room.is_space() {
+            log::info!("Sync: Skipping space room {} as a chat entry", room_id);
+            continue;
+        }
 
-        // Notify C that we are in this room
-        log::info!("Sync: Discovering joined room {}", room_id);
+        let group_name = crate::grouping::get_room_group_name(&room).await;
+        let is_direct = room.is_direct().await.unwrap_or(false) || room.joined_members_count() <= 2;
         
-        // We await these here to ensure they are dispatched sequentially BEFORE the sync loop starts
-        let name = room.display_name().await.map(|d| d.to_string()).unwrap_or_else(|_| "Joined Room".to_string());
-        
+        if let Some(old_group) = crate::ffi::NOTIFIED_ROOMS.get(&room_id) {
+            if *old_group == group_name {
+                // If it's already notified and not open, we might want to skip member loading
+                if !crate::ffi::TRACKED_ROOMS.contains(&room_id) && !is_direct {
+                    continue;
+                }
+            }
+        }
+        crate::ffi::NOTIFIED_ROOMS.insert(room_id.clone(), group_name.clone());
+
         // Check encryption state
         let encrypted = room.get_state_event_static::<matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent>().await.ok().flatten().is_some();
         let member_count = room.joined_members_count();
@@ -25,74 +48,107 @@ pub async fn run_sync_loop(client: Client) {
             user_id: local_user_id.clone(),
             room_id: room_id.clone(),
             name,
-            group_name: "Matrix".to_string(),
+            group_name,
             avatar_url: None,
             topic: "".to_string(),
             encrypted,
             member_count,
         });
 
-        // Load members in background
-        let room_for_members = room.clone();
-        let client_for_members = client.clone();
-        let local_user_id_for_members = local_user_id.clone();
-        let room_id_for_members = room_id.clone();
-        crate::RUNTIME.spawn(async move {
-            use matrix_sdk_base::RoomMemberships;
-            if let Ok(members) = room_for_members.members(RoomMemberships::JOIN).await {
-                for member in members {
-                    let user_id = member.user_id().to_string();
-                    let display_name = member.display_name().map(|d| d.to_string()).unwrap_or_else(|| user_id.clone());
-                    
-                    let mut local_avatar = String::new();
-                    if let Some(mxc) = member.avatar_url() {
-                        if let Some(path) = crate::media_helper::download_avatar(&client_for_members, &mxc.to_owned(), &user_id).await {
-                            local_avatar = path;
+        // Load members ONLY if it's a DM (to populate buddy list)
+        // Full member list for regular rooms is loaded on-demand via TRACKED_ROOMS check
+        if is_direct {
+            let room_for_members = room.clone();
+            let client_for_members = client.clone();
+            let local_uid = local_user_id.clone();
+            let room_id_for_members = room_id.clone();
+
+            crate::RUNTIME.spawn(async move {
+                use matrix_sdk_base::RoomMemberships;
+                if let Ok(members) = room_for_members.members(RoomMemberships::JOIN).await {
+                    for member in members {
+                        let user_id = member.user_id().to_string();
+                        let display_name = member.display_name()
+                            .map(|d| d.to_string())
+                            .unwrap_or_else(|| user_id.clone());
+
+                        if user_id == local_uid { continue; }
+
+                        let mxc = member.avatar_url().map(|url| url.to_owned());
+
+                        if !crate::ffi::NOTIFIED_BUDDIES.contains(&user_id) {
+                            send_event(FfiEvent::UpdateBuddy {
+                                user_id: user_id.clone(),
+                                alias: display_name.clone(),
+                                avatar_url: String::new(),
+                            });
+                        }
+
+                        if let Some(mxc_url) = mxc {
+                            // Spawn avatar download; capture only what the inner task needs.
+                            let client_av = client_for_members.clone();
+                            let local_uid_av = local_uid.clone();
+                            let room_id_av = room_id_for_members.clone();
+                            crate::RUNTIME.spawn(async move {
+                                if let Some(path) = crate::media_helper::download_avatar(&client_av, &mxc_url, &user_id).await {
+                                    if crate::ffi::NOTIFIED_BUDDIES.insert(user_id.clone()) {
+                                        send_event(FfiEvent::UpdateBuddy {
+                                            user_id: user_id.clone(),
+                                            alias: display_name.clone(),
+                                            avatar_url: path.clone(),
+                                        });
+                                    }
+                                    send_event(FfiEvent::ChatUser {
+                                        user_id: local_uid_av,
+                                        room_id: room_id_av,
+                                        member_id: user_id,
+                                        add: true,
+                                        alias: Some(display_name),
+                                        avatar_path: Some(path),
+                                    });
+                                }
+                            });
+                        } else {
+                            send_event(FfiEvent::ChatUser {
+                                user_id: local_uid.clone(),
+                                room_id: room_id_for_members.clone(),
+                                member_id: user_id,
+                                add: true,
+                                alias: Some(display_name),
+                                avatar_path: None,
+                            });
                         }
                     }
-
-                    send_event(FfiEvent::UpdateBuddy {
-                        user_id: local_user_id_for_members.clone(),
-                        alias: display_name.clone(),
-                        avatar_url: local_avatar.clone(),
-                    });
-
-                    send_event(FfiEvent::ChatUser {
-                        user_id: local_user_id_for_members.clone(),
-                        room_id: room_id_for_members.clone(),
-                        member_id: user_id,
-                        add: true,
-                        alias: Some(display_name),
-                        avatar_path: if local_avatar.is_empty() { None } else { Some(local_avatar) },
-                    });
                 }
-            }
-        });
+            });
+        }
 
-        // Fetch Topic
-        let room_id_for_topic = room.room_id().to_string();
-        let room_for_topic = room.clone();
-        let local_user_id_for_topic = local_user_id.clone();
-        crate::RUNTIME.spawn(async move {
-            if let Some(topic_ev) = room_for_topic.get_state_event_static::<matrix_sdk::ruma::events::room::topic::RoomTopicEventContent>().await.ok().flatten() {
-                if let Ok(content) = topic_ev.deserialize() {
-                    use matrix_sdk::deserialized_responses::SyncOrStrippedState;
-                    let topic_str = match content {
-                        SyncOrStrippedState::Sync(s) => s.as_original().map(|o| o.content.topic.clone()),
-                        SyncOrStrippedState::Stripped(s) => s.content.topic.clone(),
-                    };
-                    
-                    if let Some(t) = topic_str {
-                        send_event(FfiEvent::ChatTopic {
-                            user_id: local_user_id_for_topic,
-                            room_id: room_id_for_topic,
-                            topic: t,
-                            sender: "System".to_string(),
-                        });
+        // Fetch Topic ONLY if tracked
+        if crate::ffi::TRACKED_ROOMS.contains(&room_id) {
+            let room_id_for_topic = room_id.clone();
+            let room_for_topic = room.clone();
+            let local_user_id_for_topic = local_user_id.clone();
+            crate::RUNTIME.spawn(async move {
+                if let Some(topic_ev) = room_for_topic.get_state_event_static::<matrix_sdk::ruma::events::room::topic::RoomTopicEventContent>().await.ok().flatten() {
+                    if let Ok(content) = topic_ev.deserialize() {
+                        use matrix_sdk::deserialized_responses::SyncOrStrippedState;
+                        let topic_str = match content {
+                            SyncOrStrippedState::Sync(s) => s.as_original().map(|o| o.content.topic.clone()),
+                            SyncOrStrippedState::Stripped(s) => s.content.topic.clone(),
+                        };
+                        
+                        if let Some(t) = topic_str {
+                            send_event(FfiEvent::ChatTopic {
+                                user_id: local_user_id_for_topic,
+                                room_id: room_id_for_topic,
+                                topic: t,
+                                sender: "System".to_string(),
+                            });
+                        }
                     }
                 }
-            }
-        });
+            });
+        }
     }
 
     // Handle Invites
@@ -138,15 +194,85 @@ pub async fn run_sync_loop(client: Client) {
         }
     });
 
-    // 4. Start Sync
-    log::info!("Starting Matrix sync loop...");
-    let sync_settings = matrix_sdk::config::SyncSettings::default();
-    if let Err(e) = client_for_sync.sync(sync_settings).await {
-        log::error!("Sync loop failed: {:?}", e);
+    // 4. Start Sync with exponential backoff on transient failures.
+    const MAX_BACKOFF_SECS: u64 = 300;
+    const MAX_RETRIES: u32 = 20;
+    let mut backoff_secs: u64 = 2;
+    let mut retry_count: u32 = 0;
+
+    loop {
+        log::info!("Starting Matrix sync for {} (attempt {})…", local_user_id, retry_count + 1);
+        let sync_settings = matrix_sdk::config::SyncSettings::default();
+
+        match client_for_sync.sync(sync_settings).await {
+            Ok(()) => {
+                // Clean shutdown (e.g., logout called on the client).
+                log::info!("Sync for {} stopped cleanly.", local_user_id);
+                break;
+            }
+            Err(e) => {
+                retry_count += 1;
+                let err_str = format!("{:?}", e);
+                log::error!("Sync error for {} (attempt {}): {}", local_user_id, retry_count, err_str);
+
+                // Don't retry authentication errors — user must re-login.
+                if err_str.contains("M_UNKNOWN_TOKEN")
+                    || err_str.contains("M_FORBIDDEN")
+                    || err_str.contains("Unauthorized")
+                    || err_str.contains("M_GUEST_ACCESS_FORBIDDEN")
+                {
+                    log::error!("Auth error in sync for {}, giving up.", local_user_id);
+                    send_event(FfiEvent::LoginFailed {
+                        user_id: local_user_id.clone(),
+                        error_msg: "Lost connection: authentication error. Please reconnect.".to_string(),
+                    });
+                    break;
+                }
+
+                if retry_count >= MAX_RETRIES {
+                    log::error!("Sync giving up for {} after {} retries.", local_user_id, retry_count);
+                    send_event(FfiEvent::LoginFailed {
+                        user_id: local_user_id.clone(),
+                        error_msg: format!(
+                            "Lost connection to the Matrix server after {} reconnect attempts. \
+                             Please sign out and back in.",
+                            retry_count
+                        ),
+                    });
+                    break;
+                }
+
+                log::info!("Reconnecting sync for {} in {}s…", local_user_id, backoff_secs);
+                tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+                backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF_SECS);
+            }
+        }
     }
+
+    crate::ffi::ACTIVE_SYNC_LOOPS.remove(&local_user_id);
 }
 
-pub async fn fetch_room_history(client: Client, room_id: String) {
+pub async fn fetch_room_history(client: Client, room_or_user_id: String) {
+    let mut room_id = room_or_user_id.clone();
+    
+    // If it's a user ID, try to find the DM room
+    if room_or_user_id.starts_with('@') {
+        use matrix_sdk::ruma::UserId;
+        if let Ok(uid) = <&UserId>::try_from(room_or_user_id.as_str()) {
+            // Find joined DM room with this user
+            for room in client.joined_rooms() {
+                if room.is_direct().await.unwrap_or(false) {
+                    if let Ok(members) = room.members(matrix_sdk_base::RoomMemberships::JOIN).await {
+                        if members.iter().any(|m| m.user_id() == uid) {
+                            room_id = room.room_id().to_string();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let Ok(rid) = room_id.as_str().try_into() else {
         log::warn!("Invalid room_id for history fetch: {}", room_id);
         return;
@@ -220,7 +346,7 @@ async fn process_sync_event_for_history(client: &Client, room: &matrix_sdk::Room
                 },
                 AnySyncMessageLikeEvent::Sticker(sticker_event) => {
                     if let Some(ev) = sticker_event.as_original() {
-                        body = format!("[Sticker] {}", ev.content.body);
+                        body = format!("[Sticker] {}", crate::escape_html(&ev.content.body));
                     }
                 },
                 AnySyncMessageLikeEvent::RoomEncrypted(_) => {
@@ -232,17 +358,20 @@ async fn process_sync_event_for_history(client: &Client, room: &matrix_sdk::Room
         }
 
         if !body.is_empty() {
-            let display_body = format!("<span id=\"{}\">{}</span>", crate::escape_html(&event_id), body);
+            let display_body = format!("<span id=\"{}\">{}</span>", crate::escape_html(event_id.as_str()), body);
+            let is_direct = room.is_direct().await.unwrap_or(false) || room.joined_members_count() <= 2;
             
             send_event(FfiEvent::Message {
                 user_id: me,
                 sender,
+                sender_id: sender_id.to_string(),
                 msg: display_body,
                 room_id: room_id.to_string(),
                 thread_root_id: cur_thread_id,
                 event_id: Some(event_id),
                 timestamp,
                 encrypted: is_encrypted,
+                is_direct,
             });
         }
     }

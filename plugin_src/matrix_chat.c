@@ -13,30 +13,57 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
+#include <sys/stat.h>
 
 #define MATRIX_PASTED_PREFIX "matrix_pasted_"
+
+static PurpleConversation *find_conversation_by_room_id(PurpleAccount *account, const char *room_id) {
+    if (!account || !room_id) return NULL;
+    GList *convs = purple_get_conversations();
+    for (GList *it = convs; it; it = it->next) {
+        PurpleConversation *conv = (PurpleConversation *)it->data;
+        if (purple_conversation_get_account(conv) != account) continue;
+        
+        // For Chats, the name is the room_id
+        if (purple_conversation_get_type(conv) == PURPLE_CONV_TYPE_CHAT) {
+            if (g_strcmp0(purple_conversation_get_name(conv), room_id) == 0) return conv;
+        }
+        
+        // For IMs, we check the metadata
+        const char *mrid = purple_conversation_get_data(conv, "matrix_room_id");
+        if (g_strcmp0(mrid, room_id) == 0) return conv;
+    }
+    return NULL;
+}
 
 static void check_and_send_pasted_images(PurpleConnection *gc, const char *who,
                                          const char *message) {
   const char *p = message;
   while ((p = strstr(p, "<img id=\""))) {
     p += 9;
-    int id = atoi(p);
+    char *endptr;
+    errno = 0;
+    long id_l = strtol(p, &endptr, 10);
+    int id = (endptr == p || errno != 0 || id_l <= 0 || id_l > INT_MAX) ? 0 : (int)id_l;
     if (id > 0) {
       PurpleStoredImage *img = purple_imgstore_find_by_id(id);
       if (img) {
         char *filename = g_build_filename(g_get_tmp_dir(),
                                           MATRIX_PASTED_PREFIX "XXXXXX", NULL);
+        mode_t old_umask = umask(0077);
         int fd = g_mkstemp(filename);
+        umask(old_umask);
         if (fd != -1) {
-          if (write(fd, purple_imgstore_get_data(img),
-                    purple_imgstore_get_size(img)) > 0) {
+          ssize_t expected = (ssize_t)purple_imgstore_get_size(img);
+          if (write(fd, purple_imgstore_get_data(img), (size_t)expected) == expected) {
             close(fd);
             purple_matrix_rust_send_file(
                 purple_account_get_username(purple_connection_get_account(gc)),
                 who, filename);
           } else {
             close(fd);
+            unlink(filename);
           }
         }
         g_free(filename);
@@ -95,16 +122,33 @@ void matrix_chat_whisper(PurpleConnection *gc, int id, const char *who, const ch
 
 void matrix_join_chat(PurpleConnection *gc, GHashTable *data) {
     const char *room_id = g_hash_table_lookup(data, "room_id");
-    fprintf(stderr, "[Matrix FFI] matrix_join_chat CALLED for room_id: %s\n", room_id ? room_id : "(null)");
     purple_debug_info("matrix-ffi", "matrix_join_chat: room_id=%s\n", room_id ? room_id : "(null)");
-    if (room_id) {
-        /* Proactively notify libpurple we've joined to ensure the window opens */
-        int cid = get_chat_id(room_id);
-        fprintf(stderr, "[Matrix FFI] Forcing join confirmation for %s (id %d)\n", room_id, cid);
-        serv_got_joined_chat(gc, cid, room_id);
-        
-        purple_matrix_rust_join_room(purple_account_get_username(purple_connection_get_account(gc)), room_id);
+    if (!room_id) return;
+
+    if (is_virtual_room_id(room_id)) {
+        /* Thread virtual ID (room_id|thread_root_id): joining the virtual ID as a
+           Matrix room would always fail.  Instead open the canonical parent room
+           so the user gets the conversation window they expect. */
+        char *parent_room_id = dup_base_room_id(room_id);
+        if (parent_room_id) {
+            purple_debug_info("matrix-ffi",
+                "matrix_join_chat: virtual thread ID %s -> joining parent %s\n",
+                room_id, parent_room_id);
+            int cid = get_chat_id(parent_room_id);
+            serv_got_joined_chat(gc, cid, parent_room_id);
+            purple_matrix_rust_join_room(
+                purple_account_get_username(purple_connection_get_account(gc)),
+                parent_room_id);
+            g_free(parent_room_id);
+        }
+        return;
     }
+
+    /* Canonical room: open window and join normally */
+    int cid = get_chat_id(room_id);
+    serv_got_joined_chat(gc, cid, room_id);
+    purple_matrix_rust_join_room(
+        purple_account_get_username(purple_connection_get_account(gc)), room_id);
 }
 
 void matrix_reject_chat(PurpleConnection *gc, GHashTable *data) {
@@ -173,12 +217,12 @@ unsigned int matrix_send_typing(PurpleConnection *gc, const char *name,
   return 0;
 }
 
-void msg_callback(const char *user_id, const char *sender, const char *msg,
+void msg_callback(const char *user_id, const char *sender, const char *sender_id, const char *msg,
                    const char *room_id, const char *thread_root_id,
-                   const char *event_id, guint64 timestamp, bool encrypted, bool is_system) {
-  if (!user_id || !room_id || !sender || !msg) return;
+                   const char *event_id, guint64 timestamp, bool encrypted, bool is_system, bool is_direct) {
+  if (!user_id || !room_id || !sender || !sender_id || !msg) return;
 
-  purple_debug_info("matrix-ffi", "msg_callback: room_id=%s sender=%s user_id=%s\n", room_id, sender, user_id);
+  purple_debug_info("matrix-ffi", "msg_callback: room_id=%s sender=%s sender_id=%s user_id=%s is_direct=%d\n", room_id, sender, sender_id, user_id, is_direct);
 
   PurpleAccount *account = find_matrix_account_by_id(user_id);
   if (!account) {
@@ -190,10 +234,14 @@ void msg_callback(const char *user_id, const char *sender, const char *msg,
     purple_signal_emit(my_plugin, "matrix-ui-room-encrypted", room_id, TRUE);
   }
 
-  PurpleConversation *main_conv = purple_find_conversation_with_account(
-      PURPLE_CONV_TYPE_ANY, room_id, account);
+  PurpleConversation *main_conv = find_conversation_by_room_id(account, room_id);
 
   if (main_conv) {
+    /* Ensure the room ID is linked if it was opened via MXID */
+    if (!purple_conversation_get_data(main_conv, "matrix_room_id")) {
+        purple_conversation_set_data(main_conv, "matrix_room_id", g_strdup(room_id));
+    }
+
     if (event_id && *event_id) {
       g_free(purple_conversation_get_data(main_conv, "last_event_id"));
       purple_conversation_set_data(main_conv, "last_event_id", g_strdup(event_id));
@@ -236,27 +284,38 @@ void msg_callback(const char *user_id, const char *sender, const char *msg,
         int cid = get_chat_id(target_id);
         time_t mtime = timestamp / 1000;
         gboolean is_live = (mtime >= plugin_start_time - 5);
-        PurpleConversation *conv = purple_find_chat(gc, cid);
+        
+        PurpleConversation *conv = find_conversation_by_room_id(account, room_id);
 
-        if (target_id[0] == '!') {
+        if (!is_direct) {
+            if (conv && !purple_find_chat(gc, cid)) {
+                /* Register the join for restored windows */
+                serv_got_joined_chat(gc, cid, target_id);
+            }
             if (conv) {
-                /* Chat already open: deliver normally */
+                /* delivers the message */
                 serv_got_chat_in(gc, cid, sender, PURPLE_MESSAGE_RECV, msg, mtime);
-            } else if (is_live) {
+            } else if (is_live && purple_account_get_bool(account, "auto_open_rooms", FALSE)) {
                 /* Live message for closed chat: Join and deliver (opens window) */
-                fprintf(stderr, "[Matrix FFI] Live message for %s, opening window\n", target_id);
+                purple_debug_info("matrix-ffi", "Live message for room %s, opening window\n", target_id);
                 serv_got_joined_chat(gc, cid, target_id);
                 serv_got_chat_in(gc, cid, sender, PURPLE_MESSAGE_RECV, msg, mtime);
             } else {
-                /* Backlog for closed chat: skip to avoid popping 100 windows */
-                purple_debug_info("matrix-ffi", "msg_callback: Skipping backlog for closed room %s\n", target_id);
+                /* Backlog or auto-open disabled: skip popup but maybe we should still deliver if conv exists? 
+                   conv is NULL here. We don't want to open it. */
+                purple_debug_info("matrix-ffi", "msg_callback: Not opening window for room %s\n", target_id);
             }
         } else {
             /* IM delivery */
-            serv_got_im(gc, sender, msg, PURPLE_MESSAGE_RECV, mtime);
+            if (conv || (is_live && purple_account_get_bool(account, "auto_open_dms", TRUE))) {
+                /* If it's history and the sender is me, we need to deliver it as an 'outgoing' message or just a recv from me */
+                serv_got_im(gc, is_direct ? sender_id : sender, msg, PURPLE_MESSAGE_RECV, mtime);
+            } else {
+                purple_debug_info("matrix-ffi", "msg_callback: Not opening window for DM %s\n", sender_id);
+            }
         }
     } else {
-        fprintf(stderr, "[Matrix FFI] GC IS NULL for user %s\n", user_id);
+        purple_debug_warning("matrix-ffi", "msg_callback: GC is NULL for user %s\n", user_id);
     }
   }
   g_free(target_id);

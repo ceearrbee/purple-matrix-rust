@@ -9,7 +9,7 @@ int matrix_send_chat(PurpleConnection *gc, int id, const char *message, PurpleMe
 unsigned int matrix_send_typing(PurpleConnection *gc, const char *name, PurpleTypingState state);
 
 // Callbacks from Rust
-void msg_callback(const char *user_id, const char *sender, const char *msg, const char *room_id, const char *thread_root_id, const char *event_id, guint64 timestamp, bool encrypted, bool is_system);
+void msg_callback(const char *user_id, const char *sender, const char *sender_id, const char *msg, const char *room_id, const char *thread_root_id, const char *event_id, guint64 timestamp, bool encrypted, bool is_system, bool is_direct);
 void reactions_changed_callback(const char *user_id, const char *room_id,
                                  const char *event_id,
                                  const char *reactions_text);

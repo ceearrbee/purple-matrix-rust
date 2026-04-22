@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
 
 static GHashTable *thread_lists = NULL;
 static GMutex thread_lists_mutex;
@@ -106,10 +107,13 @@ static gboolean thread_list_ui_idle_cb(gpointer data) {
     return FALSE;
   }
 
-  GList *list = g_hash_table_lookup(thread_lists, d->room_id);
+  gpointer stolen_key = NULL;
+  GList *list = NULL;
+  g_hash_table_lookup_extended(thread_lists, d->room_id, &stolen_key, (gpointer *)&list);
   if (list)
     g_hash_table_steal(thread_lists, d->room_id);
   g_mutex_unlock(&thread_lists_mutex);
+  g_free(stolen_key); /* g_hash_table_steal does not free the key */
 
   if (!list) {
     purple_notify_info(
@@ -274,8 +278,14 @@ static void submit_vote_cb(void *user_data, const char *index_str) {
       *sep2 = '\0';
       char *user_id = user_id_room_id;
       char *room_id = sep2 + 1;
-      purple_matrix_rust_vote_poll(user_id, room_id, event_id,
-                                   (int)atoi(index_str));
+      char *vote_endptr;
+      errno = 0;
+      long vote_idx = strtol(index_str, &vote_endptr, 10);
+      if (vote_endptr != index_str && errno == 0) {
+        purple_matrix_rust_vote_poll(user_id, room_id, event_id, (int)vote_idx);
+      } else {
+        purple_debug_warning("matrix", "submit_vote_cb: invalid vote index '%s'\n", index_str);
+      }
     }
   }
   g_free(data_str);
@@ -322,10 +332,13 @@ static gboolean poll_list_ui_idle_cb(gpointer data) {
     return FALSE;
   }
 
-  GList *list = g_hash_table_lookup(poll_lists, d->room_id);
+  gpointer stolen_key = NULL;
+  GList *list = NULL;
+  g_hash_table_lookup_extended(poll_lists, d->room_id, &stolen_key, (gpointer *)&list);
   if (list)
     g_hash_table_steal(poll_lists, d->room_id);
   g_mutex_unlock(&poll_lists_mutex);
+  g_free(stolen_key); /* g_hash_table_steal does not free the key */
 
   if (!list) {
     purple_notify_info(
@@ -680,11 +693,11 @@ char *dup_base_room_id(const char *room_id) {
 
 char *derive_base_group_from_threads_group(const char *group_name) {
   if (!group_name)
-    return g_strdup("Matrix Rooms");
+    return g_strdup("Matrix");
   char *sep = strstr(group_name, " / ");
   if (sep)
     return g_strndup(group_name, sep - group_name);
-  return g_strdup(group_name);
+  return g_strdup("Matrix");
 }
 
 char *sanitize_markup_text(const char *input) {
@@ -709,6 +722,7 @@ char *matrix_get_chat_name(GHashTable *components) {
   if (!components)
     return NULL;
   const char *room_id = g_hash_table_lookup(components, "room_id");
+  purple_debug_info("matrix-ffi", "matrix_get_chat_name: processing components for room_id=%s\n", room_id ? room_id : "(null)");
   return room_id ? g_strdup(room_id) : NULL;
 }
 

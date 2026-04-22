@@ -39,7 +39,7 @@ pub async fn update_reactions_for_event(room: &Room, target_id: &EventId) {
     let display_text = if summary.is_empty() {
         "".to_string() 
     } else {
-        format!("[System] [Reactions] {}", summary)
+        format!("[System] [Reactions] {}", crate::escape_html(&summary))
     };
 
     log::info!("Dispatching ReactionsChanged for {}: {}", target_id, summary);
@@ -69,18 +69,20 @@ pub async fn handle_sticker(event: matrix_sdk::ruma::events::sticker::SyncSticke
 
         let room_id = room.room_id().as_str();
         let timestamp: u64 = ev.origin_server_ts.0.into();
-        let body = format!("[Sticker] {}", ev.content.body);
+        let body = format!("[Sticker] {}", crate::escape_html(&ev.content.body));
         let is_encrypted = room.get_state_event_static::<matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent>().await.ok().flatten().is_some();
         
         send_event(FfiEvent::Message {
             user_id: local_user_id,
             sender: sender_id.to_string(),
+            sender_id: sender_id.to_string(),
             msg: body,
             room_id: room_id.to_string(),
             thread_root_id: None,
             event_id: Some(ev.event_id.to_string()),
             timestamp,
             encrypted: is_encrypted,
+            is_direct: room.is_direct().await.unwrap_or(false),
         });
     }
 }

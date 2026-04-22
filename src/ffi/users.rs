@@ -95,6 +95,7 @@ pub extern "C" fn purple_matrix_rust_set_status(user_id: *const c_char, status: 
         let msg_str = if msg.is_null() { None } else { Some(unsafe { CStr::from_ptr(msg).to_string_lossy().into_owned() }) };
 
         with_client(&user_id_str, move |client: Client| {
+            let msg_async = msg_str.clone();
             RUNTIME.spawn(async move {
                 use matrix_sdk::ruma::presence::PresenceState;
                 use matrix_sdk::ruma::api::client::presence::set_presence::v3::Request;
@@ -105,10 +106,8 @@ pub extern "C" fn purple_matrix_rust_set_status(user_id: *const c_char, status: 
                     _ => PresenceState::Online,
                 };
                 if let Some(user_id) = client.user_id() {
-                    let request = Request::new(user_id.to_owned(), state);
-                    // Request doesn't have status_msg directly in constructor in some versions, 
-                    // or it might be a different version. 
-                    // Let's try to set it if possible or just send state.
+                    let mut request = Request::new(user_id.to_owned(), state);
+                    request.status_msg = msg_async;
                     let _ = client.send(request).await;
                 }
             });

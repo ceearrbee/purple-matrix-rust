@@ -2,7 +2,7 @@ use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use std::os::raw::{c_char, c_void, c_int};
 use std::ffi::{CString, CStr};
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender};
 use dashmap::{DashMap, DashSet};
 use matrix_sdk::Client;
 
@@ -23,9 +23,16 @@ pub mod discovery;
 
 // --- Phase 2.2: Safe FFI String Conversion ---
 pub fn safe_c_string(s: &str) -> CString {
-    let mut bytes = s.as_bytes().to_vec();
-    bytes.retain(|&b| b != 0); // Strip null bytes
-    CString::new(bytes).unwrap_or_default()
+    let safe_str = s.replace('\0', "\u{FFFD}");
+    match CString::new(safe_str) {
+        Ok(cs) => cs,
+        Err(e) => {
+            // CString::new only fails if the input contains interior nuls
+            // after replacement, which should not happen. Log if it does.
+            log::error!("safe_c_string: CString::new failed ({}); returning empty string. Input len={}", e, s.len());
+            CString::default()
+        }
+    }
 }
 
 #[macro_export]
@@ -67,19 +74,39 @@ macro_rules! ffi_panic_boundary {
 pub(crate) static CLIENTS: Lazy<DashMap<String, Client>> = Lazy::new(DashMap::new);
 pub(crate) static HISTORY_FETCHED_ROOMS: Lazy<DashSet<String>> = Lazy::new(DashSet::new);
 
+pub(crate) static ACTIVE_SYNC_LOOPS: Lazy<DashSet<String>> = Lazy::new(DashSet::new);
+pub(crate) static NOTIFIED_ROOMS: Lazy<DashMap<String, String>> = Lazy::new(DashMap::new);
+pub(crate) static NOTIFIED_BUDDIES: Lazy<DashSet<String>> = Lazy::new(DashSet::new);
+pub(crate) static TRACKED_ROOMS: Lazy<DashSet<String>> = Lazy::new(DashSet::new);
+
 pub fn with_client<F, R>(user_id: &str, f: F) -> Option<R> 
 where F: FnOnce(Client) -> R {
     CLIENTS.get(user_id).map(|c| f(c.clone()))
 }
 
 // --- Phase 1.2: Thread-Safe Bridge ---
-pub(crate) static EVENT_CHANNEL: Lazy<(Sender<FfiEvent>, Receiver<FfiEvent>)> = Lazy::new(|| unbounded());
+pub(crate) static EVENT_CHANNEL: Lazy<(Sender<FfiEvent>, Receiver<FfiEvent>)> = Lazy::new(|| crossbeam_channel::bounded(1000));
 
 pub(crate) fn send_event(event: FfiEvent) {
-    let _ = EVENT_CHANNEL.0.send(event);
+    let depth = EVENT_CHANNEL.0.len();
+    if depth > 800 {
+        log::warn!("Event queue at {}/1000 — C consumer may be stalling", depth);
+    }
+    if EVENT_CHANNEL.0.try_send(event).is_err() {
+        log::error!("Event queue full (1000); dropping event. C side is not consuming fast enough.");
+    }
 }
 
 // Alias for files still using EVENTS_CHANNEL
+
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_cleanup_media() {
+    crate::ffi_panic_boundary!({
+        crate::RUNTIME.spawn(async {
+            crate::media_helper::cleanup_media_files().await;
+        });
+    })
+}
 
 #[no_mangle]
 pub extern "C" fn purple_matrix_rust_init() {
@@ -93,14 +120,24 @@ pub extern "C" fn purple_matrix_rust_init() {
 }
 
 #[no_mangle]
+pub extern "C" fn purple_matrix_rust_track_room(user_id: *const c_char, room_id: *const c_char) {
+    crate::ffi_panic_boundary!({
+        if user_id.is_null() || room_id.is_null() { return; }
+        let _user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+        let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
+        TRACKED_ROOMS.insert(room_id_str);
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn purple_matrix_rust_close_conversation(user_id: *const c_char, room_id: *const c_char) {
     crate::ffi_panic_boundary!({
         if user_id.is_null() || room_id.is_null() { return; }
-        let user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
+        let _user_id_str = unsafe { CStr::from_ptr(user_id).to_string_lossy().into_owned() };
         let room_id_str = unsafe { CStr::from_ptr(room_id).to_string_lossy().into_owned() };
 
-        log::info!("Conversation closed: {} for user {}", room_id_str, user_id_str);
-        // Here we could implement logic to stop tracking certain thread data if needed
+        log::info!("Conversation closed: {} for user", room_id_str);
+        TRACKED_ROOMS.remove(&room_id_str);
     })
 }
 
@@ -114,17 +151,19 @@ pub extern "C" fn purple_matrix_rust_poll_event(out_type: *mut i32, out_data: *m
         match EVENT_CHANNEL.1.try_recv() {
         Ok(event) => unsafe {
             match event {
-                FfiEvent::Message { user_id, sender, msg, room_id, thread_root_id, event_id, timestamp, encrypted } => {
+                FfiEvent::Message { user_id, sender, sender_id, msg, room_id, thread_root_id, event_id, timestamp, encrypted, is_direct } => {
                     *out_type = FfiEventType::MessageReceived as i32;
                     let data = Box::new(MessageEventData {
                         user_id: into_c_ptr!(&user_id),
                         sender: into_c_ptr!(&sender),
+                        sender_id: into_c_ptr!(&sender_id),
                         msg: into_c_ptr!(&msg),
                         room_id: into_c_ptr!(&room_id),
                         thread_root_id: into_c_ptr!(opt thread_root_id),
                         event_id: into_c_ptr!(opt event_id),
                         timestamp,
                         encrypted,
+                        is_direct,
                     });
                     *out_data = Box::into_raw(data) as *mut c_void;
                 },
@@ -304,7 +343,7 @@ pub extern "C" fn purple_matrix_rust_poll_event(out_type: *mut i32, out_data: *m
                     *out_data = Box::into_raw(data) as *mut c_void;
                 },
                 FfiEvent::PollCreationRequested { user_id, room_id } => {
-                    *out_type = 33; 
+                    *out_type = FfiEventType::PollCreationRequested as i32; 
                     let data = Box::new(PollCreationRequestedEventData {
                         user_id: into_c_ptr!(&user_id),
                         room_id: into_c_ptr!(&room_id),
@@ -375,8 +414,17 @@ pub extern "C" fn purple_matrix_rust_poll_event(out_type: *mut i32, out_data: *m
                 FfiEvent::MediaDownloaded { user_id, room_id, event_id, data, content_type } => {
                     *out_type = FfiEventType::MediaDownloaded as i32;
                     let data_len = data.len();
-                    let data_ptr = libc::malloc(data_len) as *mut u8;
-                    std::ptr::copy_nonoverlapping(data.as_ptr(), data_ptr, data_len);
+                    let data_ptr = if data_len > 0 {
+                        let ptr = libc::malloc(data_len) as *mut u8;
+                        if ptr.is_null() {
+                            log::error!("FFI: malloc({}) failed for MediaDownloaded event", data_len);
+                            return false;
+                        }
+                        std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data_len);
+                        ptr
+                    } else {
+                        std::ptr::null_mut()
+                    };
                     
                     let event_data = Box::new(MediaDownloadedEventData {
                         user_id: into_c_ptr!(&user_id),
@@ -424,6 +472,7 @@ pub extern "C" fn purple_matrix_rust_free_event(event_type: i32, data: *mut c_vo
                     let d = Box::from_raw(data as *mut MessageEventData);
                     let _ = CString::from_raw(d.user_id as *mut c_char);
                     let _ = CString::from_raw(d.sender as *mut c_char);
+                    let _ = CString::from_raw(d.sender_id as *mut c_char);
                     let _ = CString::from_raw(d.msg as *mut c_char);
                     let _ = CString::from_raw(d.room_id as *mut c_char);
                     if !d.thread_root_id.is_null() { let _ = CString::from_raw(d.thread_root_id as *mut c_char); }
@@ -601,30 +650,48 @@ pub extern "C" fn purple_matrix_rust_free_event(event_type: i32, data: *mut c_vo
                     let _ = CString::from_raw(d.topic as *mut c_char);
                     if !d.alias.is_null() { let _ = CString::from_raw(d.alias as *mut c_char); }
                 },
-                _ => {} // RoomMuteUpdate, RoomTagUpdate, etc. handled by generic ignore or unused
+                FfiEventType::PollCreationRequested => { // PollCreationRequested
+                    let d = Box::from_raw(data as *mut PollCreationRequestedEventData);
+                    let _ = CString::from_raw(d.user_id as *mut c_char);
+                    let _ = CString::from_raw(d.room_id as *mut c_char);
+                },
+                other => {
+                    // If a new FfiEventType is added and free_event is not updated,
+                    // the event data will be leaked.  Emit a loud log so it is caught
+                    // during development rather than silently leaking in production.
+                    log::error!(
+                        "free_event: unhandled event type {:?} ({}). \
+                         Memory leak! Update free_event() to handle this type.",
+                        other, event_type
+                    );
+                }
             }
-        } else if event_type == 33 { // PollCreationRequested
-            let d = Box::from_raw(data as *mut PollCreationRequestedEventData);
-            let _ = CString::from_raw(d.user_id as *mut c_char);
-            let _ = CString::from_raw(d.room_id as *mut c_char);
         }
         }
     })
 }
 
 pub(crate) static IMGSTORE_ADD_CALLBACK: Lazy<Mutex<Option<extern "C" fn(*const u8, usize) -> c_int>>> = Lazy::new(|| Mutex::new(None));
-#[no_mangle] pub extern "C" fn purple_matrix_rust_set_imgstore_add_callback(cb: extern "C" fn(*const u8, usize) -> c_int) { *IMGSTORE_ADD_CALLBACK.lock().unwrap_or_else(|e| e.into_inner()) = Some(cb); }
+#[no_mangle]
+pub extern "C" fn purple_matrix_rust_set_imgstore_add_callback(cb: extern "C" fn(*const u8, usize) -> c_int) {
+    *IMGSTORE_ADD_CALLBACK.lock().unwrap_or_else(|e| {
+        log::error!("IMGSTORE_ADD_CALLBACK mutex poisoned; recovering");
+        e.into_inner()
+    }) = Some(cb);
+}
 
 pub fn send_system_message(user_id: &str, msg: &str) {
     send_event(FfiEvent::Message {
         user_id: user_id.to_string(),
         sender: "System".to_string(),
+        sender_id: "System".to_string(),
         msg: format!("[System] {}", msg),
         room_id: String::new(),
         thread_root_id: None,
         event_id: None,
         timestamp: 0,
         encrypted: false,
+        is_direct: false,
     });
 }
 
@@ -632,11 +699,13 @@ pub fn send_system_message_to_room(user_id: &str, room_id: &str, msg: &str) {
     send_event(FfiEvent::Message {
         user_id: user_id.to_string(),
         sender: "System".to_string(),
+        sender_id: "System".to_string(),
         msg: format!("[System] {}", msg),
         room_id: room_id.to_string(),
         thread_root_id: None,
         event_id: None,
         timestamp: 0,
         encrypted: false,
+        is_direct: false,
     });
 }

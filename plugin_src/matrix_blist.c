@@ -13,6 +13,7 @@
 #include <libpurple/server.h>
 #include <libpurple/util.h>
 #include <string.h>
+#include <glib/gstdio.h>
 
 typedef struct {
   char *user_id;
@@ -114,38 +115,80 @@ void cleanup_stale_thread_labels(PurpleAccount *account) {
   }
 }
 
+static PurpleChat *cleanup_duplicates_and_take_over(PurpleAccount *account, const char *room_id) {
+  if (!room_id) return NULL;
+
+  /* First, try the fast built-in lookup */
+  PurpleChat *chat = purple_blist_find_chat(account, room_id);
+  
+  /* If we found it, we're mostly good. Just verify the account. */
+  if (chat) {
+      if (chat->account != account) {
+          purple_debug_info("matrix-ffi", "cleanup: Re-assigning chat %s to current account pointer\n", room_id);
+          chat->account = account;
+      }
+      return chat;
+  }
+
+  /* If built-in lookup failed, we only then fall back to a manual scan to find 
+     hidden duplicates or orphaned nodes from different account instances.
+     This only happens ONCE per room if the built-in lookup fails. */
+  PurpleBlistNode *gnode, *cnode, *next_cnode;
+  PurpleBuddyList *blist = purple_get_blist();
+  if (!blist || !blist->root) return NULL;
+
+  PurpleChat *kept_chat = NULL;
+  for (gnode = blist->root; gnode; gnode = gnode->next) {
+    if (!PURPLE_BLIST_NODE_IS_GROUP(gnode)) continue;
+    for (cnode = gnode->child; cnode; cnode = next_cnode) {
+      next_cnode = cnode->next;
+      if (PURPLE_BLIST_NODE_IS_CHAT(cnode)) {
+        PurpleChat *c = (PurpleChat *)cnode;
+        GHashTable *components = purple_chat_get_components(c);
+        const char *r_id = components ? g_hash_table_lookup(components, "room_id") : NULL;
+        
+        if (r_id && g_strcmp0(r_id, room_id) == 0) {
+          if (!kept_chat) {
+            kept_chat = c;
+            c->account = account;
+          } else {
+            purple_debug_info("matrix-ffi", "cleanup: Removing redundant duplicate chat node for %s\n", room_id);
+            purple_blist_remove_chat(c);
+          }
+        }
+      }
+    }
+  }
+  return kept_chat;
+}
+
 static gboolean process_room_cb(gpointer data) {
   MatrixRoomData *d = (MatrixRoomData *)data;
   PurpleAccount *account = find_matrix_account_by_id(d->user_id);
-
   if (!account) {
-    fprintf(stderr, "[Matrix FFI] process_room_cb FAILED: No account found for user_id=%s\n", d->user_id);
     purple_debug_warning("matrix-ffi", "process_room_cb: No account found for user_id=%s\n", d->user_id);
     goto cleanup;
   }
 
   PurpleConnection *gc = purple_account_get_connection(account);
   if (!gc) {
-    fprintf(stderr, "[Matrix FFI] process_room_cb FAILED: Account %s is not connected\n", d->user_id);
     purple_debug_warning("matrix-ffi", "process_room_cb: Account %s is not connected\n", d->user_id);
     goto cleanup;
   }
 
   /* Atomic safety: ensure we have something to work with */
   if (!d->room_id) {
-    fprintf(stderr, "[Matrix FFI] process_room_cb FAILED: room_id is NULL\n");
     purple_debug_error("matrix-ffi", "process_room_cb: room_id is NULL\n");
     goto cleanup;
   }
 
-  purple_debug_info("matrix-ffi", "process_room_cb: Processing room_id=%s name=%s for user_id=%s\n", d->room_id, d->name ? d->name : "(null)", d->user_id);
+  purple_debug_info("matrix-ffi", "process_room_cb: Processing room_id=%s name=%s for user_id=%s, group=%s\n", d->room_id, d->name ? d->name : "(null)", d->user_id, d->group_name ? d->group_name : "(null)");
 
   char *s_name = strip_emojis(d->name ? d->name : "");
   char *s_topic = strip_emojis(d->topic ? d->topic : "");
-  char *s_group = strip_emojis(d->group_name ? d->group_name : "Matrix Rooms");
+  char *s_group = strip_emojis(d->group_name ? d->group_name : "Matrix");
 
-  const char *group_name =
-      (s_group && strlen(s_group) > 0) ? s_group : "Matrix Rooms";
+  const char *group_name = s_group;
   char *target_group_name = g_strdup(group_name);
 
   if (strstr(target_group_name, " / Threads")) {
@@ -154,14 +197,24 @@ static gboolean process_room_cb(gpointer data) {
     target_group_name = clean_group;
   }
 
+  if (!target_group_name || strlen(target_group_name) == 0) {
+    purple_debug_info("matrix-ffi", "process_room_cb: No target group name, skipping blist update for %s\n", d->room_id);
+    if (target_group_name) g_free(target_group_name);
+    goto cleanup;
+  }
+
+  purple_debug_info("matrix-ffi", "process_room_cb: target_group_name=%s\n", target_group_name);
+
   PurpleGroup *group = purple_find_group(target_group_name);
   if (!group) {
     group = purple_group_new(target_group_name);
     purple_blist_add_group(group, NULL);
   }
 
-  PurpleChat *chat = purple_blist_find_chat(account, d->room_id);
+  PurpleChat *chat = cleanup_duplicates_and_take_over(account, d->room_id);
+
   if (!chat) {
+    purple_debug_info("matrix-ffi", "process_room_cb: No existing chat found for %s, creating new one in group %s\n", d->room_id, target_group_name);
     GHashTable *components =
         g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
     g_hash_table_insert(components, g_strdup("room_id"), g_strdup(d->room_id));
@@ -186,6 +239,7 @@ static gboolean process_room_cb(gpointer data) {
       purple_blist_alias_chat(chat, s_name);
     }
   } else {
+    purple_debug_info("matrix-ffi", "process_room_cb: Found existing chat for %s, updating...\n", d->room_id);
     GHashTable *components = purple_chat_get_components(chat);
     gboolean changed = FALSE;
     if (components) {
@@ -224,6 +278,7 @@ static gboolean process_room_cb(gpointer data) {
                               ? purple_group_get_name((PurpleGroup *)parent)
                               : NULL;
     if (!cur_grp || g_strcmp0(cur_grp, target_group_name) != 0) {
+      purple_debug_info("matrix-ffi", "process_room_cb: Moving chat %s from group %s to %s\n", d->room_id, cur_grp ? cur_grp : "(null)", target_group_name);
       purple_blist_add_chat(chat, group, NULL);
       changed = TRUE;
     }
@@ -306,7 +361,7 @@ static gboolean process_room_left_cb(gpointer data) {
     if (gc)
       serv_got_chat_left(gc, get_chat_id(d->room_id));
     
-    PurpleChat *chat = purple_blist_find_chat(account, d->room_id);
+    PurpleChat *chat = cleanup_duplicates_and_take_over(account, d->room_id);
     if (chat) purple_blist_remove_chat(chat);
   }
   g_free(d->user_id);
@@ -422,15 +477,21 @@ void ensure_thread_in_blist(PurpleAccount *account, const char *virtual_id,
 
   char *group_name = NULL;
   if (parent_room_id) {
-    PurpleChat *pchat = purple_blist_find_chat(account, parent_room_id);
-    const char *p_title =
-        (pchat && pchat->alias) ? pchat->alias : parent_room_id;
-    const char *p_grp =
-        (pchat) ? purple_group_get_name(purple_chat_get_group(pchat))
-                : "Matrix Rooms";
+    PurpleChat *pchat = cleanup_duplicates_and_take_over(account, parent_room_id);
+    if (!pchat) {
+        purple_debug_info("matrix-ffi", "ensure_thread_in_blist: Skipping thread %s because parent %s is not in blist\n", virtual_id, parent_room_id);
+        return;
+    }
+    const char *p_title = (pchat->alias) ? pchat->alias : parent_room_id;
+    const char *p_grp = purple_group_get_name(purple_chat_get_group(pchat));
+    
+    if (!p_grp) p_grp = "Matrix";
+    
     group_name = g_strdup_printf("%s / %s / Threads", p_grp, p_title);
-  } else
-    group_name = g_strdup("Matrix Rooms / Unknown Room / Threads");
+  } else {
+    /* No parent room ID provided, can't reliably group it without a space context */
+    return;
+  }
 
   PurpleGroup *group = purple_find_group(group_name);
   if (!group) {
@@ -452,7 +513,7 @@ void ensure_thread_in_blist(PurpleAccount *account, const char *virtual_id,
   } else
     nice_alias = g_strdup("Thread");
 
-  PurpleChat *chat = purple_blist_find_chat(account, virtual_id);
+  PurpleChat *chat = cleanup_duplicates_and_take_over(account, virtual_id);
   if (!chat) {
     GHashTable *comp =
         g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
@@ -656,10 +717,21 @@ typedef struct {
 
 static gboolean process_update_buddy_cb(gpointer data) {
   UpdateBuddyData *d = (UpdateBuddyData *)data;
-  PurpleAccount *account =
-      find_matrix_account(); // Assuming single account or global update
+  PurpleAccount *account = find_matrix_account();
   if (account) {
     PurpleBuddy *buddy = purple_find_buddy(account, d->user_id);
+    if (!buddy) {
+        PurpleGroup *group = purple_find_group("Direct Messages");
+        if (!group) {
+            group = purple_group_new("Direct Messages");
+            purple_blist_add_group(group, NULL);
+        }
+        purple_debug_info("matrix-ffi", "cleanup: Creating new buddy for DM partner %s\n", d->user_id);
+        buddy = purple_buddy_new(account, d->user_id, d->alias);
+        purple_blist_add_buddy(buddy, NULL, group, NULL);
+        purple_prpl_got_user_status(account, d->user_id, "available", NULL);
+    }
+
     if (buddy) {
       if (d->alias && strlen(d->alias) > 0) {
         purple_blist_alias_buddy(buddy, d->alias);
@@ -669,23 +741,26 @@ static gboolean process_update_buddy_cb(gpointer data) {
       }
       if (d->avatar_url && strlen(d->avatar_url) > 0 &&
           g_file_test(d->avatar_url, G_FILE_TEST_EXISTS)) {
-        gchar *contents;
-        gsize length;
-        if (g_file_get_contents(d->avatar_url, &contents, &length, NULL)) {
-          PurpleBuddyIcon *icon =
-              purple_buddy_icon_new(account, d->user_id, contents, length, NULL);
-          purple_buddy_set_icon(buddy, icon);
-          purple_buddy_icon_unref(icon);
-        }
-        /* In libpurple 2.x, buddy icons are usually managed via
-         * set_buddy_icon_path if custom */
-        purple_blist_node_set_string((PurpleBlistNode *)buddy, "buddy_icon",
-                                     d->avatar_url);
-        if (strcmp(d->user_id, purple_account_get_username(account)) == 0) {
-          purple_buddy_icons_set_for_user(account, d->user_id, NULL, 0, NULL); // Clear cache? 
-          // Actually purple_buddy_icons_set_for_user expects data.
-          // For local user, we usually use purple_account_set_buddy_icon_path
-          purple_account_set_buddy_icon_path(account, d->avatar_url);
+        
+        const char *current_icon_path = purple_blist_node_get_string((PurpleBlistNode *)buddy, "buddy_icon");
+        if (!current_icon_path || g_strcmp0(current_icon_path, d->avatar_url) != 0) {
+            GStatBuf st;
+            if (g_stat(d->avatar_url, &st) == 0 && st.st_size <= 2 * 1024 * 1024) {
+                gchar *contents;
+                gsize length;
+                if (g_file_get_contents(d->avatar_url, &contents, &length, NULL)) {
+                  PurpleBuddyIcon *icon =
+                      purple_buddy_icon_new(account, d->user_id, contents, length, NULL);
+                  purple_buddy_set_icon(buddy, icon);
+                  purple_buddy_icon_unref(icon);
+                  
+                  if (strcmp(d->user_id, purple_account_get_username(account)) == 0) {
+                      purple_account_set_buddy_icon_path(account, d->avatar_url);
+                  }
+                }
+            } else {
+                purple_debug_warning("matrix-ffi", "Avatar file too large or unstatable: %s\n", d->avatar_url);
+            }
         }
       }
     }

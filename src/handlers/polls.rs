@@ -18,12 +18,14 @@ pub async fn handle_poll_start(event: matrix_sdk::ruma::events::poll::start::Syn
         send_event(FfiEvent::Message {
             user_id: local_user_id,
             sender: sender.to_string(),
+            sender_id: sender.to_string(),
             msg: body,
             room_id: room_id.to_string(),
             thread_root_id: None,
             event_id: Some(ev.event_id.to_string()),
             timestamp,
             encrypted: false,
+            is_direct: room.is_direct().await.unwrap_or(false),
         });
     }
 }

@@ -100,17 +100,19 @@ pub extern "C" fn purple_matrix_rust_join_room(user_id: *const c_char, room_id: 
                         let topic = "".to_string(); 
                         let encrypted = room.get_state_event_static::<matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent>().await.ok().flatten().is_some();
                         let member_count = room.joined_members_count();
+                        let group_name = crate::grouping::get_room_group_name(&room).await;
 
                         let event = FfiEvent::RoomJoined {
                             user_id: _uid_async,
                             room_id,
                             name,
-                            group_name: "Matrix".to_string(),
+                            group_name,
                             avatar_url: None,
                             topic,
                             encrypted,
                             member_count,
                         };
+
                         send_event(event);
                     }
                 }
@@ -311,17 +313,33 @@ pub extern "C" fn purple_matrix_rust_get_space_hierarchy(user_id: *const c_char,
 
                 if let Ok(rid) = <&RoomId>::try_from(space_id_str.as_str()) {
                     log::info!("Fetching hierarchy for space {}", space_id_str);
+                    
+                    let space_name = if let Some(room) = client_clone.get_room(rid) {
+                        room.display_name().await.map(|d| d.to_string()).unwrap_or_else(|_| space_id_str.clone())
+                    } else {
+                        space_id_str.clone()
+                    };
+
                     let request = HierarchyRequest::new(rid.to_owned());
                     match client_clone.send(request).await {
                         Ok(response) => {
                             for room in response.rooms {
                                 let r_id = room.summary.room_id.to_string();
+                                
+                                // Skip if the room itself is a space
+                                if let Some(r) = client_clone.get_room(&room.summary.room_id) {
+                                    if r.is_space() {
+                                        log::debug!("Hierarchy: Skipping space room {} in hierarchy", r_id);
+                                        continue;
+                                    }
+                                }
+
                                 let _p_id = if r_id == space_id_str { None } else { Some(space_id_str.clone()) };
                                 let event = crate::ffi::FfiEvent::RoomJoined {
                                     user_id: uid_async.clone(),
                                     room_id: r_id,
                                     name: room.summary.name.unwrap_or_else(|| "Sub Room".to_string()),
-                                    group_name: "Matrix".to_string(),
+                                    group_name: space_name.clone(),
                                     avatar_url: None,
                                     topic: room.summary.topic.unwrap_or_default(),
                                     encrypted: false,
@@ -367,7 +385,13 @@ pub extern "C" fn purple_matrix_rust_get_room_dashboard_info(user_id: *const c_c
                         let member_count = room.joined_members_count();
                         let encrypted = room.get_state_event_static::<matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent>().await.ok().flatten().is_some();
                         
-                        let my_id = client.user_id().expect("Client has user id");
+                        let my_id = match client.user_id() {
+                            Some(id) => id,
+                            None => {
+                                log::error!("Cannot fetch dashboard: client has no user_id");
+                                return;
+                            }
+                        };
                         let power_level = room.get_member(my_id).await.ok().flatten()
                             .map(|m| {
                                 use matrix_sdk::ruma::events::room::power_levels::UserPowerLevel;

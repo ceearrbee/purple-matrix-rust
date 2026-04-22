@@ -5,7 +5,8 @@ use crate::ffi::{send_event, events::FfiEvent};
 pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMessageEvent>, room: Room) {
     let raw_val: Option<serde_json::Value> = event.deserialize_as::<serde_json::Value>().ok();
     
-    if let Ok(SyncRoomMessageEvent::Original(ev)) = event.deserialize() {
+    let event_deserialized = event.deserialize();
+    if let Ok(SyncRoomMessageEvent::Original(ev)) = &event_deserialized {
         let sender_id = ev.sender.as_str();
         let room_id = room.room_id().as_str();
         let timestamp: u64 = ev.origin_server_ts.0.into();
@@ -91,7 +92,7 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
                             p_sender_id.to_string()
                         };
 
-                        quoted = format!("<b>{}</b>: {}", p_sender_display, crate::sanitize_untrusted_html(&parent_body));
+                        quoted = format!("<b>{}</b>: {}", crate::escape_html(&p_sender_display), crate::sanitize_untrusted_html(&parent_body));
                     }
                 }
             }
@@ -106,17 +107,21 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
             room_id.to_string()
         };
         
-        let display_body = format!("<span id=\"{}\">{}</span>", ev.event_id.as_str(), final_body);
+        let display_body = format!("<span id=\"{}\">{}</span>", crate::escape_html(ev.event_id.as_str()), final_body);
+
+        let is_direct = room.is_direct().await.unwrap_or(false);
 
         send_event(FfiEvent::Message {
             user_id: local_user_id.clone(),
             sender: pidgin_sender,
+            sender_id: ev.sender.to_string(),
             msg: display_body,
             room_id: target_room_id,
             thread_root_id,
             event_id: Some(ev.event_id.to_string()),
             timestamp,
             encrypted: is_encrypted,
+            is_direct,
         });
 
         // 2. Handle Media Asynchronously
@@ -166,6 +171,26 @@ pub async fn handle_room_message(event: matrix_sdk::ruma::serde::Raw<SyncRoomMes
                 }
             });
         }
+    } else if let Ok(SyncRoomMessageEvent::Redacted(ev)) = &event_deserialized {
+        let sender_id = ev.sender.as_str();
+        let room_id = room.room_id().to_string();
+        let timestamp: u64 = ev.origin_server_ts.0.into();
+        let me = room.client().user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
+
+        let is_direct = room.is_direct().await.unwrap_or(false);
+
+        send_event(FfiEvent::Message {
+            user_id: me,
+            sender: sender_id.to_string(),
+            sender_id: sender_id.to_string(),
+            msg: "<i>[This message was redacted]</i>".to_string(),
+            room_id,
+            thread_root_id: None,
+            event_id: Some(ev.event_id.to_string()),
+            timestamp,
+            encrypted: false,
+            is_direct,
+        });
     }
 }
 
@@ -200,6 +225,29 @@ pub async fn handle_encrypted(event: matrix_sdk::ruma::serde::Raw<matrix_sdk::ru
          },
          Err(e) => {
              log::warn!("Failed to decrypt live event: {:?}", e);
+             if let Ok(ev) = event.deserialize() {
+                 let client = room.client();
+                 let me = client.user_id().map(|u| u.as_str().to_string()).unwrap_or_default();
+                 let sender_id = ev.sender().as_str();
+                 let room_id = room.room_id().as_str();
+                 let timestamp: u64 = ev.origin_server_ts().0.into();
+
+                 let is_direct = room.is_direct().await.unwrap_or(false);
+
+                 send_event(FfiEvent::Message {
+                     user_id: me,
+                     sender: sender_id.to_string(),
+                     sender_id: sender_id.to_string(),
+                     msg: format!("<i>[Encrypted Message: Unable to decrypt - {:?}]</i>", e),
+                     room_id: room_id.to_string(),
+                     thread_root_id: None,
+                     event_id: Some(ev.event_id().to_string()),
+                     timestamp,
+                     encrypted: true,
+                     is_direct,
+                 });
+                 return;
+             }
          }
      }
      }
@@ -226,15 +274,19 @@ pub async fn handle_encrypted(event: matrix_sdk::ruma::serde::Raw<matrix_sdk::ru
          let room_id = room.room_id().as_str();
          let timestamp: u64 = ev.origin_server_ts().0.into();
          
+         let is_direct = room.is_direct().await.unwrap_or(false);
+
          send_event(FfiEvent::Message {
              user_id: local_user_id,
              sender: pidgin_sender,
+             sender_id: sender_id.to_string(),
              msg: "[Encrypted]".to_string(),
              room_id: room_id.to_string(),
              thread_root_id: None,
              event_id: Some(ev.event_id().to_string()),
              timestamp,
              encrypted: true,
+             is_direct,
          });
      }
 }

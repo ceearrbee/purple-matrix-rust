@@ -48,14 +48,13 @@ static gboolean poll_rust_channel_cb(gpointer user_data) {
     if (!data)
       continue;
 
-    fprintf(stderr, "[Matrix FFI] Received event type %d\n", ev_type);
     purple_debug_info("matrix-ffi", "Received FFI event type %d\n", ev_type);
     switch (ev_type) {
     case FFI_EVENT_MESSAGE_RECEIVED: {
       MessageEventData *s = (MessageEventData *)data;
-      purple_debug_info("matrix-ffi", "FFI_EVENT_MESSAGE_RECEIVED: room_id=%s\n", s->room_id);
-      msg_callback(s->user_id, s->sender, s->msg, s->room_id, s->thread_root_id,
-                   s->event_id, s->timestamp, s->encrypted, false);
+      purple_debug_info("matrix-ffi", "FFI_EVENT_MESSAGE_RECEIVED: room_id=%s\n", s->room_id ? s->room_id : "(null)");
+      msg_callback(s->user_id, s->sender, s->sender_id, s->msg, s->room_id, s->thread_root_id,
+                   s->event_id, s->timestamp, s->encrypted, false, s->is_direct);
       break;
     }
     case FFI_EVENT_TYPING_STATE: {
@@ -65,14 +64,14 @@ static gboolean poll_rust_channel_cb(gpointer user_data) {
     }
     case FFI_EVENT_ROOM_JOINED: {
       RoomJoinedEventData *s = (RoomJoinedEventData *)data;
-      purple_debug_info("matrix-ffi", "FFI_EVENT_ROOM_JOINED: room_id=%s name=%s\n", s->room_id, s->name ? s->name : "(null)");
+      purple_debug_info("matrix-ffi", "FFI_EVENT_ROOM_JOINED: room_id=%s name=%s\n", s->room_id ? s->room_id : "(null)", s->name ? s->name : "(null)");
       room_joined_callback(s->user_id, s->room_id, s->name, s->group_name,
                            s->avatar_url, s->topic, s->encrypted, s->member_count);
       break;
     }
     case FFI_EVENT_ROOM_LEFT: {
-      // Assuming CRoomLeft matches what I might add later, but using existing callback
-      // My RoomJoinedEventData has more fields, I should be careful.
+      RoomLeftEventData *s = (RoomLeftEventData *)data;
+      room_left_callback(s->user_id, s->room_id);
       break;
     }
     case FFI_EVENT_READ_MARKER: {
@@ -193,7 +192,7 @@ static gboolean poll_rust_channel_cb(gpointer user_data) {
       room_dashboard_info_callback(s->user_id, s->room_id, s->name, s->topic, s->member_count, s->encrypted, s->power_level, s->alias);
       break;
     }
-    case 33: { // PollCreationRequested
+    case FFI_EVENT_POLL_CREATION_REQUESTED: {
       PollCreationRequestedEventData *s = (PollCreationRequestedEventData *)data;
       poll_creation_callback(s->user_id, s->room_id);
       break;
@@ -321,6 +320,12 @@ static void register_signals(PurplePlugin *plugin) {
   purple_signal_register(plugin, "matrix-ui-action-show-last-event-details",
                          purple_marshal_VOID__POINTER, NULL, 1,
                          purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-crypto-status",
+                         purple_marshal_VOID__POINTER, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
+  purple_signal_register(plugin, "matrix-ui-action-bootstrap-crypto",
+                         purple_marshal_VOID__POINTER, NULL, 1,
+                         purple_value_new(PURPLE_TYPE_STRING));
 }
 
 static void conversation_deleted_cb(PurpleConversation *conv, gpointer data) {
@@ -329,6 +334,18 @@ static void conversation_deleted_cb(PurpleConversation *conv, gpointer data) {
       strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
     purple_matrix_rust_close_conversation(purple_account_get_username(account),
                                           purple_conversation_get_name(conv));
+  }
+}
+
+static void conversation_created_cb(PurpleConversation *conv, gpointer data) {
+  PurpleAccount *account = purple_conversation_get_account(conv);
+  if (account &&
+      strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
+    const char *room_id = purple_conversation_get_name(conv);
+    purple_debug_info("matrix", "Conversation created for %s, fetching history, members, and tracking\n", room_id);
+    purple_matrix_rust_track_room(purple_account_get_username(account), room_id);
+    purple_matrix_rust_fetch_room_members(purple_account_get_username(account), room_id);
+    purple_matrix_rust_fetch_history(purple_account_get_username(account), room_id);
   }
 }
 
@@ -341,7 +358,24 @@ static gboolean plugin_load_complete_cb(gpointer data) {
        Instead, we rely on purple_signal_connect not failing silently if it can. */
     purple_signal_connect(conv_handle, "deleting-conversation", plugin,
                           PURPLE_CALLBACK(conversation_deleted_cb), NULL);
-    purple_debug_info("matrix-ffi", "plugin_load_complete_cb: Connected signals\n");
+    purple_signal_connect(conv_handle, "conversation-created", plugin,
+                          PURPLE_CALLBACK(conversation_created_cb), NULL);
+    
+    /* Trigger history fetch for any conversations already open (e.g. from previous session) */
+    GList *convs = purple_get_conversations();
+    for (GList *it = convs; it; it = it->next) {
+        PurpleConversation *conv = (PurpleConversation *)it->data;
+        PurpleAccount *account = purple_conversation_get_account(conv);
+        if (account && strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
+            const char *name = purple_conversation_get_name(conv);
+            purple_debug_info("matrix-ffi", "plugin_load: Triggering history fetch, member fetch, and tracking for existing conversation %s\n", name);
+            purple_matrix_rust_track_room(purple_account_get_username(account), name);
+            purple_matrix_rust_fetch_room_members(purple_account_get_username(account), name);
+            purple_matrix_rust_fetch_history(purple_account_get_username(account), name);
+        }
+    }
+
+    purple_debug_info("matrix-ffi", "plugin_load_complete_cb: Connected signals and triggered initial history fetches\n");
     return FALSE;
   }
   return TRUE; /* Retry if handle not yet available */
@@ -363,6 +397,7 @@ static gboolean plugin_load(PurplePlugin *plugin) {
 }
 
 static gboolean plugin_unload(PurplePlugin *plugin) {
+  purple_matrix_rust_cleanup_media();
   if (room_id_map) {
     g_hash_table_destroy(room_id_map);
     room_id_map = NULL;
@@ -437,6 +472,18 @@ static void init_plugin(PurplePlugin *plugin) {
 
   option = purple_account_option_bool_new("Separate thread tabs",
                                           "separate_threads", FALSE);
+  prpl_info.protocol_options = g_list_append(prpl_info.protocol_options, option);
+
+  option = purple_account_option_bool_new("Auto-open DMs on new message",
+                                          "auto_open_dms", TRUE);
+  prpl_info.protocol_options = g_list_append(prpl_info.protocol_options, option);
+
+  option = purple_account_option_bool_new("Auto-open rooms on new message",
+                                          "auto_open_rooms", FALSE);
+  prpl_info.protocol_options = g_list_append(prpl_info.protocol_options, option);
+
+  option = purple_account_option_bool_new("Accept invalid certificates (Insecure)",
+                                          "insecure_ssl", FALSE);
   prpl_info.protocol_options = g_list_append(prpl_info.protocol_options, option);
 }
 

@@ -4,6 +4,7 @@
 #include "matrix_types.h"
 #include "matrix_utils.h"
 
+#include <libpurple/cmds.h>
 #include <libpurple/debug.h>
 #include <libpurple/notify.h>
 #include <libpurple/request.h>
@@ -31,6 +32,38 @@ static void handle_mark_read_signal(const char *room_id, gpointer user_data);
 static void handle_send_location_signal(const char *room_id, gpointer user_data);
 static void handle_show_last_event_details_signal(const char *room_id, gpointer user_data);
 
+static PurpleCmdRet cmd_verify(PurpleConversation *conv, const char *cmd, char **args, char **error, void *data) {
+  if (!args || !args[0]) {
+    if (error) *error = g_strdup("Usage: /verify [match|mismatch|cancel]");
+    return PURPLE_CMD_RET_FAILED;
+  }
+
+  PurpleAccount *account = purple_conversation_get_account(conv);
+  const char *user_id = purple_account_get_username(account);
+  const char *flow_id = purple_conversation_get_data(conv, "matrix-verification-flow-id");
+
+  if (!flow_id) {
+    if (error) *error = g_strdup("No active verification flow in this chat.");
+    return PURPLE_CMD_RET_FAILED;
+  }
+
+  if (strcmp(args[0], "match") == 0) {
+    purple_matrix_rust_verify_sas_match(user_id, flow_id);
+    purple_conversation_set_data(conv, "matrix-verification-flow-id", NULL);
+  } else if (strcmp(args[0], "mismatch") == 0) {
+    purple_matrix_rust_verify_sas_mismatch(user_id, flow_id);
+    purple_conversation_set_data(conv, "matrix-verification-flow-id", NULL);
+  } else if (strcmp(args[0], "cancel") == 0) {
+    purple_matrix_rust_verify_sas_cancel(user_id, flow_id);
+    purple_conversation_set_data(conv, "matrix-verification-flow-id", NULL);
+  } else {
+    if (error) *error = g_strdup("Invalid argument. Use match, mismatch or cancel.");
+    return PURPLE_CMD_RET_FAILED;
+  }
+
+  return PURPLE_CMD_RET_OK;
+}
+
 /* Registry function called by matrix_core.c */
 void register_matrix_commands(PurplePlugin *plugin) {
   purple_signal_connect(plugin, "matrix-ui-action-reply", plugin, PURPLE_CALLBACK(handle_reply_signal), NULL);
@@ -50,6 +83,16 @@ void register_matrix_commands(PurplePlugin *plugin) {
   purple_signal_connect(plugin, "matrix-ui-action-mark-read", plugin, PURPLE_CALLBACK(handle_mark_read_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-send-location", plugin, PURPLE_CALLBACK(handle_send_location_signal), NULL);
   purple_signal_connect(plugin, "matrix-ui-action-show-last-event-details", plugin, PURPLE_CALLBACK(handle_show_last_event_details_signal), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-crypto-status", plugin, PURPLE_CALLBACK(matrix_ui_action_crypto_status), NULL);
+  purple_signal_connect(plugin, "matrix-ui-action-bootstrap-crypto", plugin, PURPLE_CALLBACK(matrix_ui_action_bootstrap_crypto), NULL);
+
+  purple_cmd_register("verify", "s", PURPLE_CMD_P_PRPL,
+                      PURPLE_CMD_FLAG_CHAT | PURPLE_CMD_FLAG_IM |
+                          PURPLE_CMD_FLAG_PRPL_ONLY,
+                      "prpl-matrix-rust", cmd_verify,
+                      "verify [match|mismatch|cancel]: Confirm or cancel SAS "
+                      "verification",
+                      NULL);
 }
 
 void open_room_dashboard(PurpleAccount *account, const char *room_id) {
@@ -246,8 +289,43 @@ static void handle_list_polls_signal(const char *room_id, gpointer user_data) {
   matrix_ui_action_list_polls(room_id);
 }
 
+typedef struct { char *room_id; char *event_id; char *user_id; } ThreadReplyData;
+
+static void thread_reply_input_cb(void *user_data, const char *text) {
+  ThreadReplyData *d = (ThreadReplyData *)user_data;
+  if (text && *text && d->room_id && d->event_id && d->user_id)
+    purple_matrix_rust_send_reply(d->user_id, d->room_id, d->event_id, text);
+  g_free(d->room_id); g_free(d->event_id); g_free(d->user_id);
+  g_free(d);
+}
+
+static void thread_reply_cancel_cb(void *user_data, const char *text) {
+  ThreadReplyData *d = (ThreadReplyData *)user_data;
+  g_free(d->room_id); g_free(d->event_id); g_free(d->user_id);
+  g_free(d);
+}
+
 static void handle_start_thread_signal(const char *room_id, gpointer user_data) {
-  purple_notify_info(my_plugin, "Threads", "Start Thread", "Threading UI is not yet implemented.");
+  PurpleAccount *account = find_matrix_account();
+  if (!account || !room_id) return;
+  PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
+  const char *event_id = conv ? purple_conversation_get_data(conv, "matrix-ui-selected-event-id") : NULL;
+  if (!event_id) event_id = conv ? purple_conversation_get_data(conv, "last_event_id") : NULL;
+  if (!event_id) {
+    purple_notify_info(my_plugin, "Start Thread", "No event selected",
+                       "Right-click a message and choose 'Matrix Thread' to start a thread on it.");
+    return;
+  }
+  ThreadReplyData *d = g_new0(ThreadReplyData, 1);
+  d->room_id = g_strdup(room_id);
+  d->event_id = g_strdup(event_id);
+  d->user_id = g_strdup(purple_account_get_username(account));
+  purple_request_input(my_plugin, "Start Thread", "Reply to start a thread",
+                       "Your message will create a thread on the selected event.",
+                       NULL, TRUE, FALSE, NULL,
+                       "_Send", G_CALLBACK(thread_reply_input_cb),
+                       "_Cancel", G_CALLBACK(thread_reply_cancel_cb),
+                       account, NULL, NULL, d);
 }
 
 static void handle_list_threads_signal(const char *room_id, gpointer user_data) {
@@ -323,7 +401,8 @@ static void handle_mark_read_signal(const char *room_id, gpointer user_data) {
 }
 
 void matrix_ui_action_send_location(const char *room_id) {
-  purple_notify_info(my_plugin, "Location", "Send Location", "Location sharing is not yet implemented.");
+  (void)room_id; /* Location sharing not available in this build */
+  purple_debug_info("matrix", "send_location called but feature is not available\n");
 }
 
 static void handle_send_location_signal(const char *room_id, gpointer user_data) {
@@ -332,12 +411,18 @@ static void handle_send_location_signal(const char *room_id, gpointer user_data)
 
 void matrix_ui_action_show_last_event_details(const char *room_id) {
   PurpleAccount *account = find_matrix_account();
+  if (!account || !room_id) return;
   PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, room_id, account);
   if (!conv) return;
   const char *event_id = purple_conversation_get_data(conv, "matrix-ui-selected-event-id");
   if (!event_id) event_id = purple_conversation_get_data(conv, "last_event_id");
   if (event_id) {
-    purple_notify_info(my_plugin, "Event Details", event_id, "Event inspection is not yet implemented.");
+    char *msg = g_strdup_printf("Event ID: %s\nRoom: %s", event_id, room_id);
+    purple_notify_info(my_plugin, "Event Details", "Selected Event", msg);
+    g_free(msg);
+  } else {
+    purple_notify_info(my_plugin, "Event Details", "No event selected",
+                       "Click on a message to select it, then use this action.");
   }
 }
 
@@ -366,6 +451,9 @@ void matrix_ui_action_leave_room(const char *room_id) {
 void matrix_ui_action_verify_self(const char *room_id) {}
 void matrix_ui_action_crypto_status(const char *room_id) {
   purple_matrix_rust_debug_crypto_status(purple_account_get_username(find_matrix_account()));
+}
+void matrix_ui_action_bootstrap_crypto(const char *room_id) {
+  purple_matrix_rust_bootstrap_cross_signing(purple_account_get_username(find_matrix_account()));
 }
 void matrix_ui_action_list_devices(const char *room_id) {
   purple_matrix_rust_list_own_devices(purple_account_get_username(find_matrix_account()));

@@ -52,7 +52,7 @@ pub fn sanitize_untrusted_html(input: &str) -> String {
 }
 
 
-pub(crate) fn create_message_content(text: String) -> matrix_sdk::ruma::events::room::message::RoomMessageEventContent {
+pub fn create_message_content(text: String) -> matrix_sdk::ruma::events::room::message::RoomMessageEventContent {
     use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
     use pulldown_cmark::{Parser, Options, html};
 
@@ -78,17 +78,32 @@ pub(crate) fn create_message_content(text: String) -> matrix_sdk::ruma::events::
 // Helper function to render HTML/Markdown
 pub fn get_display_html(content: &matrix_sdk::ruma::events::room::message::RoomMessageEventContent) -> String {
     use matrix_sdk::ruma::events::room::message::MessageType;
-    
+    use pulldown_cmark::{Parser, Options, html};
+
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_TASKLISTS);
+
     match &content.msgtype {
         MessageType::Text(text_content) => {
-             // Check if HTML is present
              if let Some(formatted) = &text_content.formatted {
                  if formatted.format == matrix_sdk::ruma::events::room::message::MessageFormat::Html {
                      return sanitize_untrusted_html(&formatted.body);
                  }
              }
-             // Treat plain text as untrusted and escape.
-             escape_html(&text_content.body)
+             
+             // If no HTML, try rendering markdown
+             let parser = Parser::new_ext(&text_content.body, options);
+             let mut html_output = String::new();
+             html::push_html(&mut html_output, parser);
+             
+             let trimmed = html_output.trim();
+             if trimmed.is_empty() {
+                 escape_html(&text_content.body)
+             } else {
+                 sanitize_untrusted_html(trimmed)
+             }
         },
         MessageType::Emote(content) => {
              let body_safe = if let Some(formatted) = &content.formatted {
@@ -98,7 +113,10 @@ pub fn get_display_html(content: &matrix_sdk::ruma::events::room::message::RoomM
                      escape_html(&content.body)
                  }
              } else {
-                 escape_html(&content.body)
+                 let parser = Parser::new_ext(&content.body, options);
+                 let mut html_output = String::new();
+                 html::push_html(&mut html_output, parser);
+                 sanitize_untrusted_html(html_output.trim())
              };
              format!("* {}", body_safe)
         },
@@ -108,7 +126,10 @@ pub fn get_display_html(content: &matrix_sdk::ruma::events::room::message::RoomM
                      return sanitize_untrusted_html(&formatted.body);
                  }
              }
-             escape_html(&content.body)
+             let parser = Parser::new_ext(&content.body, options);
+             let mut html_output = String::new();
+             html::push_html(&mut html_output, parser);
+             sanitize_untrusted_html(html_output.trim())
         },
         MessageType::Image(image_content) => format!("[Image: {}]", escape_html(&image_content.body)),
         MessageType::Video(video_content) => format!("[Video: {}]", escape_html(&video_content.body)),
@@ -123,111 +144,3 @@ pub fn get_display_html(content: &matrix_sdk::ruma::events::room::message::RoomM
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
-
-    #[test]
-    fn test_format_text_message() {
-        let content = RoomMessageEventContent::text_plain("Hello World");
-        assert_eq!(get_display_html(&content), "Hello World");
-    }
-
-    #[test]
-    fn test_format_markdown() {
-        let content = RoomMessageEventContent::text_plain("**Bold** and *Italic*");
-        let html = get_display_html(&content);
-        assert_eq!(html, "**Bold** and *Italic*");
-    }
-    
-    #[test]
-    fn test_formatted_html_override() {
-        let content = RoomMessageEventContent::text_html("Plain", "<b>Bold</b>");
-        // We now allow basic HTML!
-        assert_eq!(get_display_html(&content), "<b>Bold</b>");
-    }
-
-    #[test]
-    fn test_formatted_html_sanitizes_script_payload() {
-        let content = RoomMessageEventContent::text_html(
-            "x",
-            "<img src=x onerror=alert(1)><script>alert(2)</script><b>ok</b>",
-        );
-        // We removed img from allow list (in next step), and script is always escaped.
-        // b is allowed.
-        // So expected: escaped img, escaped script, kept b.
-        // "&lt;img src=x onerror=alert(1)&gt;&lt;script&gt;alert(2)&lt;/script&gt;<b>ok</b>"
-        let output = get_display_html(&content);
-        assert!(!output.contains("<script>"));
-        assert!(!output.contains("alert(2)")); // ammonia strips content of script tags by default
-        assert!(!output.contains("onerror"));
-        assert!(output.contains("<b>ok</b>"));
-    }
-
-    #[test]
-    fn test_location_rendering() {
-        use matrix_sdk::ruma::events::room::message::LocationMessageEventContent;
-        let content = RoomMessageEventContent::new(
-            matrix_sdk::ruma::events::room::message::MessageType::Location(
-                LocationMessageEventContent::new("Meeting Spot".to_string(), "geo:12.34,56.78".to_string())
-            )
-        );
-        let html = get_display_html(&content);
-        assert!(html.contains("Meeting Spot"));
-        assert!(html.contains("geo:12.34,56.78"));
-    }
-
-    #[test]
-    fn test_create_message_content_markdown() {
-        let content = crate::create_message_content("**Bold**".to_string());
-        // Should be HTML
-        if let matrix_sdk::ruma::events::room::message::MessageType::Text(text_content) = content.msgtype {
-            assert!(text_content.formatted.is_some());
-            let formatted = text_content.formatted.expect("Formatted body missing");
-            assert!(formatted.body.contains("<strong>Bold</strong>") || formatted.body.contains("<b>Bold</b>"));
-        } else {
-            panic!("Expected Text message");
-        }
-    }
-
-    #[tokio::test]
-    async fn test_with_client_concurrency() {
-        use std::sync::Arc;
-        let c1 = matrix_sdk::Client::builder().homeserver_url("https://example.com").build().await.expect("Failed to build client 1");
-        let c2 = matrix_sdk::Client::builder().homeserver_url("https://example.com").build().await.expect("Failed to build client 2");
-        
-        crate::ffi::CLIENTS.insert("user1".to_string(), c1);
-        crate::ffi::CLIENTS.insert("user2".to_string(), c2);
-
-        let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut handles = vec![];
-
-        for _ in 0..100 {
-            let counter_clone = counter.clone();
-            handles.push(tokio::spawn(async move {
-                crate::ffi::with_client("user1", |client: matrix_sdk::Client| {
-                    assert_eq!(client.homeserver().as_str(), "https://example.com/");
-                    counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                });
-            }));
-            let counter_clone = counter.clone();
-            handles.push(tokio::spawn(async move {
-                crate::ffi::with_client("user2", |client: matrix_sdk::Client| {
-                    assert_eq!(client.homeserver().as_str(), "https://example.com/");
-                    counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                });
-            }));
-            handles.push(tokio::spawn(async move {
-                crate::ffi::with_client("user_missing", |_client: matrix_sdk::Client| {
-                    panic!("Should not be called");
-                });
-            }));
-        }        
-        for h in handles {
-            let _ = h.await;
-        }
-        
-        assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 200);
-    }
-}

@@ -14,18 +14,21 @@ pub async fn handle_room_topic(event: SyncRoomTopicEvent, room: Room) {
         let Some(me) = client.user_id() else { return; };
         let local_user_id = me.as_str().to_string();
 
-        let body = format!("[System] {} set the topic to: {}", sender, topic);
+        let body = format!("[System] {} set the topic to: {}",
+            crate::escape_html(sender), crate::escape_html(topic));
 
         // 1. Dispatch Message
         send_event(FfiEvent::Message {
             user_id: local_user_id.clone(),
             sender: "System".to_string(),
+            sender_id: "System".to_string(),
             msg: body,
             room_id: room_id.to_string(),
             thread_root_id: None,
             event_id: None,
             timestamp,
             encrypted: false,
+            is_direct: false,
         });
 
         // 2. Dispatch Topic Update
@@ -49,47 +52,53 @@ pub async fn handle_room_member(event: SyncRoomMemberEvent, room: Room) {
         let Some(me) = client.user_id() else { return; };
         let local_user_id = me.as_str().to_string();
 
+        let safe_sender = crate::escape_html(sender);
+        let safe_target = crate::escape_html(target);
         let body = match ev.content.membership {
-            MembershipState::Join => format!("[System] {} joined the room.", target),
-            MembershipState::Leave => format!("[System] {} left the room.", target),
-            MembershipState::Invite => format!("[System] {} invited {} to the room.", sender, target),
-            MembershipState::Ban => format!("[System] {} was banned by {}.", target, sender),
-            _ => format!("[System] Membership change for {}: {:?}", target, ev.content.membership),
+            MembershipState::Join   => format!("[System] {} joined the room.", safe_target),
+            MembershipState::Leave  => format!("[System] {} left the room.", safe_target),
+            MembershipState::Invite => format!("[System] {} invited {} to the room.", safe_sender, safe_target),
+            MembershipState::Ban    => format!("[System] {} was banned by {}.", safe_target, safe_sender),
+            _ => format!("[System] Membership change for {}: {:?}", safe_target, ev.content.membership),
         };
 
         // Update buddy info
         if ev.content.membership == MembershipState::Join {
             let display_name = ev.content.displayname.clone().unwrap_or_else(|| target.to_string());
-            
+            let target_user_id = target.to_string();
+
             let avatar_path = if let Some(mxc_url) = &ev.content.avatar_url {
                 crate::media_helper::download_avatar(&client, mxc_url, target).await
             } else {
                 None
             };
-            
-            send_event(FfiEvent::UpdateBuddy {
-                user_id: local_user_id.clone(),
-                alias: display_name.clone(),
-                avatar_url: avatar_path.clone().unwrap_or_default(),
-            });
+
+            if crate::ffi::NOTIFIED_BUDDIES.insert(target_user_id.clone()) {
+                send_event(FfiEvent::UpdateBuddy {
+                    user_id: target_user_id.clone(),
+                    alias: display_name.clone(),
+                    avatar_url: avatar_path.clone().unwrap_or_default(),
+                });
+            }
 
             send_event(FfiEvent::ChatUser {
                 user_id: local_user_id.clone(),
                 room_id: room_id.to_string(),
-                member_id: target.to_string(),
+                member_id: target_user_id.clone(),
                 add: true,
                 alias: Some(display_name.clone()),
                 avatar_path: avatar_path.clone(),
             });
-            
-            if target == local_user_id {
+
+            if target_user_id == local_user_id {
                 send_event(FfiEvent::UpdateBuddy {
                     user_id: local_user_id.clone(),
                     alias: display_name,
                     avatar_url: avatar_path.unwrap_or_default(),
                 });
             }
-        } else if ev.content.membership == MembershipState::Leave || ev.content.membership == MembershipState::Ban {
+        }
+ else if ev.content.membership == MembershipState::Leave || ev.content.membership == MembershipState::Ban {
             send_event(FfiEvent::ChatUser {
                 user_id: local_user_id.clone(),
                 room_id: room_id.to_string(),
@@ -103,12 +112,14 @@ pub async fn handle_room_member(event: SyncRoomMemberEvent, room: Room) {
         send_event(FfiEvent::Message {
             user_id: local_user_id,
             sender: "System".to_string(),
+            sender_id: "System".to_string(),
             msg: body,
             room_id: room_id.to_string(),
             thread_root_id: None,
             event_id: None,
             timestamp,
             encrypted: false,
+            is_direct: false,
         });
     }
 }
@@ -125,17 +136,19 @@ pub async fn handle_tombstone(event: SyncRoomTombstoneEvent, room: Room) {
         let Some(me) = client.user_id() else { return; };
         let local_user_id = me.as_str().to_string();
 
-        let body = format!("[System] This room has been upgraded. New room ID: {}", new_room);
+        let body = format!("[System] This room has been upgraded. New room ID: {}", crate::escape_html(new_room));
 
         send_event(FfiEvent::Message {
             user_id: local_user_id,
             sender: "System".to_string(),
+            sender_id: "System".to_string(),
             msg: body,
             room_id: room_id.to_string(),
             thread_root_id: None,
             event_id: None,
             timestamp,
             encrypted: false,
+            is_direct: false,
         });
     }
 }

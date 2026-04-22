@@ -67,6 +67,8 @@ static void on_menu_mark_unread(gpointer d);
 static void on_menu_mark_read(gpointer d);
 static void on_menu_send_location(gpointer d);
 
+static GHashTable *pending_jumps = NULL;
+
 static void on_menu_jump_to_parent(gpointer d) {
   PurpleConversation *conv = (PurpleConversation *)d;
   const char *name = purple_conversation_get_name(conv);
@@ -81,12 +83,17 @@ static void on_menu_jump_to_parent(gpointer d) {
   if (!pconv) {
       PurpleConnection *gc = purple_account_get_connection(account);
       if (gc) {
+          if (!pending_jumps) pending_jumps = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+          g_hash_table_insert(pending_jumps, g_strdup(parent_id), g_strdup(thread_id));
+          
           GHashTable *comps = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
           g_hash_table_insert(comps, g_strdup("room_id"), g_strdup(parent_id));
           serv_join_chat(gc, comps);
           g_hash_table_destroy(comps);
-          pconv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, parent_id, account);
+          purple_notify_info(NULL, "Joining Room", "Joining parent room to view thread...", NULL);
       }
+      g_free(parent_id);
+      return; // Exit early, cannot scroll yet
   }
 
   if (pconv) {
@@ -121,15 +128,11 @@ static void on_menu_edit_pick_event(gpointer d) { emit_matrix_signal((PurpleConv
 static void on_menu_redact_pick_event(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-redact-pick-event"); }
 static void on_menu_show_last_event_details(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-show-last-event-details"); }
 static void on_menu_bootstrap_crypto(gpointer d) {
-  PurpleConversation *conv = (PurpleConversation *)d;
-  PurpleAccount *account = purple_conversation_get_account(conv);
-  purple_matrix_rust_bootstrap_cross_signing(purple_account_get_username(account));
+  emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-bootstrap-crypto");
 }
 
 static void on_menu_crypto_status(gpointer d) {
-  PurpleConversation *conv = (PurpleConversation *)d;
-  PurpleAccount *account = purple_conversation_get_account(conv);
-  purple_matrix_rust_debug_crypto_status(purple_account_get_username(account));
+  emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-crypto-status");
 }
 
 static void on_menu_dash(gpointer d) { emit_matrix_signal((PurpleConversation *)d, "matrix-ui-action-show-dashboard"); }
@@ -178,9 +181,6 @@ static void on_matrix_more_actions_clicked(GtkWidget *b, PurpleConversation *c) 
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
   item = gtk_menu_item_new_with_label("Send File...");
   g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_send_file), c);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
-  item = gtk_menu_item_new_with_label("Send Location...");
-  g_signal_connect_swapped(G_OBJECT(item), "activate", G_CALLBACK(on_menu_send_location), c);
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
   item = gtk_separator_menu_item_new();
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
@@ -433,6 +433,11 @@ static void handle_media_downloaded_cb(const char *room_id, const char *event_id
   GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gtkconv->imhtml));
   if (!buffer) return;
 
+  if (size > 20 * 1024 * 1024) { // 20 MB Limit
+      purple_debug_error("matrix-ui", "Refusing to allocate %zu bytes for media download.\n", size);
+      return;
+  }
+
   char *mark_name = g_strdup_printf("mxid_%s", event_id);
   GtkTextMark *mark = gtk_text_buffer_get_mark(buffer, mark_name);
   if (mark) {
@@ -445,21 +450,23 @@ static void handle_media_downloaded_cb(const char *room_id, const char *event_id
       /* Find placeholder text: " (Downloading...)" and replace the whole line body or just placeholder */
       /* For simplicity, let's replace the whole message content if it was an image placeholder */
       char *line_text = gtk_text_buffer_get_text(buffer, &line_start, &line_end, FALSE);
-      if (line_text && strstr(line_text, " (Downloading...)")) {
-          /* Extract original description from "🖼️ [Image: DESC] (Downloading...)" */
+      if (line_text) {
+          /* Extract original description from "[Image: DESC]" safely */
           const char *start_desc = strstr(line_text, "[Image: ");
           char *desc = NULL;
           if (start_desc) {
               start_desc += 8;
-              const char *end_desc = strstr(start_desc, "] (Downloading...)");
-              if (end_desc) {
+              const char *end_desc = strchr(start_desc, ']');
+              if (end_desc && end_desc > start_desc) {
                   desc = g_strndup(start_desc, end_desc - start_desc);
               }
           }
 
           int img_id = purple_imgstore_add_with_id(g_memdup2(data, size), size, NULL);
           if (img_id > 0) {
-              char *img_html = g_strdup_printf("<img id=\"%d\" alt=\"%s\">", img_id, desc ? desc : "image");
+              char *esc_desc = desc ? g_markup_escape_text(desc, -1) : g_strdup("image");
+              char *img_html = g_strdup_printf("<img id=\"%d\" alt=\"%s\">", img_id, esc_desc);
+              g_free(esc_desc);
               
               /* Preserve the mark by inserting after it */
               gtk_text_buffer_delete(buffer, &line_start, &line_end);
@@ -638,13 +645,41 @@ static void handle_room_muted_cb(const char *room_id, gboolean muted, gpointer d
 
 static gboolean inject_action_bar_idle_cb(gpointer data) {
   PurpleConversation *conv = (PurpleConversation *)data;
-  if (!g_list_find(purple_get_conversations(), conv)) return FALSE;
+  if (!g_list_find(purple_get_conversations(), conv)) {
+      purple_debug_info("matrix-ui", "inject_action_bar: Conversation no longer exists.\n");
+      return FALSE;
+  }
   if (purple_conversation_get_data(conv, MATRIX_UI_ACTION_BAR_KEY)) return FALSE;
+
+  /* Check if this is a Pidgin conversation */
+  if (conv->ui_ops != pidgin_conversations_get_conv_ui_ops()) {
+      purple_debug_info("matrix-ui", "inject_action_bar: Not a Pidgin conversation.\n");
+      return FALSE;
+  }
+
   PidginConversation *gtkconv = PIDGIN_CONVERSATION(conv);
-  if (!gtkconv || !gtkconv->lower_hbox || !GTK_IS_WIDGET(gtkconv->lower_hbox)) return TRUE;
-  if (!GTK_WIDGET_REALIZED(gtkconv->lower_hbox)) return TRUE;
+  if (!gtkconv) {
+      purple_debug_info("matrix-ui", "inject_action_bar: No GTK conversation data yet.\n");
+      return TRUE; /* Retry */
+  }
+
+  if (!gtkconv->lower_hbox || !GTK_IS_WIDGET(gtkconv->lower_hbox)) {
+      purple_debug_info("matrix-ui", "inject_action_bar: lower_hbox not available yet.\n");
+      return TRUE; /* Retry */
+  }
+
+  if (!GTK_WIDGET_REALIZED(gtkconv->lower_hbox)) {
+      purple_debug_info("matrix-ui", "inject_action_bar: lower_hbox not realized yet.\n");
+      return TRUE; /* Retry */
+  }
+
   GtkWidget *vbox = gtk_widget_get_parent(gtkconv->lower_hbox);
-  if (!vbox || !GTK_IS_VBOX(vbox)) return FALSE;
+  if (!vbox || !GTK_IS_CONTAINER(vbox)) {
+      purple_debug_warning("matrix-ui", "inject_action_bar: parent of lower_hbox is not a container.\n");
+      return FALSE;
+  }
+
+  purple_debug_info("matrix-ui", "inject_action_bar: Injecting toolbar for %s\n", purple_conversation_get_name(conv));
 
   if (gtkconv->imhtml && GTK_IS_WIDGET(gtkconv->imhtml)) {
     g_signal_connect(G_OBJECT(gtkconv->imhtml), "populate-popup", G_CALLBACK(imhtml_populate_popup_cb), conv);
@@ -711,16 +746,70 @@ static gboolean inject_action_bar_idle_cb(gpointer data) {
   purple_conversation_set_data(conv, MATRIX_UI_TYPING_LABEL_KEY, typing_label);
 
   gtk_box_pack_start(GTK_BOX(main_vbox), hbox, FALSE, FALSE, 0);
-  gtk_box_pack_start(GTK_BOX(vbox), main_vbox, FALSE, FALSE, 0);
+  
+  if (GTK_IS_BOX(vbox)) {
+      gtk_box_pack_start(GTK_BOX(vbox), main_vbox, FALSE, FALSE, 0);
+      /* Move it to be just above lower_hbox if possible */
+      gtk_box_reorder_child(GTK_BOX(vbox), main_vbox, 
+          g_list_index(gtk_container_get_children(GTK_CONTAINER(vbox)), gtkconv->lower_hbox));
+  } else {
+      gtk_container_add(GTK_CONTAINER(vbox), main_vbox);
+  }
+
   gtk_widget_show_all(main_vbox);
   purple_conversation_set_data(conv, MATRIX_UI_ACTION_BAR_KEY, main_vbox);
   return FALSE;
+}
+
+typedef struct {
+    PurpleConversation *conv;
+    char *thread_id;
+    int attempts;
+} PendingJumpCtx;
+
+static gboolean do_pending_jump_cb(gpointer data) {
+    PendingJumpCtx *ctx = (PendingJumpCtx *)data;
+    if (!g_list_find(purple_get_conversations(), ctx->conv)) {
+        g_free(ctx->thread_id); g_free(ctx); return FALSE;
+    }
+    PidginConversation *gtkconv = PIDGIN_CONVERSATION(ctx->conv);
+    if (gtkconv && gtkconv->imhtml && GTK_WIDGET_REALIZED(gtkconv->imhtml)) {
+        GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(gtkconv->imhtml));
+        char *mark_name = g_strdup_printf("mxid_%s", ctx->thread_id);
+        GtkTextMark *mark = gtk_text_buffer_get_mark(buffer, mark_name);
+        if (mark) {
+            purple_conversation_present(ctx->conv);
+            gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(gtkconv->imhtml), mark, 0.0, TRUE, 0.5, 0.0);
+            g_free(mark_name);
+            g_free(ctx->thread_id); g_free(ctx); return FALSE;
+        }
+        g_free(mark_name);
+    }
+    
+    ctx->attempts++;
+    if (ctx->attempts > 20) { // Give up after ~2 seconds
+        g_free(ctx->thread_id); g_free(ctx); return FALSE;
+    }
+    return TRUE; // Try again
 }
 
 static void conversation_created_cb(PurpleConversation *conv, gpointer data) {
   PurpleAccount *account = purple_conversation_get_account(conv);
   if (account && strcmp(purple_account_get_protocol_id(account), "prpl-matrix-rust") == 0) {
     purple_timeout_add(1000, inject_action_bar_idle_cb, conv);
+    
+    if (pending_jumps) {
+        const char *name = purple_conversation_get_name(conv);
+        const char *thread_id = g_hash_table_lookup(pending_jumps, name);
+        if (thread_id) {
+            PendingJumpCtx *ctx = g_new0(PendingJumpCtx, 1);
+            ctx->conv = conv;
+            ctx->thread_id = g_strdup(thread_id);
+            ctx->attempts = 0;
+            g_timeout_add(100, do_pending_jump_cb, ctx);
+            g_hash_table_remove(pending_jumps, name);
+        }
+    }
   }
 }
 
@@ -829,6 +918,14 @@ static gboolean plugin_load(PurplePlugin *plugin) {
 
 static gboolean plugin_unload(PurplePlugin *plugin) {
   purple_signals_disconnect_by_handle(plugin);
+  if (typing_users_map) {
+      g_hash_table_destroy(typing_users_map);
+      typing_users_map = NULL;
+  }
+  if (pending_jumps) {
+      g_hash_table_destroy(pending_jumps);
+      pending_jumps = NULL;
+  }
   return TRUE;
 }
 
@@ -861,7 +958,7 @@ static PurplePluginInfo info = {
     .type = PURPLE_PLUGIN_STANDARD, .priority = PURPLE_PRIORITY_DEFAULT, .id = "pidgin-matrix-ui",
     .name = "Matrix UI Enhancer", .version = "0.4.0", .summary = "Inline reactions and Matrix actions.",
     .description = "Adds real-time typing indicators, encryption status, and inline reactions.",
-    .author = "Author Name", .homepage = "https://matrix.org", .load = plugin_load, .unload = plugin_unload,
+    .author = "Purple-Matrix-Rust Team", .homepage = "https://matrix.org", .load = plugin_load, .unload = plugin_unload,
     .actions = ui_actions};
 
 static void init_pidgin_ui_plugin(PurplePlugin *plugin) {}

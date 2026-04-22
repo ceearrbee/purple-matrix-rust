@@ -42,6 +42,8 @@ pub async fn handle_sas_request(sas: SasVerification, client: Client) {
 
     log::info!("Verification request from {} (flow: {})", target_user_id, flow_id);
 
+    crate::ffi::encryption::ACTIVE_SAS.insert(flow_id.clone(), sas);
+
     let event = FfiEvent::SasRequest {
         user_id,
         target_user_id,
@@ -63,6 +65,8 @@ pub async fn handle_sas_emoji(sas: SasVerification, client: Client) {
             emoji_str.push(' ');
             emoji_str.push_str(emoji.symbol);
         }
+
+        crate::ffi::encryption::ACTIVE_SAS.insert(flow_id.clone(), sas);
 
         let event = FfiEvent::SasHaveEmoji {
             user_id,

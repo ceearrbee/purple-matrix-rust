@@ -2,6 +2,7 @@
 use ammonia::Builder;
 use std::collections::{HashSet, HashMap};
 use once_cell::sync::Lazy;
+use regex::Regex;
 
 pub fn style_reply(quoted_body: &str, reply_body: &str) -> String {
     format!(
@@ -57,5 +58,16 @@ pub fn sanitize_matrix_html(input: &str) -> String {
         builder
     });
 
-    AMMONIA.clean(input).to_string()
+    let sanitized = AMMONIA.clean(input).to_string();
+    // Strip CSS expression() — an IE 5/6 XSS vector that ammonia does not filter.
+    // Although Pidgin's GTK renderer does not execute it, we remove it defensively
+    // in case the output is ever used in another rendering context.
+    if sanitized.contains("expression(") {
+        static CSS_EXPR: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"(?i)expression\s*\(").expect("valid CSS expression regex")
+        });
+        CSS_EXPR.replace_all(&sanitized, "/*removed*/").into_owned()
+    } else {
+        sanitized
+    }
 }

@@ -36,7 +36,13 @@ pub extern "C" fn purple_matrix_rust_create_poll(user_id: *const c_char, room_id
                             answers_vec.push(PollAnswer::new(i.to_string(), TextContentBlock::plain(opt)));
                         }
                         
-                        let answers = PollAnswers::try_from(answers_vec).unwrap();
+                        let answers = match PollAnswers::try_from(answers_vec) {
+                                Ok(a) => a,
+                                Err(e) => {
+                                    log::error!("Failed to construct poll answers: {:?}", e);
+                                    return;
+                                }
+                            };
                         let poll_block = PollContentBlock::new(TextContentBlock::plain(question_str.clone()), answers);
                         
                         let content = PollStartEventContent::new(TextContentBlock::plain(format!("Poll: {}", question_str)), poll_block);

@@ -15,6 +15,7 @@
 #include <libpurple/version.h>
 #include <stdlib.h>
 #include <string.h>
+#include <glib/gstdio.h>
 
 typedef struct {
   char *user_id;
@@ -100,13 +101,26 @@ void matrix_login(PurpleAccount *account) {
   if (!homeserver)
     homeserver = "https://matrix.org";
 
-  if (g_getenv("MATRIX_RUST_INSECURE_SSL")) {
+  /* SECURITY: The insecure_ssl option disables TLS certificate verification.
+   * This is intentionally unavailable in release builds — it is only compiled
+   * in when MATRIX_ALLOW_INSECURE_TLS is defined (e.g. for local test servers).
+   * Never enable this in production. */
+#ifdef MATRIX_ALLOW_INSECURE_TLS
+  if (purple_account_get_bool(account, "insecure_ssl", FALSE)) {
+    g_setenv("MATRIX_RUST_INSECURE_SSL", "1", TRUE);
     purple_notify_warning(
         gc, "Security Warning", "Insecure TLS Mode Enabled",
-        "The MATRIX_RUST_INSECURE_SSL environment variable is set. "
+        "The insecure_ssl option is enabled. "
         "TLS certificate verification is DISABLED. Your connection may be "
-        "insecure.");
+        "insecure. This build was compiled with MATRIX_ALLOW_INSECURE_TLS.");
+  } else {
+    g_unsetenv("MATRIX_RUST_INSECURE_SSL");
   }
+#else
+  /* In release builds, always clear the env var and ignore the account option. */
+  (void)purple_account_get_bool(account, "insecure_ssl", FALSE); /* suppress unused warning */
+  g_unsetenv("MATRIX_RUST_INSECURE_SSL");
+#endif
 
   purple_connection_set_state(gc, PURPLE_CONNECTING);
 
@@ -135,8 +149,19 @@ void matrix_close(PurpleConnection *gc) {
 
 void manual_sso_token_action_cb(void *user_data, PurpleRequestFields *fields) {
   const char *token = purple_request_fields_get_string(fields, "sso_token");
-  if (token && *token)
+  if (token && *token && strlen(token) < 2048) {
     purple_matrix_rust_finish_sso(token);
+  } else {
+    purple_debug_error("matrix", "SSO token is empty or too large.\n");
+    PurpleAccount *account = find_matrix_account();
+    if (account && purple_account_get_connection(account)) {
+      purple_notify_error(purple_account_get_connection(account),
+                          "SSO Login Failed", "Invalid Login Token",
+                          "The token was empty or too long. Please retry "
+                          "the login and paste only the 'loginToken' value "
+                          "from the browser redirect URL.");
+    }
+  }
 }
 
 static char *last_sso_url = NULL;
@@ -163,6 +188,9 @@ static gboolean process_sso_cb(gpointer data) {
     purple_request_fields_add_group(fields, group);
     PurpleRequestField *field = purple_request_field_string_new(
         "sso_token", "Login Token", NULL, FALSE);
+    matrix_request_field_set_help_string(field,
+        "After logging in with your browser, copy the full redirect URL "
+        "(or just the 'loginToken=...' value) and paste it here.");
     purple_request_field_group_add_field(group, field);
 
     char *msg = g_strdup_printf(
@@ -429,13 +457,6 @@ static gboolean process_chat_user_cb(gpointer data) {
           serv_got_alias(purple_account_get_connection(account), d->member_id,
                          d->alias);
         }
-        if (d->avatar_path && strlen(d->avatar_path) > 0 && g_file_test(d->avatar_path, G_FILE_TEST_EXISTS)) {
-            gchar *contents;
-            gsize length;
-            if (g_file_get_contents(d->avatar_path, &contents, &length, NULL)) {
-                purple_buddy_icons_set_for_user(account, d->member_id, (void*)contents, length, NULL);
-            }
-        }
       } else {
         purple_conv_chat_remove_user(PURPLE_CONV_CHAT(conv), d->member_id, NULL);
       }
@@ -518,6 +539,11 @@ static gboolean process_sas_request_cb(gpointer data) {
   struct VerificationData *vd = (struct VerificationData *)data;
   PurpleAccount *account = find_matrix_account();
   if (account && purple_account_get_connection(account) != NULL) {
+    PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, vd->user_id, account);
+    if (conv) {
+        purple_conversation_set_data(conv, "matrix-verification-flow-id", g_strdup(vd->flow_id));
+    }
+
     purple_request_action(NULL, "Verification", "Accept?", vd->user_id, 0, NULL,
                           NULL, NULL, vd, 2, "Accept",
                           G_CALLBACK(accept_verification_cb), "Cancel",
@@ -545,6 +571,11 @@ static gboolean process_sas_emoji_cb(gpointer data) {
   vd->flow_id = g_strdup(ed->flow_id);
   PurpleAccount *account = find_matrix_account();
   if (account && purple_account_get_connection(account) != NULL) {
+    PurpleConversation *conv = purple_find_conversation_with_account(PURPLE_CONV_TYPE_ANY, ed->user_id, account);
+    if (conv) {
+        purple_conversation_set_data(conv, "matrix-verification-flow-id", g_strdup(ed->flow_id));
+    }
+
     char *esc_emojis = g_markup_escape_text(ed->emojis, -1);
     char *msg = g_strdup_printf("Match?\n\n%s", esc_emojis);
     purple_request_action(NULL, "Emojis", msg, ed->user_id, 0, NULL, NULL, NULL,
